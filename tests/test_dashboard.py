@@ -55,6 +55,20 @@ eval(userInput);
         self.assertIn("timeline", payload)
         self.assertEqual(len(payload["files"]), 1)
 
+    def test_dependency_scan_recognizes_bundle_aliases(self):
+        code = """
+        CryptoJS.AES.encrypt(data, key, { iv });
+        return <div dangerouslySetInnerHTML={{__html:q}} />;
+        Vue.createApp(App).mount('#app');
+        jQuery('#x').html(q);
+        """
+        data = analyze_content(code, "aliases.js")["aliases.js"]
+        names = {d.get("name") for d in data.get("dependency_scan", []) if isinstance(d, dict)}
+        self.assertIn("CryptoJS", names)
+        self.assertIn("React", names)
+        self.assertIn("Vue", names)
+        self.assertIn("jQuery", names)
+
     def test_scan_builds_ast_profile_and_dependencies(self):
         code = '''
 import axios from "axios";
@@ -145,6 +159,23 @@ eval(userInput);
         flows = analyze_taint(code, "t.js")
         self.assertTrue(any("postMessage" in (x.get("type") or "") and "*" in (x.get("evidence") or "") for x in flows))
 
+    def test_taint_interprocedural_function_param(self):
+        code = """
+        function setMsg(x){ document.body.innerHTML = x; }
+        const q = location.search;
+        setMsg(q);
+        """
+        flows = analyze_taint(code, "t.js")
+        self.assertTrue(any(x.get("status") == "confirmed" and "URL query" in x.get("source", "") for x in flows))
+
+    def test_taint_object_property(self):
+        code = """
+        const cfg = { q: location.search };
+        document.body.innerHTML = cfg.q;
+        """
+        flows = analyze_taint(code, "t.js")
+        self.assertTrue(any(x.get("status") == "confirmed" and "URL query" in x.get("source", "") for x in flows))
+
     def test_attack_surface_extracts_endpoints_and_flags(self):
         code = """
         fetch('/api/v1/users?limit=10&admin=1', { method: 'POST', body: JSON.stringify({ name, email }), headers: { 'Authorization': 'Bearer token' } });
@@ -156,6 +187,10 @@ eval(userInput);
         self.assertTrue(any(e.get("url") == "/internal/health" and e.get("internal") for e in surface.get("endpoints", [])))
         self.assertTrue(any("wss://example.com/socket" in (e.get("url") or "") for e in surface.get("websockets", [])))
         self.assertTrue(surface.get("auth_hints"))
+        # Header/object keys like "Authorization" must not become fake endpoints.
+        self.assertFalse(any(e.get("url") == "Authorization" for e in surface.get("endpoints", [])))
+        # Realtime URLs are not duplicated as plain HTTP GET endpoints.
+        self.assertFalse(any(e.get("url", "").startswith("wss://") for e in surface.get("endpoints", [])))
 
     def test_csv_and_sarif_reports_gen(self):
         results = analyze_content("const q = location.search; document.getElementById('x').innerHTML = q;", "p.js")
@@ -163,6 +198,20 @@ eval(userInput);
         sarif = generate_sarif_report(results)
         self.assertIn("id,type,severity", csv)
         self.assertIn("runs", sarif)
+
+    def test_html_report_includes_flows_and_attack_surface(self):
+        code = """
+        function setMsg(x){ document.body.innerHTML = x; }
+        const q = location.search;
+        setMsg(q);
+        fetch('/api/v1/users', { method: 'POST' });
+        new WebSocket('wss://example.com/socket?token=abc');
+        """
+        results = analyze_content(code, "report.js")
+        html = generate_html_report(results)
+        self.assertIn("Source→Sink Data Flows", html)
+        self.assertIn("Attack Surface", html)
+        self.assertIn("wss://example.com/socket", html)
 
 
 if __name__ == "__main__":

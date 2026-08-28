@@ -219,9 +219,8 @@ def scan_file(file_path, content=None):
     # =========================================
     suspicious_patterns = [
         r'\b(?:eval|new\s+Function)\s*\(',
-        r'\b(?:atob|btoa|decodeURIComponent|encodeURIComponent)\s*\(',
-        r'\b(?:innerHTML|outerHTML|document\.write)\s*=',
-        r'\bsetTimeout\s*\(\s*["\']'
+        r'\bsetTimeout\s*\(\s*["\']',
+        r'\bsetInterval\s*\(\s*["\']'
     ]
     for pattern in suspicious_patterns:
         for match in re.findall(pattern, content):
@@ -257,6 +256,8 @@ def scan_file(file_path, content=None):
         transport.append("WebSocket")
     if re.search(r'\bEventSource\s*\(', content):
         transport.append("EventSource")
+    if re.search(r'\b(?:navigator\s*\.\s*)?sendBeacon\s*\(', content):
+        transport.append("sendBeacon")
     if re.search(r'\bserviceWorker\b|navigator\.serviceWorker', content):
         transport.append("ServiceWorker")
     results["transport"] = list(dict.fromkeys(transport))
@@ -341,10 +342,25 @@ def scan_file(file_path, content=None):
 
     # Regex fallbacks for common libraries that live in the bundle itself.
     for marker, entity in dep_entity.items():
-        if entity["kind"].lower() in ("framework", "library") and marker in content.lower():
+        if entity["kind"].lower() in ("framework", "library", "crypto") and marker in content.lower():
             if marker not in seen_deps:
                 seen_deps.add(marker)
                 dependency_scan.append({**entity, "source": marker, "evidence": "bundle marker"})
+    # Bundle aliases / framework conventions that don't carry the package name in code.
+    alias_hints = {
+        "react": ("React", ["dangerouslysetinnerhtml", "react.createelement"], "framework"),
+        "angular": ("Angular", ["bypasssecuritytrust"], "framework"),
+        "vue": ("Vue", ["v-html", "vue.createapp"], "framework"),
+        "jquery": ("jQuery", ["jquery(", "$.ajax", "$.get", "$.post", "$(select).html"], "library"),
+        "crypto-js": ("CryptoJS", ["cryptojs", "crypto-js"], "crypto"),
+        "firebase": ("Firebase", ["firebase.initializeapp", "firebase/app"], "backend"),
+    }
+    for marker, (name, hints, kind) in alias_hints.items():
+        if marker in seen_deps:
+            continue
+        if any(h in content.lower() for h in hints) or (marker == "jquery" and re.search(r"\$\s*\([^)]*\)\s*\.(html|append|ajax|get|post|on)", content)):
+            seen_deps.add(marker)
+            dependency_scan.append({"name": name, "kind": kind, "source": marker, "evidence": "bundle alias"})
     results["dependency_scan"] = dependency_scan[:40]
 
     _run_additional_analyzers(content, results)
@@ -382,6 +398,8 @@ def scan_file(file_path, content=None):
         features.append("websocket")
     if re.search(r'\bEventSource\b', content):
         features.append("server_events")
+    if re.search(r'\b(?:navigator\s*\.\s*)?sendBeacon\s*\(', content):
+        features.append("beacon")
     if re.search(r'\bindexedDB\b', content):
         features.append("indexeddb")
     if re.search(r'\b(?:serviceWorker|navigator\.serviceWorker)\b', content):

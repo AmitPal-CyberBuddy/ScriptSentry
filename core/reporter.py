@@ -170,6 +170,24 @@ def _collect_signals(file_name, data):
     return signals
 
 
+def _dedupe_signals(signals):
+    out = []
+    seen = set()
+    for s in signals or []:
+        key = (
+            s.get("id"),
+            s.get("line", 0),
+            s.get("title", ""),
+            str(s.get("file", "")),
+            str(s.get("evidence", ""))[:80],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+    return out
+
+
 def build_report_model(results, ai_summary=None, metadata=None):
     """Build a normalized, structured report model used by TXT, HTML and GUI."""
     files = []
@@ -201,7 +219,10 @@ def build_report_model(results, ai_summary=None, metadata=None):
         files.append(norm)
         total_score += score
         max_file_score = max(max_file_score, score)
-        all_signals.extend(_collect_signals(file_name, data) or [])
+        flow_or_fw_ids = {f.get("id") for f in norm.get("dataflows", [])} | {f.get("id") for f in norm.get("framework_findings", [])}
+        all_signals.extend(
+            sig for sig in (_collect_signals(file_name, data) or []) if sig.get("id") not in flow_or_fw_ids
+        )
         all_dependencies.extend(norm.get("dependency_scan", []) or [])
         all_endpoints.extend(norm.get("endpoints", []) or [])
         all_methods.update(norm.get("request_methods", []) or [])
@@ -216,7 +237,6 @@ def build_report_model(results, ai_summary=None, metadata=None):
                 "status": flow.get("status", "potential"), "confidence": flow.get("confidence", "medium"),
             })
         for fw in norm.get("framework_findings", []) or []:
-            all_findings.append({**fw, "file": file_name})
             all_signals.append({
                 "id": fw.get("id", "framework"), "severity": fw.get("severity", "MEDIUM"),
                 "title": fw.get("type", fw.get("id", "Framework risk")),
@@ -256,6 +276,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
 
     overall_risk = _overall_risk_label(total_score, max_file_score)
     overall_color = SEVERITY_COLORS[overall_risk]
+    all_signals = _dedupe_signals(all_signals)
     signal_severities = {}
     for signal in all_signals:
         severity = signal.get("severity", "INFO")
@@ -301,7 +322,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
             "risk_label": overall_risk,
             "risk_color": overall_color,
             "max_file_score": max_file_score,
-            "total_findings": total_count,
+            "total_findings": len(all_findings),
             "categories": categories,
             "methods": sorted(all_methods),
             "transport": sorted(all_transport),
@@ -472,6 +493,40 @@ def generate_report(results, ai_summary=None):
             report.extend(_txt_section("Obfuscation Evidence", norm["obfuscation_analysis"].get("evidence", []), 6))
         if norm["data_flow_summary"]:
             report.extend(_txt_section("Data Flow Summary", norm["data_flow_summary"], 8))
+        if norm["dataflows"]:
+            report.append("\n[Source→Sink Data Flows]")
+            for flow in norm["dataflows"][:12]:
+                report.append(
+                    f"  - [{flow.get('severity', 'MEDIUM')}] {flow.get('type', flow.get('id', 'flow'))} "
+                    f"{flow.get('source', '')} → {flow.get('sink', '')} "
+                    f"(L{flow.get('line', 0)}, {flow.get('status', 'potential')})"
+                )
+                if flow.get("flow"):
+                    report.append(f"      path: {' → '.join(flow['flow'][:8])}")
+        if norm["framework_findings"]:
+            report.extend(_txt_section(
+                "Framework Risks",
+                [f"{x.get('framework', '')}: {x.get('type', x.get('id', ''))} — {x.get('sink', '')}" if isinstance(x, dict) else x for x in norm["framework_findings"]],
+                10,
+            ))
+        if norm["attack_surface"]:
+            asrf = norm["attack_surface"] or {}
+            if asrf.get("endpoints"):
+                report.extend(_txt_section(
+                    "Attack Surface · Endpoints",
+                    [f"{e.get('method', 'GET')} {e.get('url', '')}" for e in asrf.get("endpoints", [])[:16]],
+                    16,
+                ))
+            if asrf.get("websockets") or asrf.get("sse"):
+                report.extend(_txt_section(
+                    "Attack Surface · Realtime",
+                    [f"{w.get('kind', 'WS')} {w.get('url', '')}" for w in (asrf.get("websockets", []) + asrf.get("sse", []))[:12]],
+                    12,
+                ))
+            if asrf.get("auth_hints") or asrf.get("internal_endpoints"):
+                extras = [f"auth: {a.get('type', a)}" for a in asrf.get("auth_hints", [])[:6]]
+                extras += [f"internal: {e.get('method', 'GET')} {e.get('url', '')}" for e in asrf.get("internal_endpoints", [])[:6]]
+                report.extend(_txt_section("Attack Surface · Auth/Internal", extras, 12))
         if norm["notable_features"]:
             report.extend(_txt_section("Notable Features", norm["notable_features"], 10))
         if norm["ast_analysis"]:
@@ -650,7 +705,27 @@ def generate_html_report(results, ai_summary=None):
         html.append(f"<div class=\"sec\"><h4>Obfuscation &amp; Decoded</h4><ul>{items_html(list(norm['decoded_strings']) + list(norm['obfuscation_analysis'].get('evidence', [])), 6)}</ul></div>")
         html.append(f"<div class=\"sec\"><h4>Dependencies</h4><ul>{dict_items(norm['dependency_scan'], lambda x: (x.get('name') or '') + ' (' + (x.get('kind') or '') + ')', 6)}</ul></div>")
         html.append(f"<div class=\"sec\"><h4>Transport</h4><ul>{items_html(norm['transport'] + norm['request_methods'], 6)}</ul></div>")
-        html.append("</div></div>")
+        html.append("</div>")
+        # VAPT-grade additions: flows, framework rules and attack surface.
+        if norm["dataflows"]:
+            flow_lines = []
+            for flow in norm["dataflows"][:12]:
+                msg = f"{flow.get('severity', 'MEDIUM')} · {flow.get('type', flow.get('id', 'flow'))} · {flow.get('source', '')} → {flow.get('sink', '')} (L{flow.get('line', 0)}, {flow.get('status', 'potential')})"
+                if flow.get("flow"):
+                    msg += " · " + " → ".join(flow["flow"][:9])
+                flow_lines.append(esc(msg))
+            flow_body = "<li>" + "</li><li>".join(flow_lines) + "</li>" if flow_lines else '<li class="muted">none</li>'
+            html.append(f"<div class=\"sec\" style=\"margin-top:14px\"><h4>Source→Sink Data Flows</h4><ul>{flow_body}</ul></div>")
+        if norm["framework_findings"]:
+            html.append(f"<div class=\"sec\" style=\"margin-top:14px\"><h4>Framework Risks</h4><ul>{dict_items(norm['framework_findings'], lambda x: (x.get('framework') or '') + ': ' + (x.get('type') or x.get('id', '')) + ' — ' + (x.get('sink') or ''), 8)}</ul></div>")
+        asrf = norm.get("attack_surface", {}) or {}
+        if asrf.get("endpoints") or asrf.get("websockets") or asrf.get("sse") or asrf.get("auth_hints") or asrf.get("internal_endpoints"):
+            ep_lines = [f"{e.get('method', 'GET')} {e.get('url', '')}" for e in asrf.get("endpoints", [])[:12]]
+            ep_lines += [f"{w.get('kind', 'WS')} {w.get('url', '')}" for w in (asrf.get("websockets", []) + asrf.get("sse", []))[:8]]
+            ep_lines += [f"auth: {a.get('type', a)}" for a in asrf.get("auth_hints", [])[:4]]
+            ep_lines += [f"internal: {e.get('method', 'GET')} {e.get('url', '')}" for e in asrf.get("internal_endpoints", [])[:4]]
+            html.append(f"<div class=\"sec\" style=\"margin-top:14px\"><h4>Attack Surface</h4><ul>{items_html(ep_lines, 16)}</ul></div>")
+        html.append("</div>")
 
     # Remediation
     html.append("<h2>✅ Recommended Fixes</h2><div class=\"remed\"><ol>")
@@ -983,6 +1058,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         all_methods.update(diag["methods"])
         all_transport.update(diag["transport"])
 
+    all_signals = _dedupe_signals(all_signals)
     max_file_score = max((f["score"] for f in files), default=0)
 
     # Overall risk label
@@ -1029,7 +1105,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
             "overall_score": overall,
             "risk_label": risk_label,
             "risk_color": risk_color,
-            "total_findings": sum(totals.values()),
+            "total_findings": len(all_findings) or sum(totals.values()),
             "total_files": len(files),
             "crypto_flow_count": flow_count,
             "categories": [

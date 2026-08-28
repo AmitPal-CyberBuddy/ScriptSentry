@@ -123,7 +123,7 @@ def _extract_from_call(node, filename):
             if isinstance(prop, dict):
                 callee = f"{(obj.get('object') or {}).get('name', '')}.{prop.get('name', '')}"
     callee_low = (callee or "").lower()
-    if not any(k in callee_low for k in ("fetch", "axios", "xmlhttprequest", "websocket", "eventsource")):
+    if not any(k in callee_low for k in ("fetch", "axios", "xmlhttprequest", "websocket", "eventsource", "sendbeacon")):
         return None
 
     args = node.get("arguments", []) or []
@@ -141,6 +141,17 @@ def _extract_from_call(node, filename):
             "protocols": [_literal_value(a) for a in args[1:3] if _literal_value(a)],
             "line": _line(node),
             "internal": _is_internal(url_lit),
+        }
+
+    # navigator.sendBeacon(url, data) is a POST-style beacon.
+    if "sendbeacon" in callee_low:
+        url_lit = _literal_value(args[0]) or ""
+        body_fields = _body_fields(args[1]) if len(args) > 1 else []
+        params = _query_params(url_lit) if url_lit else {}
+        return {
+            "kind": "endpoint", "url": url_lit, "method": "POST", "params": params,
+            "headers": {}, "body_fields": body_fields, "auth": None,
+            "line": _line(node), "internal": _is_internal(url_lit) if url_lit else False,
         }
 
     # fetch(url, options) / axios.method(url, config) / XHR(url)
@@ -233,6 +244,11 @@ def _regex_sweep(content, filename):
         findings.append({"kind": "endpoint", "url": url, "method": method, "params": _query_params(url),
                          "headers": {}, "body_fields": [], "auth": None, "line": content[:match.start()].count("\n") + 1,
                          "internal": _is_internal(url)})
+    for match in re.finditer(r"(?:navigator\s*\.\s*)?sendBeacon\s*\(\s*[\"']([^\"']+)[\"']", content, re.I):
+        url = match.group(1)
+        findings.append({"kind": "endpoint", "url": url, "method": "POST", "params": _query_params(url),
+                         "headers": {}, "body_fields": [], "auth": None, "line": content[:match.start()].count("\n") + 1,
+                         "internal": _is_internal(url)})
     return findings
 
 
@@ -307,12 +323,23 @@ def extract_attack_surface(content, filename="inline.js"):
     graphql_urls.update(gq["urls"])
     graphql_ops.extend(gq["operations"])
 
-    # Unconditional endpoint extraction from URL literals, incl. hidden routes
-    url_re = re.compile(r"[\"']((?:https?:)?/?(?:api|v[0-9]+|auth|login|logout|admin|internal|dev|staging|graphql|ws|wss)[A-Za-z0-9/_.?=&%{}\-]*)['\"]", re.I)
+    # Unconditional endpoint extraction from URL literals, incl. hidden routes.
+    # Require an actual URL/path shape so header/object keys like "Authorization"
+    # do not become fake endpoints.
+    url_re = re.compile(
+        r"[\"']((?:(?:https?|wss?):)?//[A-Za-z0-9/_.?=&%{}\-]+"
+        r"|/[A-Za-z0-9/_.?=&%{}\-]+"
+        r"|(?:api|v[0-9]+|auth|login|logout|admin|internal|dev|staging|graphql|ws|wss)/[A-Za-z0-9/_.?=&%{}\-]+)[\"']",
+        re.I,
+    )
     for m in url_re.finditer(content):
         url = m.group(1)
         line = content[:m.start()].count("\n") + 1
+        lower_url = url.lower()
         if any(e.get("url") == url for e in endpoints):
+            continue
+        # Realtime channels are already captured separately; don't duplicate as HTTP GET.
+        if lower_url.startswith(("ws://", "wss://")) or any(rt.get("url") == url for rt in websockets + sse):
             continue
         endpoints.append({
             "kind": "endpoint", "url": url, "method": "GET", "params": _query_params(url),
@@ -339,7 +366,9 @@ def extract_attack_surface(content, filename="inline.js"):
             internal.append(e)
 
     # Header / credential patterns across whole document (headers in fetch options etc.)
-    for m in re.finditer(r"(?:authorization|bearer|token|api[_-]?key|client[_-]?secret|access[_-]?token)\s*[:=]", content, re.I):
+    # Require a quoted value (`token: "x"` / `token='x'`) so URL query strings like
+    # `?token=abc` stay in parameter/auth signals instead of polluting the header list.
+    for m in re.finditer(r"(?:authorization|bearer|token|api[_-]?key|client[_-]?secret|access[_-]?token)\s*[:=]\s*[\"']", content, re.I):
         headers.add(m.group(0).split(":")[0].split("=")[0].strip().lower())
 
     return {
@@ -358,8 +387,5 @@ def extract_attack_surface(content, filename="inline.js"):
 
 
 def _flatten_params(params):
-    out = []
-    for k, vs in params.items():
-        out.append(k)
-        out.extend(vs)
-    return out
+    """Return parameter *names* (not values) for the compact attack-surface summary."""
+    return list(params.keys())

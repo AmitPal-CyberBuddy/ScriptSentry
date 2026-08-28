@@ -21,7 +21,8 @@ technology stacks and data flows — then presents everything in a modern, anima
   - Technology stack, dependency ecosystem, notable features, data-flow summary
   - **AST profile** — imports/exports, functions, classes, call graph, complexity
   - **Source→sink taint analysis** — URL/query/hash, postMessage, storage, cookies, form
-    values → innerHTML / eval / redirect / prototype pollution, with sanitizer awareness
+    values → innerHTML / eval / redirect / prototype pollution, with sanitizer awareness,
+    function-argument propagation and object-property tracking
   - **Context-aware attack surface** — fetch/axios/XHR, WebSocket/SSE, GraphQL, query params,
     headers, JSON body fields, auth and internal-endpoint hints
   - **Framework-aware rules** — React `dangerouslySetInnerHTML`, Angular `bypassSecurityTrust*`,

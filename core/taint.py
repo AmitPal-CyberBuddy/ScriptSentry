@@ -154,9 +154,12 @@ class TaintAnalyzer:
         self.content = content
         self.filename = filename
         self.vars = {}
+        self.props = {}
+        self.functions = {}
         self.urlsearch_vars = set()
         self.findings = []
         self._seen = set()
+        self._func_depth = 0
 
     # ---------------- source extraction ----------------
     def _strip_calls(self, expr):
@@ -258,8 +261,16 @@ class TaintAnalyzer:
             for marker, source_label in SOURCE_PATTERNS.items():
                 if marker in callee_txt:
                     return _Taint([f"source:{source_label}"], False, [f"read {callee_txt}"], "high")
-            # A member access on a tracked object should propagate taint.
+            # Track tainted object properties, e.g. `const cfg={q:location.search}; ...cfg.q`.
             obj = node.get("object") if ntype == "MemberExpression" else (node.get("expression") or {}).get("object")
+            prop = node.get("property") if ntype == "MemberExpression" else None
+            if _node_kind_str(obj) == "Identifier" and isinstance(prop, dict):
+                obj_name = obj.get("name")
+                prop_name = _name(prop)
+                key = f"{obj_name}.{prop_name}"
+                if key in self.props:
+                    return self.props[key].copy()
+            # A member access on a tracked object should propagate taint.
             if isinstance(obj, dict):
                 obj_taint = self._taint_of_expr(obj, depth + 1)
                 if obj_taint:
@@ -499,12 +510,31 @@ class TaintAnalyzer:
                 self.vars[name] = taint
             if _node_kind_str(init) == "NewExpression" and _name(init.get("callee")) == "URLSearchParams":
                 self.urlsearch_vars.add(name)
+            # Track tainted object properties so `cfg.q` propagates the same source.
+            if _node_kind_str(init) == "ObjectExpression":
+                for prop in init.get("properties", []) or []:
+                    if not isinstance(prop, dict) or prop.get("type") != "Property":
+                        continue
+                    key = _name(prop.get("key"))
+                    if not key:
+                        continue
+                    tval = self._taint_of_expr(prop.get("value"))
+                    if tval:
+                        self.props[f"{name}.{key}"] = tval.copy()
 
     def _handle_assignment(self, node):
         left = node.get("left", {})
         right = node.get("right", {})
         if _node_kind_str(left) != "Identifier":
-            # sink checks first, then object-member assignments that are not sinks
+            if _node_kind_str(left) == "MemberExpression":
+                obj = left.get("object")
+                prop = left.get("property")
+                obj_name = _name(obj) if isinstance(obj, dict) else None
+                prop_name = _name(prop) if isinstance(prop, dict) else None
+                if obj_name and prop_name:
+                    taint = self._taint_of_expr(right)
+                    if taint:
+                        self.props[f"{obj_name}.{prop_name}"] = taint.copy()
             self._check_assignment_sink(node)
             return
         name = left.get("name")
@@ -514,14 +544,110 @@ class TaintAnalyzer:
             taint.path.append(f"{name} = {self._node_simple_text(right)[:60]}")
             self.vars[name] = taint
 
+    # ---------------- inter-procedural helpers ----------------
+    def _collect_functions(self, node):
+        ntype = _node_kind_str(node)
+        if ntype == "FunctionDeclaration":
+            name = _name(node.get("id"))
+            if name:
+                self.functions.setdefault(name, {"params": self._param_names(node), "body": node.get("body", {}).get("body", []) if isinstance(node.get("body"), dict) else []})
+            return
+        if ntype == "VariableDeclarator":
+            init = node.get("init")
+            name = _name(node.get("id"))
+            if name and init and _node_kind_str(init) in ("ArrowFunctionExpression", "FunctionExpression"):
+                self.functions.setdefault(name, {"params": self._param_names(init), "body": (init.get("body") or {}).get("body", []) if isinstance(init.get("body"), dict) else []})
+            return
+        if ntype == "AssignmentExpression":
+            left = node.get("left")
+            right = node.get("right")
+            name = _name(left)
+            if name and _node_kind_str(left) == "Identifier" and _node_kind_str(right) in ("ArrowFunctionExpression", "FunctionExpression"):
+                self.functions.setdefault(name, {"params": self._param_names(right), "body": (right.get("body") or {}).get("body", []) if isinstance(right.get("body"), dict) else []})
+
+    def _param_names(self, fn):
+        names = []
+        for p in fn.get("params", []) or []:
+            if isinstance(p, dict):
+                if _node_kind_str(p) in ("Identifier", "RestElement"):
+                    names.append(_name(p.get("argument") if _node_kind_str(p) == "RestElement" else p))
+                else:
+                    # Destructuring: count the top-level bound names conservatively.
+                    names.append(_name(p))
+        return names
+
+    def _function_call_name(self, node):
+        if not isinstance(node, dict):
+            return None
+        callee = node.get("callee")
+        if not isinstance(callee, dict):
+            return None
+        if callee.get("type") == "Identifier":
+            return callee.get("name")
+        if _node_kind_str(callee) == "MemberExpression":
+            obj = callee.get("object")
+            if _node_kind_str(obj) == "Identifier":
+                # this.method(...) / obj.method(...)
+                return f"{obj.get('name')}.{_name(callee.get('property'))}"
+        return None
+
+    def _analyze_function_flow(self, call_node, func_name):
+        fn = self.functions.get(func_name)
+        if not fn or self._func_depth > 4:
+            return
+        params = fn["params"]
+        args = call_node.get("arguments", []) or []
+        taints = []
+        for arg in args:
+            t = self._taint_of_expr(arg)
+            taints.append(t)
+        if not any(taints):
+            return
+        saved = {}
+        for idx, param in enumerate(params):
+            if idx < len(taints) and taints[idx]:
+                saved[param] = self.vars.get(param)
+                t = taints[idx].copy()
+                t.path.append(f"call {func_name}({self._node_simple_text(args[idx])[:40]})")
+                self.vars[param] = t
+        self._func_depth += 1
+        try:
+            for stmt in fn["body"]:
+                self._walk(stmt, self._check_assignment_sink)
+                self._walk(stmt, self._check_call_sink)
+                self._walk(stmt, self._check_function_flow)
+        finally:
+            self._func_depth -= 1
+            for param, old in saved.items():
+                if old is None:
+                    self.vars.pop(param, None)
+                else:
+                    self.vars[param] = old
+
+    def _check_function_flow(self, node):
+        if _node_kind_str(node) not in ("CallExpression", "OptionalCallExpression"):
+            return
+        name = self._function_call_name(node)
+        if name and name in self.functions:
+            self._analyze_function_flow(node, name)
+        # Also allow a simple single-identifier alias to the collected function.
+        if name and "." not in (name or ""):
+            for fn_name, fn in self.functions.items():
+                if fn_name == name:
+                    self._analyze_function_flow(node, fn_name)
+
     def analyze(self):
         tree = parse_raw(self.content)
         if tree is None:
             self._regex_analyze()
             return self.findings
 
-        # Two passes: first assignments so reads later see taint, then sink checks.
+        # Pass 0: index declared functions so call args can be propagated into sinks.
         statements = tree.get("body", []) or []
+        for stmt in statements:
+            self._walk(stmt, self._collect_functions)
+
+        # Two passes: first assignments so reads later see taint, then sink checks.
         for stmt in statements:
             self._walk(stmt, self._handle_variable_declaration)
         for stmt in statements:
@@ -529,6 +655,8 @@ class TaintAnalyzer:
         for stmt in statements:
             self._walk(stmt, self._check_call_sink)
             self._walk(stmt, self._check_assignment_sink)
+        for stmt in statements:
+            self._walk(stmt, self._check_function_flow)
 
         # If AST parsed but found no flows, only run the regex fallback when the code
         # actually has a taint source. A bare `eval("...")` is a pattern the scanner's
