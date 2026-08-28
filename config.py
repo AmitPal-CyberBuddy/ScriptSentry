@@ -8,6 +8,18 @@ BEAUTIFY_DIR = f"{OUTPUT_DIR}/beautified"
 DEFAULT_PROFILE = "balanced"
 REPORT_FORMATS = ["txt", "json", "html", "csv", "sarif", "all"]
 
+# Local engine trust boundary:
+# The static UI may be served from a localhost page OR a hosted GitHub Pages
+# page. Arbitrary third-party origins must not be able to drive the local engine.
+# Add custom origins through SCRIPTSENTRY_ALLOWED_ORIGINS (comma separated).
+ALLOWED_ORIGINS = [
+    "localhost",
+    "127.0.0.1",
+    "github.io",
+    "file://",
+    "null",
+]
+
 SCAN_PROFILES = {
     "balanced": {
         "max_depth": 5,

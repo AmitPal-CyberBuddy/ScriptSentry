@@ -1,6 +1,8 @@
 import html
 import itertools
 
+from core.analysis_model import deduplicate_findings
+
 
 def safe_text(val):
     if val is None:
@@ -328,7 +330,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
             "transport": sorted(all_transport),
             "signal_counts": signal_severities,
             "signals": [s for s in all_signals if s.get("id") != "notable_features"],
-            "findings": all_findings[:120],
+            "findings": deduplicate_findings(all_findings)[:120],
             "dataflows": _dedupe_flows(all_flows)[:80],
         },
         "files": files,
@@ -746,23 +748,9 @@ def generate_html_report(results, ai_summary=None):
 
 def _all_unified_findings(model):
     """Return the richest unified finding list for structured exports."""
-    out = []
-    seen = set()
     flows = model["summary"].get("dataflows", []) or []
     findings = model["summary"].get("findings", []) or []
-    for item in findings:
-        key = (item.get("id"), item.get("line"), str(item.get("sink", "")))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(item)
-    for item in flows:
-        key = (item.get("id"), item.get("line"), str(item.get("sink", "")))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(item)
-    return out
+    return deduplicate_findings(list(findings) + list(flows))
 
 
 def generate_csv_report(results, ai_summary=None):
@@ -775,6 +763,7 @@ def generate_csv_report(results, ai_summary=None):
     fields = [
         "id", "type", "severity", "confidence", "status", "file", "line",
         "source", "sink", "flow", "evidence", "sanitization_detected", "framework",
+        "evidence_type",
     ]
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
@@ -795,6 +784,7 @@ def generate_csv_report(results, ai_summary=None):
             "evidence": f.get("evidence", ""),
             "sanitization_detected": f.get("sanitization_detected", False),
             "framework": f.get("framework", ""),
+            "evidence_type": f.get("evidence_type", ""),
         })
     return buf.getvalue()
 
@@ -841,6 +831,8 @@ def generate_sarif_report(results, ai_summary=None):
                 "source": f.get("source", ""),
                 "sink": f.get("sink", ""),
                 "sanitization_detected": f.get("sanitization_detected", False),
+                "evidence_type": f.get("evidence_type", ""),
+                "framework": f.get("framework", ""),
             },
         }
         results_out.append(result)
@@ -1118,7 +1110,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
             "methods": sorted(all_methods),
             "transport": sorted(all_transport),
             "dataflows": all_flows[:80],
-            "findings": all_findings[:120],
+            "findings": deduplicate_findings(all_findings)[:120],
         },
         "files": files,
         "radar": {"labels": radar_categories, "values": radar_values},

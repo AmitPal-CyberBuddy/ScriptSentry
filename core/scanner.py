@@ -4,6 +4,7 @@ import tempfile
 import os
 
 from config import CRYPTO_KEYWORDS, SECRET_REGEX
+from core.analysis_model import correlate_findings
 from core.ast_analyzer import analyze_ast
 from core.attack_surface import extract_attack_surface
 from core.crypto import looks_like_url_or_path
@@ -477,40 +478,14 @@ def scan_file(file_path, content=None):
         results["attack_surface"] = {}
 
     # Unify findings (taint > framework > coarse risk signals) for UI/reports.
-    findings = []
-    seen = set()
-    for item in results["dataflows"] + results["framework_findings"]:
-        key = (item.get("id"), item.get("line"), item.get("sink"))
-        if key not in seen:
-            seen.add(key)
-            findings.append(item)
-    existing_ids = {item.get("id") for item in results["dataflows"] + results["framework_findings"]}
-    for sig in results.get("risk_signals", []) or []:
-        # Avoid duplicate coarse signals when taint/framework already produced the
-        # same finding (e.g. a confirmed DOM-injection flow plus a generic DOM signal).
-        if sig.get("id") in existing_ids:
-            continue
-        level = sig.get("severity", "MEDIUM")
-        confidence = "high" if level in ("CRITICAL", "HIGH") else ("medium" if level == "MEDIUM" else "low")
-        item = {
-            "id": sig.get("id"),
-            "type": sig.get("title", sig.get("id", "")),
-            "severity": level,
-            "confidence": confidence,
-            "status": "confirmed" if confidence == "high" else "potential",
-            "file": filename,
-            "line": 0,
-            "source": "",
-            "sink": " ".join(str(x) for x in (sig.get("evidence", []) or [])[:2])[:120],
-            "flow": [],
-            "sanitization_detected": False,
-            "evidence": " ".join(str(x) for x in (sig.get("evidence", []) or [])[:2])[:240],
-        }
-        key = (item.get("id"), item.get("line"), item.get("sink"))
-        if key not in seen:
-            seen.add(key)
-            findings.append(item)
-    results["findings"] = findings[:80]
+    # Correlation is centralised in core.analysis_model so every consumer receives
+    # the same evidence-based, de-duplicated view.
+    results["findings"] = correlate_findings(
+        results["dataflows"],
+        results["framework_findings"],
+        results["risk_signals"],
+        filename=filename,
+    )[:80]
     results["finding_statuses"] = {}
 
     results["score"] = score

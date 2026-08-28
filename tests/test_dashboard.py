@@ -1,6 +1,7 @@
 import json
 import unittest
 
+from core.analysis_model import correlate_findings, deduplicate_findings
 from core.analyzer_service import analyze_content
 from core.attack_surface import extract_attack_surface
 from core.crypto import extract_crypto_material
@@ -212,6 +213,27 @@ eval(userInput);
         self.assertIn("Source→Sink Data Flows", html)
         self.assertIn("Attack Surface", html)
         self.assertIn("wss://example.com/socket", html)
+
+    def test_correlation_dedupes_and_preserves_evidence(self):
+        flows = [{
+            "id": "dom_injection", "type": "DOM injection", "severity": "HIGH",
+            "confidence": "high", "status": "confirmed", "file": "x.js", "line": 1,
+            "sink": "innerHTML", "flow": ["read location.search"], "evidence": "snippet",
+        }]
+        risk = [{"id": "dom_injection", "severity": "HIGH", "title": "DOM injection", "evidence": ["dom_risks"]}]
+        out = correlate_findings(flows, [], risk, filename="x.js")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].get("evidence_type"), "source_to_sink")
+        self.assertIn("read location.search", out[0].get("flow", []))
+
+        dupes = [flows[0], {**flows[0], "source": "URL query string", "flow": ["alias = location.search", "innerHTML = alias"]}]
+        self.assertEqual(len(deduplicate_findings(dupes)), 1)
+
+    def test_local_engine_origin_allowlist(self):
+        from server import DashboardHandler
+        self.assertTrue(DashboardHandler._is_allowed_origin("http://localhost:8000"))
+        self.assertTrue(DashboardHandler._is_allowed_origin("https://user.github.io"))
+        self.assertFalse(DashboardHandler._is_allowed_origin("https://evil.example"))
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 """High-level analysis orchestration used by the CLI and the Web dashboard."""
+import hashlib
 import os
 import re
 from urllib.parse import urljoin, urlparse, unquote
@@ -25,8 +26,21 @@ REQUEST_HEADERS = {
 }
 
 
-def _merge_into(results, path, content):
-    """Run the full scanner plus crypto extractor for a single JS document."""
+def _merge_into(results, path, content, seen_hashes=None):
+    """Run the full scanner plus crypto extractor for a single JS document.
+
+    ``seen_hashes`` lets a URL scan skip duplicate content (mirrored bundles,
+    cache-busted repeats) so the analyzer produces one set of evidence per
+    unique payload instead of N copies of the same finding.
+    """
+    content = content or ""
+    if len(content.encode("utf-8", errors="ignore")) > FILE_RULES.get("max_js_size", 2_000_000):
+        return
+    if seen_hashes is not None:
+        digest = hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()
+        if digest in seen_hashes:
+            return
+        seen_hashes.add(digest)
     data = scan_file(path, content=content)
     crypto = extract_crypto_material(content, filename=os.path.basename(path))
     data.update(crypto)
@@ -87,7 +101,7 @@ def _resolve_chunk(chunk_name, base_url):
     return None
 
 
-def _walk_imports(content, path, results, base_url, depth, max_depth):
+def _walk_imports(content, path, results, base_url, depth, max_depth, seen_hashes=None):
     imports = set()
     for chunk in re.findall(r'["\']([^"\']*chunk-[A-Za-z0-9]+\.js[^"\']*)["\']', content):
         imports.add(chunk.split("?")[0])
@@ -104,8 +118,8 @@ def _walk_imports(content, path, results, base_url, depth, max_depth):
                 next_content = f.read()
         except Exception:
             continue
-        _merge_into(results, next_path, next_content)
-        _walk_imports(next_content, next_path, results, base_url, depth + 1, max_depth)
+        _merge_into(results, next_path, next_content, seen_hashes=seen_hashes)
+        _walk_imports(next_content, next_path, results, base_url, depth + 1, max_depth, seen_hashes=seen_hashes)
 
 
 def analyze_url(url, max_depth=5, timeout=15, max_files=50):
@@ -121,13 +135,14 @@ def analyze_url(url, max_depth=5, timeout=15, max_files=50):
     js_links = js_links[:max_files]
     downloads = download_js(js_links)
     beautified = beautify(downloads)
+    seen_hashes = set()
 
     for path in beautified[:max_files]:
         if path in results:
             continue
         with open(path, encoding="utf-8", errors="replace") as f:
             content = f.read()
-        _merge_into(results, path, content)
-        _walk_imports(content, path, results, url, 1, max_depth)
+        _merge_into(results, path, content, seen_hashes=seen_hashes)
+        _walk_imports(content, path, results, url, 1, max_depth, seen_hashes=seen_hashes)
 
     return results

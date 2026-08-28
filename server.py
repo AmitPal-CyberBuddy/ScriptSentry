@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from config import DEFAULT_PROFILE, SCAN_PROFILES
+from config import ALLOWED_ORIGINS, DEFAULT_PROFILE, SCAN_PROFILES
 from core.analyzer_service import analyze_content, analyze_url
 from core.reporter import (
     build_dashboard_payload,
@@ -55,7 +55,40 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _send_error_json(self, message, status=400):
         self._send_json({"ok": False, "error": message}, status=status)
 
+    @staticmethod
+    def _is_allowed_origin(origin):
+        if not origin or origin in ("null", "file://"):
+            return True
+        low = origin.lower()
+        if low.startswith("http://localhost:") or low == "http://localhost":
+            return True
+        if low.startswith("http://127.0.0.1:") or low == "http://127.0.0.1":
+            return True
+        if low.startswith("https://127.0.0.1:") or low.startswith("http://0.0.0.0:"):
+            return True
+        try:
+            host = urlparse(low).hostname or ""
+        except Exception:
+            host = ""
+        if host == "github.io" or host.endswith(".github.io"):
+            return True
+        # Allow a small deployment override for custom hosted domains.
+        for extra in os.environ.get("SCRIPTSENTRY_ALLOWED_ORIGINS", "").split(","):
+            extra = extra.strip().lower()
+            if extra and (low == extra or low.startswith(extra + ":")):
+                return True
+        return False
+
+    def _reject_untrusted_origin(self):
+        origin = self.headers.get("Origin", "")
+        if origin and not self._is_allowed_origin(origin):
+            self._send_error_json("Origin not allowed by the local engine", 403)
+            return True
+        return False
+
     def do_OPTIONS(self):
+        if self._reject_untrusted_origin():
+            return
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -65,10 +98,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/api/health":
-            self._send_json({"ok": True, "engine": "ScriptSentry Analyzer", "version": "2.0", "privacy": "local-only"})
-            return
         if parsed.path.startswith("/api/"):
+            if self._reject_untrusted_origin():
+                return
+            if parsed.path == "/api/health":
+                self._send_json({"ok": True, "engine": "ScriptSentry Analyzer", "version": "2.0", "privacy": "local-only"})
+                return
             self._send_error_json("Not found", 404)
             return
         if parsed.path == "/":
@@ -95,6 +130,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if self._reject_untrusted_origin():
+            return
         body = self._read_json_body()
         if body is None:
             return

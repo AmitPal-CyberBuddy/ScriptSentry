@@ -22,6 +22,11 @@ This is the **free, privacy-first** setup:
   - hosted on GitHub Pages → `http://127.0.0.1:8000`
 - `server.py` exposes `/api/health`, `/api/analyze`, `/api/report` with CORS +
   `Access-Control-Allow-Private-Network: true` so a public page can talk to the loopback engine.
+- The API validates the browser `Origin` and only allows loopback/localhost, `*.github.io`,
+  and origins listed in `SCRIPTSENTRY_ALLOWED_ORIGINS` (comma separated). Other websites are
+  rejected with HTTP 403, so the local engine cannot be used as an open proxy by an arbitrary page.
+- For a **custom** hosted domain, set `SCRIPTSENTRY_ALLOWED_ORIGINS=https://my.example.com`
+  before starting `server.py`.
 - If a visitor changes the port, they update `webui/config.js` to the matching port.
 
 ### Set it up

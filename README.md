@@ -54,6 +54,10 @@ You can host the dashboard UI on GitHub Pages. The backend stays **entirely loca
 4. The hosted page connects to the local engine (`http://127.0.0.1:8000`) and runs fully private —
    no code ever uploads to the cloud.
 
+The local engine only accepts API calls from localhost/loopback origins and GitHub Pages
+origins (plus `SCRIPTSENTRY_ALLOWED_ORIGINS` if you host the UI on a custom domain). Other
+websites cannot drive it.
+
 See `DEPLOYMENT.md` for the full guide.
 
 Launch the dashboard directly from the CLI too:
@@ -115,6 +119,7 @@ python3 main.py https://example.com --ai openai --api-key YOUR_KEY --model gpt-4
 │  core/                                       │
 │   analyzer_service.py — orchestration        │
 │   scanner.py — regex signal detection        │
+│   analysis_model.py — finding vocab/correlation│
 │   ast_analyzer.py — AST intelligence         │
 │   js_parser.py — optional esprima wrapper    │
 │   taint.py — AST source→sink taint analysis  │
