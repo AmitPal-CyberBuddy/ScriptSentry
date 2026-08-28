@@ -164,7 +164,10 @@ def _resolve_chunk(chunk_name, base_url):
                     return os.path.join(root, filename)
     if base_url:
         absolute = urljoin(base_url, chunk_name)
-        for candidate in (absolute, absolute + ".js"):
+        # Only add the .js fallback for extensionless module refs; a real
+        # bundle URL with an extension should not cause a second 404 request.
+        candidates = (absolute,) if absolute.endswith((".js", ".mjs")) else (absolute, absolute + ".js")
+        for candidate in candidates:
             path = _download_chunk(candidate)
             if path:
                 return path
