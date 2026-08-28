@@ -1,112 +1,107 @@
+"""Page-level JavaScript discovery.
+
+Discovery is intentionally limited to script-bearing resources.  Network/API
+URLs are inventory data, not crawl targets; keeping that distinction prevents a
+page's ``fetch('/api/...')`` strings from turning the analyzer into a generic
+web crawler.
+"""
 import re
 from urllib.parse import urljoin
 
-try:
-    import requests
-except ImportError:
-    requests = None
 try:
     from bs4 import BeautifulSoup
 except ImportError:
     BeautifulSoup = None
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0 Safari/537.36"
-    )
-}
+from config import FILE_RULES, REQUEST_HEADERS
+from core.url_policy import MAX_PAGE_BYTES, safe_get, read_response_text
 
 
-def fetch_url(url):
-    if requests is None:
-        return ""
+
+def fetch_url(url, timeout=15):
+    """Fetch one public page, bounded to avoid retaining an unbounded body."""
     try:
-        response = requests.get(url, timeout=15, headers=HEADERS, allow_redirects=True)
-        if response.status_code == 200:
-            return response.text
+        response = safe_get(url, timeout=timeout, headers=REQUEST_HEADERS)
+        if response is not None and response.status_code == 200:
+            return read_response_text(response, max_bytes=MAX_PAGE_BYTES) or ""
     except Exception:
         return ""
     return ""
 
 
-def extract_inline_scripts(url, limit=80):
-    """Return inline <script> bodies from a page for direct analysis."""
-    html = fetch_url(url)
-    if not html or BeautifulSoup is None:
-        return []
-    soup = BeautifulSoup(html, "html.parser")
-    scripts = []
-    for script in soup.find_all("script"):
-        src = script.get("src")
-        if src or not script.string:
-            continue
-        body = script.string.strip()
-        if len(body) >= 20:
-            scripts.append(body)
-        if len(scripts) >= limit:
-            break
-    return scripts
-
-
-def extract_js(url):
-    html = fetch_url(url)
-    if not html:
-        return []
-
+def _extract_assets(html, url):
     soup = BeautifulSoup(html, "html.parser") if BeautifulSoup is not None else None
     js_files = set()
+    inline_scripts = []
 
     if soup is not None:
         for script in soup.find_all("script"):
             src = script.get("src")
             if src:
                 js_files.add(urljoin(url, src))
+            elif script.string and script.string.strip():
+                body = script.string.strip()
+                # Keep module/bootstrap inline code even when it is short.  The
+                # previous arbitrary 20-character threshold lost tiny loaders.
+                if len(body.encode("utf-8", errors="ignore")) >= int(FILE_RULES.get("min_js_size", 1)):
+                    inline_scripts.append(body)
 
-        # Modern module/asset delivery: Vite/Next/webpack emit modulepreload,
-        # preload(as=script) and module links that a plain <script src> scan
-        # would otherwise miss.
+        # Modern module delivery: modulepreload, JS preloads and prefetches.
         for link in soup.find_all("link"):
             href = link.get("href")
-            rel = (link.get("rel") or [])
-            as_value = link.get("as") or ""
+            rel = {str(x).lower() for x in (link.get("rel") or [])}
+            as_value = str(link.get("as") or "").lower()
             if not href:
                 continue
-            if "modulepreload" in rel or "preload" in rel and as_value == "script" or "prefetch" in rel:
-                if href.endswith((".js", ".mjs")) or "modulepreload" in rel or as_value == "script":
+            if "modulepreload" in rel or ("preload" in rel and as_value == "script") or "prefetch" in rel:
+                if href.split("?", 1)[0].lower().endswith((".js", ".mjs")) or "modulepreload" in rel or as_value == "script":
                     js_files.add(urljoin(url, href))
 
-        for script in soup.find_all("script"):
-            if not script.get("src") and script.get("type") == "module" and script.string:
-                for pattern in [
-                    r'["\']([^"\']+\.js[^"\']*)["\']',
-                    r'["\']([^"\']*chunk-[A-Za-z0-9]+\.js[^"\']*)["\']',
-                ]:
-                    for match in re.findall(pattern, script.string):
-                        js_files.add(urljoin(url, match))
+        # Inline module imports are entry points too.
+        for body in inline_scripts:
+            for pattern in (
+                r"(?:import|from)\s*[('\\\"]([^'\\\"]+)",
+                r"(?:chunk-[A-Za-z0-9_.-]+|/static/js/[A-Za-z0-9_.-]+|assets/[A-Za-z0-9_.-]+)\.js",
+            ):
+                for match in re.findall(pattern, body):
+                    ref = match if isinstance(match, str) else match[0]
+                    if ref:
+                        js_files.add(urljoin(url, ref))
 
-        for script in soup.find_all("script"):
-            if script.string:
-                content = script.string
-                for pattern in [
-                    r'["\'](https?://[^"\']+\.js[^"\']*)["\']',
-                    r'["\'](chunk-[A-Za-z0-9]+\.js)["\']',
-                    r'["\']([A-Za-z0-9_\-]+\.js(?:\?[^"\']*)?)["\']'
-                ]:
-                    for match in re.findall(pattern, content):
-                        js_files.add(urljoin(url, match))
-
-    dynamic_patterns = [
-        r'chunk-[A-Za-z0-9]+\.js',
-        r'/static/js/[A-Za-z0-9\.\-]+\.js',
-        r'assets/[A-Za-z0-9\.\-]+\.js'
-    ]
-    for pattern in dynamic_patterns:
+    # Common bundler hints in HTML/bootstrap JSON.
+    for pattern in (
+        r"chunk-[A-Za-z0-9_.-]+\.js",
+        r"/static/js/[A-Za-z0-9_.-]+\.js",
+        r"assets/[A-Za-z0-9_.-]+\.js",
+    ):
         for match in re.findall(pattern, html):
             js_files.add(urljoin(url, match))
-
-    for link in re.findall(r'https?://[^\s"\']+\.js(?:\?[^\s"\']*)?', html):
+    for link in re.findall(r"https?://[^\s\"']+\.m?js(?:\?[^\s\"']*)?", html):
         js_files.add(link)
 
-    return sorted(js_files)
+    return sorted(js_files), inline_scripts
+
+
+def extract_page_assets(url, timeout=15):
+    """Return ``(external_scripts, inline_scripts, page metadata)`` in one fetch."""
+    html = fetch_url(url, timeout=timeout)
+    if not html:
+        return [], [], {"page_fetch": "failed", "page_bytes": 0}
+    scripts, inline = _extract_assets(html, url)
+    return scripts, inline, {
+        "page_fetch": "ok",
+        "page_bytes": len(html.encode("utf-8", errors="ignore")),
+        "inline_count": len(inline),
+    }
+
+
+def extract_inline_scripts(url, limit=80):
+    """Backward-compatible inline script extraction."""
+    _, inline, _ = extract_page_assets(url)
+    return inline[:limit]
+
+
+def extract_js(url):
+    """Backward-compatible external script extraction."""
+    scripts, _, _ = extract_page_assets(url)
+    return scripts

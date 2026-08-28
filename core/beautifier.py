@@ -1,3 +1,4 @@
+"""Best-effort JavaScript normalization with scan-scoped output support."""
 import os
 import shutil
 import subprocess
@@ -11,15 +12,11 @@ except ImportError:
     jsbeautifier = None
 
 
-# =========================================
-# 🧹 SINGLE FILE BEAUTIFY
-# =========================================
-def beautify_file(input_file):
-
+def beautify_file(input_file, output_dir=None):
+    output_dir = output_dir or BEAUTIFY_DIR
     name = os.path.basename(input_file)
-    output_file = os.path.join(BEAUTIFY_DIR, name)
-
-    # ✅ Skip if already exists
+    output_file = os.path.join(output_dir, name)
+    os.makedirs(output_dir, exist_ok=True)
     if os.path.exists(output_file):
         return output_file
 
@@ -27,7 +24,6 @@ def beautify_file(input_file):
         source = source_file.read()
 
     formatted = None
-    # 1) Prefer the Python jsbeautifier module (works offline, no system binary)
     if jsbeautifier is not None:
         try:
             opts = jsbeautifier.default_options()
@@ -36,44 +32,30 @@ def beautify_file(input_file):
         except Exception:
             formatted = None
 
-    # 2) Fall back to the js-beautify command-line tool if available
     if formatted is None and shutil.which("js-beautify") is not None:
         try:
             result = subprocess.run(
                 ["js-beautify", input_file],
-                capture_output=True,
-                text=True,
-                timeout=20
+                capture_output=True, text=True, timeout=20,
             )
             if result.returncode == 0 and result.stdout:
                 formatted = result.stdout
         except Exception:
             formatted = None
 
-    # 3) Last resort: keep the raw source so downstream analysis still runs
     if formatted is None:
         formatted = source
-
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(formatted)
-
+    with open(output_file, "w", encoding="utf-8") as handle:
+        handle.write(formatted)
     return output_file
 
 
-# =========================================
-# 🚀 MAIN BEAUTIFY (PARALLEL ✅)
-# =========================================
-def beautify(files):
-
-    os.makedirs(BEAUTIFY_DIR, exist_ok=True)
-
-    output_files = []
-
-    # ✅ Parallel processing (fast)
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        results = list(executor.map(beautify_file, files))
-
-    # ✅ Clean None values
-    output_files = [r for r in results if r]
-
-    return output_files
+def beautify(files, output_dir=None, max_workers=5):
+    output_dir = output_dir or BEAUTIFY_DIR
+    os.makedirs(output_dir, exist_ok=True)
+    files = list(files or [])
+    if not files:
+        return []
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(files))) as executor:
+        results = list(executor.map(lambda path: beautify_file(path, output_dir), files))
+    return [result for result in results if result]

@@ -44,8 +44,11 @@ class Job:
         self.started_at = None
         self.finished_at = None
         self._lock = threading.Lock()
+        self.cancel_event = threading.Event()
 
     def update(self, **kwargs):
+        if self.cancel_event.is_set():
+            return
         with self._lock:
             now = time.time()
             if self.started_at is not None:
@@ -82,13 +85,26 @@ class Job:
 
     def start(self):
         with self._lock:
+            if self.cancel_event.is_set():
+                self.status = "canceled"
+                self.phase = "canceled"
+                self.message = "Canceled"
+                self.finished_at = time.time()
+                return False
             self.status = "running"
             self.phase = self.phase or "running"
             self.started_at = time.time()
             self.message = self.message or "Working…"
+            return True
 
     def complete(self, result):
         with self._lock:
+            if self.cancel_event.is_set():
+                self.status = "canceled"
+                self.phase = "canceled"
+                self.message = "Canceled"
+                self.finished_at = time.time()
+                return
             self.result = result
             self.status = "done"
             self.phase = "done"
@@ -106,12 +122,31 @@ class Job:
 
     def fail(self, error):
         with self._lock:
+            if self.cancel_event.is_set():
+                self.status = "canceled"
+                self.phase = "canceled"
+                self.message = "Canceled"
+                self.error = ""
+                self.finished_at = time.time()
+                return
             self.status = "error"
             self.phase = "error"
             self.error = str(error)[:1000]
             self.finished_at = time.time()
             if self.started_at is not None:
                 self.elapsed_ms = int((self.finished_at - self.started_at) * 1000)
+
+    def cancel(self):
+        """Request cooperative cancellation; active network calls finish at timeout."""
+        self.cancel_event.set()
+        with self._lock:
+            if self.status == "queued":
+                self.status = "canceled"
+                self.phase = "canceled"
+                self.message = "Canceled"
+                self.finished_at = time.time()
+            elif self.status == "running":
+                self.message = "Canceling…"
 
     def snapshot(self, include_result=False):
         with self._lock:
@@ -145,10 +180,30 @@ class Job:
 class JobManager:
     """Thread-safe registry for background jobs."""
 
-    def __init__(self, max_jobs=200):
+    def __init__(self, max_jobs=64, retention_seconds=3600):
         self._jobs = {}
         self._lock = threading.Lock()
-        self._max_jobs = max_jobs
+        self._max_jobs = max(1, int(max_jobs))
+        self._retention_seconds = max(60, int(retention_seconds))
+
+    def _prune_locked(self):
+        now = time.time()
+        terminal = [
+            job for job in self._jobs.values()
+            if job.status in ("done", "error", "canceled")
+        ]
+        for job in terminal:
+            if isinstance(job.finished_at, (int, float)) and now - job.finished_at > self._retention_seconds:
+                self._jobs.pop(job.id, None)
+        if len(self._jobs) < self._max_jobs:
+            return
+        # If the registry is full, evict the oldest terminal records first.
+        terminal = sorted(
+            (job for job in self._jobs.values() if job.status in ("done", "error", "canceled")),
+            key=lambda job: job.finished_at if isinstance(job.finished_at, (int, float)) else 0,
+        )
+        while len(self._jobs) >= self._max_jobs and terminal:
+            self._jobs.pop(terminal.pop(0).id, None)
 
     def create(self, mode="code", source="", profile="", max_files=50, max_depth=5, timeout=15):
         job = Job(
@@ -160,14 +215,9 @@ class JobManager:
             timeout=timeout,
         )
         with self._lock:
+            self._prune_locked()
             if len(self._jobs) >= self._max_jobs:
-                # Drop the oldest finished job to keep the dashboard light.
-                oldest = sorted(
-                    (v for v in self._jobs.values() if v.status in ("done", "error")),
-                    key=lambda j: j.created_at or "",
-                )
-                if oldest:
-                    self._jobs.pop(oldest[0].id, None)
+                raise RuntimeError("The local engine is at its concurrent job limit; try again shortly.")
             self._jobs[job.id] = job
         return job
 
@@ -178,7 +228,8 @@ class JobManager:
 
         def runner():
             try:
-                job.start()
+                if not job.start():
+                    return
                 result = target(*args, **kwargs)
                 job.complete(result)
             except Exception as exc:  # noqa: BLE001 - surfaced to dashboard
@@ -202,6 +253,13 @@ class JobManager:
             return None
         snap = job.snapshot(include_result=True)
         return snap.get("result")
+
+    def cancel(self, job_id):
+        job = self.get(job_id)
+        if job is None:
+            return False
+        job.cancel()
+        return True
 
     def clear(self, job_id):
         with self._lock:

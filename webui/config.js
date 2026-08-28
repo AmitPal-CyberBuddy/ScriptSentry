@@ -11,18 +11,16 @@
  *  - When the page is hosted on GitHub Pages, it talks to the user's local
  *    engine at http://127.0.0.1:8000 (default port).
  *
- * 127.0.0.1 is more reliably treated as a secure/trusted local origin from an
- * HTTPS hosted page than `localhost`, and the server binds 0.0.0.0 so it is
- * reachable from both.
- *
- * If you change the local port, update the fallback below and tell users
- * to run `python3 server.py --port <port>` with the matching port.
+ * The engine requires a pairing token printed by server.py.  It is kept in
+ * sessionStorage by app.js and is never placed in the URL or sent to a cloud.
+ * Set SCRIPTSENTRY_API before this file if the engine is hosted elsewhere.
  */
 (function () {
   var host = window.location.hostname || "";
   var isLocalHost = /^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/.test(host);
 
-  window.SCRIPTSENTRY_API = isLocalHost
+  window.SCRIPTSENTRY_API = window.SCRIPTSENTRY_API || (isLocalHost
     ? window.location.origin  // served locally by server.py
-    : "http://127.0.0.1:8000"; // hosted UI → user's local engine
+    : "http://127.0.0.1:8000"); // hosted UI → user's local engine
+  window.SCRIPTSENTRY_API_TOKEN = window.SCRIPTSENTRY_API_TOKEN || "";
 })();

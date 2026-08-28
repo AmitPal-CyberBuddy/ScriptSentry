@@ -4,11 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ScriptSentry — JavaScript Analyzer</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css" />
-  <script src="/config.js"></script>
+  <meta name="referrer" content="no-referrer" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* https:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none';" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="config.js"></script>
 </head>
 <body>
   <canvas id="particles" aria-hidden="true"></canvas>
@@ -132,6 +131,7 @@
             <span class="progress-track" aria-hidden="true"><i class="progress-fill" id="progress-fill"></i></span>
             <span class="progress-stats" id="progress-stats"></span>
           </span>
+          <button class="btn ghost cancel-btn" id="cancel-scan" type="button">Cancel</button>
         </div>
       </div>
     </section>
@@ -286,7 +286,11 @@ python3 server.py --port 8000</pre>
       </div>
       <p class="modal-note">
         ⚠️ If you change the port, update <code>webui/config.js</code> to the same port.
+        The engine prints a pairing token at startup; it stays in this tab only.
       </p>
+      <label class="field-label" for="engine-token">Engine pairing token</label>
+      <input id="engine-token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the token printed by server.py" />
+      <p class="error-note" id="connection-error" hidden></p>
       <div class="modal-actions">
         <button class="btn secondary" id="close-modal">Got it</button>
         <button class="btn" id="retry-backend">🔄 Retry connection</button>
@@ -294,6 +298,6 @@ python3 server.py --port 8000</pre>
     </div>
   </div>
 
-  <script src="/app.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

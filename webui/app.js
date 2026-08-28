@@ -37,6 +37,27 @@
     return `${apiBase()}${path.startsWith("/") ? path : `/${path}`}`;
   }
 
+  function apiToken() {
+    return String(window.SCRIPTSENTRY_API_TOKEN || sessionStorage.getItem("scriptsentry_engine_token") || "").trim();
+  }
+
+  function authHeaders() {
+    const token = apiToken();
+    return token ? { "X-ScriptSentry-Token": token } : {};
+  }
+
+  function setApiToken(value) {
+    const token = String(value || "").trim();
+    if (token) {
+      sessionStorage.setItem("scriptsentry_engine_token", token);
+      window.SCRIPTSENTRY_API_TOKEN = token;
+    } else {
+      sessionStorage.removeItem("scriptsentry_engine_token");
+      window.SCRIPTSENTRY_API_TOKEN = "";
+    }
+    backendChecked = false;
+  }
+
   /* Backend liveness + privacy gate */
   function setEngineStatus(state, text) {
     const dot = $("#engine-dot");
@@ -54,6 +75,13 @@
     try {
       const res = await fetch(apiUrl("/api/health"), { cache: "no-store", signal: controller.signal });
       if (res.ok) {
+        const health = await res.json().catch(() => ({}));
+        if (health.auth_required && !apiToken()) {
+          backendConnected = false;
+          backendChecked = true;
+          setEngineStatus("checking", "🟡 Engine online · pairing token required");
+          return false;
+        }
         backendConnected = true;
         backendChecked = true;
         setEngineStatus("", "🟢 Local engine connected · private analysis ready");
@@ -82,12 +110,24 @@
     if (modal) modal.hidden = false;
   }
 
+  function showConnectionError(error) {
+    const node = $("#connection-error");
+    if (node) {
+      node.textContent = error && error.message ? error.message : "The engine request failed.";
+      node.hidden = false;
+    }
+  }
+
   function closePrivacyModal() {
     const modal = $("#privacy-modal");
     if (modal) modal.hidden = true;
+    const node = $("#connection-error");
+    if (node) node.hidden = true;
   }
 
   async function retryBackend() {
+    const field = $("#engine-token");
+    if (field && field.value.trim()) setApiToken(field.value);
     const ok = await checkBackend();
     if (ok) closePrivacyModal();
   }
@@ -106,7 +146,7 @@
   async function postJSON(url, data) {
     const res = await fetch(apiUrl(url), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify(data),
     });
     let body;
@@ -122,7 +162,7 @@
   }
 
   async function getJSON(url) {
-    const res = await fetch(apiUrl(url), { cache: "no-store" });
+    const res = await fetch(apiUrl(url), { cache: "no-store", headers: authHeaders() });
     let body;
     try {
       body = await res.json();
@@ -304,9 +344,20 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       renderProgress(latest);
       if (latest.status === "done") return latest;
       if (latest.status === "error") throw new Error(latest.error || "Analysis failed.");
+      if (latest.status === "canceled") throw new Error("Analysis canceled.");
       await new Promise((r) => setTimeout(r, 500));
     }
     throw new Error("Analysis timed out while waiting for the local engine.");
+  }
+
+  async function cancelCurrentJob() {
+    if (!lastJobId) return;
+    try {
+      await postJSON("/api/cancel", { job_id: lastJobId });
+      $("#loading-text").textContent = "Canceling scan…";
+    } catch (err) {
+      showConnectionError(err);
+    }
   }
 
   async function finishJob(jobId) {
@@ -340,7 +391,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       await pollJob(data.job_id);
       await finishJob(data.job_id);
     } catch (err) {
-      setEngineStatus("offline");
+      showConnectionError(err);
+      setEngineStatus("checking", err.message || "Analysis failed");
       openPrivacyModal();
     } finally {
       hideLoading();
@@ -372,7 +424,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       await pollJob(data.job_id);
       await finishJob(data.job_id);
     } catch (err) {
-      setEngineStatus("offline");
+      showConnectionError(err);
+      setEngineStatus("checking", err.message || "Analysis failed");
       openPrivacyModal();
     } finally {
       hideLoading();
@@ -393,7 +446,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       const query = lastJobId ? { ...lastQuery, job_id: lastJobId } : lastQuery;
       const res = await fetch(apiUrl(`/api/report?format=${format}`), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify(query),
       });
       if (!res.ok) {
@@ -415,7 +468,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
     } catch (err) {
-      setEngineStatus("offline");
+      showConnectionError(err);
+      setEngineStatus("checking", err.message || "Analysis failed");
       openPrivacyModal();
     } finally {
       hideLoading();
@@ -481,6 +535,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
         const external = caps.external_destinations || [];
         const domains = Array.from(new Set(external.map((d) => d.domain).filter(Boolean))).slice(0, 6);
         const apis = (s.browser_apis || []).filter((a) => a.enabled);
+        const runtimeRequests = s.runtime_requests || [];
         return `<div class="finding-chip" style="animation-delay:${i * 0.05}s">
           <span class="chip-title" style="color:${partyColor[s.party] || "#22d3ee"}">
             ${escapeHtml(s.name)} · ${escapeHtml(s.party || "unknown")} · risk ${risk.score || 0}/100
@@ -491,6 +546,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
           ${writes.length ? `<div><b>Writes:</b> ${writes.map(escapeHtml).join(", ")}</div>` : ""}
           ${domains.length ? `<div><b>External destinations:</b> ${domains.map(escapeHtml).join(", ")}</div>` : ""}
           ${apis.length ? `<div><b>Browser APIs:</b> ${apis.map((a) => `${a.label} ${a.enabled ? "✓" : "✗"}`).join(" · ")}</div>` : ""}
+          ${runtimeRequests.length ? `<div><b>Runtime network initiated:</b> ${runtimeRequests.slice(0, 6).map((r) => `${r.method || "GET"} ${r.url || ""}`).map(escapeHtml).join(" · ")}</div>` : ""}
         </div>`;
       })
       .join("");
@@ -551,6 +607,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       ["Eval / Timers", (evidence.eval_calls || []).length + (evidence.string_timers || []).length, "#f97316"],
       ["WebSockets", (evidence.websockets || []).length, "#f472b6"],
       ["Storage Keys", new Set([...(evidence.local_storage_keys || []), ...(evidence.session_storage_keys || []), ...(evidence.cookie_names || [])]).size, "#8b5cf6"],
+      ["Messages", (evidence.post_messages || []).length + (evidence.message_listeners || []).length, "#c084fc"],
     ];
 
     const panels = [
@@ -560,7 +617,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       ["WebSockets", detail(evidence.websockets).slice(0, 20), "#f472b6"],
       ["Eval & String Timers", detail([...(evidence.eval_calls || []), ...(evidence.string_timers || [])]).slice(0, 20), "#f97316"],
       ["DOM Sinks", detail(evidence.dom_sinks).slice(0, 20), "#fb7185"],
-      ["Storage & Cookies", detail(evidence.storage_writes).concat((evidence.cookie_names || []).map((n) => `cookie: ${n}`)).concat((evidence.local_storage_keys || []).map((n) => `localStorage key: ${n}`)).concat((evidence.session_storage_keys || []).map((n) => `sessionStorage key: ${n}`)).slice(0, 30), "#8b5cf6"],
+      ["Storage & Cookies", detail(evidence.storage_writes).concat(detail(evidence.storage_reads)).concat((evidence.cookie_names || []).map((n) => `cookie: ${n}`)).concat((evidence.local_storage_keys || []).map((n) => `localStorage key: ${n}`)).concat((evidence.session_storage_keys || []).map((n) => `sessionStorage key: ${n}`)).slice(0, 30), "#8b5cf6"],
+      ["Messages", detail([...(evidence.post_messages || []), ...(evidence.message_listeners || [])]).slice(0, 20), "#c084fc"],
       ["Dynamic Scripts / Frames", detail([...(evidence.scripts || []), ...(evidence.frames || [])]).slice(0, 30), "#60a5fa"],
       ["Runtime Findings", findings.map((f) => `${f.severity || "MEDIUM"} · ${f.type || f.id} · ${(f.evidence || []).join(" · ")}`).slice(0, 20), "#ff4d6d"],
     ].filter(([, v]) => v && v.length);
@@ -1064,6 +1122,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       ["Transport", file.transport, "#38bdf8"],
       ["Methods", file.methods, "#fb7185"],
       ["Risk Signals", (file.signals || []).map((s) => s.title), "#ff4d6d"],
+      ["Source Map", file.source_map && file.source_map.present ? [`${file.source_map.sources?.length || 0} source(s) · ${file.source_map.available ? "metadata loaded" : "reference unresolved"}`] : [], "#60a5fa"],
+      ["Analyzer Warnings", file.analysis_warnings || [], "#fbbf24"],
     ]
       .filter(([, items]) => items && items.length)
       .map(
@@ -1124,6 +1184,9 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     });
     $("#close-modal").addEventListener("click", closePrivacyModal);
     $("#retry-backend").addEventListener("click", retryBackend);
+    $("#cancel-scan").addEventListener("click", cancelCurrentJob);
+    const tokenField = $("#engine-token");
+    if (tokenField) tokenField.value = apiToken();
     $("#copy-setup").addEventListener("click", () => {
       const code = $("#setup-code").textContent;
       if (navigator.clipboard && navigator.clipboard.writeText) {

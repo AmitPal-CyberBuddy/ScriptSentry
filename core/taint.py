@@ -255,6 +255,24 @@ class TaintAnalyzer:
                 return combined
             return left or right
 
+        # Object/array payloads: preserve taint in fetch bodies, headers, and
+        # JSON-like structures without treating every object as sensitive.
+        if ntype in ("ObjectExpression", "ArrayExpression"):
+            combined = None
+            values = node.get("properties", []) if ntype == "ObjectExpression" else node.get("elements", [])
+            for item in values or []:
+                candidate = item.get("value") if isinstance(item, dict) and ntype == "ObjectExpression" else item
+                t = self._taint_of_expr(candidate, depth + 1)
+                if t:
+                    if combined is None:
+                        combined = t.copy()
+                    else:
+                        combined.merge(t)
+            return combined
+
+        if ntype in ("AwaitExpression", "UnaryExpression", "ChainExpression"):
+            return self._taint_of_expr(node.get("argument") or node.get("expression"), depth + 1)
+
         # Member expression sources (location/search, storage, cookie, value...)
         if ntype in ("MemberExpression", "ChainExpression"):
             callee_txt = self._strip_calls(node).lower()
@@ -290,16 +308,27 @@ class TaintAnalyzer:
             callee_txt = self._strip_calls(node.get("callee", {}))
             lower = callee_txt.lower()
 
-            # source getters
-            if any(marker in lower for marker in ("searchparams.get", "searchparams.getall", "getitem", "cookie", "referrer", ".get", ".getall")):
-                source_label = {
-                    "searchparams": "URL search params",
-                    "getitem": "browser storage",
-                    "cookie": "document.cookie",
-                    "referrer": "document.referrer",
-                }
-                label = next((v for k, v in source_label.items() if k in lower), "URL search params")
-                return _Taint([f"source:{label}"], False, [f"read {callee_txt}"], "high")
+            # Explicit source getters.  A generic ``client.get()`` is not a
+            # browser source and must not become a taint origin.
+            if "searchparams.get" in lower or "searchparams.getall" in lower:
+                return _Taint(["source:URL search params"], False, [f"read {callee_txt}"], "high")
+            if "getitem" in lower and ("localstorage" in lower or "sessionstorage" in lower):
+                return _Taint(["source:browser storage"], False, [f"read {callee_txt}"], "high")
+            if "cookie" in lower:
+                return _Taint(["source:document.cookie"], False, [f"read {callee_txt}"], "high")
+            if "referrer" in lower:
+                return _Taint(["source:document.referrer"], False, [f"read {callee_txt}"], "high")
+
+            # Transparent transforms retain a source for a downstream sink.
+            if any(lower.endswith(name) or lower == name for name in ("json.stringify", "encodeuricomponent", "encodeuri", "btoa")):
+                combined = None
+                for arg in node.get("arguments", []) or []:
+                    candidate = self._taint_of_expr(arg, depth + 1)
+                    if candidate:
+                        combined = candidate.copy() if combined is None else combined
+                        if combined is not candidate:
+                            combined.merge(candidate)
+                return combined
 
             # URLSearchParams object getters (u.get('next'), params.get('x'))
             obj_name = callee_txt.split(".")[0] if "." in callee_txt else callee_txt
@@ -387,6 +416,26 @@ class TaintAnalyzer:
             return
         callee = self._strip_calls(node.get("callee", {}))
         lower = callee.lower()
+
+        # Network sinks are reported only when a tracked source reaches the
+        # request URL, body, header, or send() payload.  A bare fetch is an
+        # inventory observation, not data exfiltration.
+        is_network = lower in ("fetch", "axios", "navigator.sendbeacon", "sendbeacon") or lower.endswith(".send") or lower.endswith(".request")
+        if is_network:
+            args = node.get("arguments", []) or []
+            taint = None
+            for arg in args:
+                candidate = self._taint_of_expr(arg)
+                if candidate:
+                    taint = candidate if taint is None else (taint.copy() if not taint else taint)
+                    if candidate is not taint:
+                        taint.merge(candidate)
+            self._record_sink("data_exfiltration_flow", node, taint, {
+                "id": "data_exfiltration_flow",
+                "type": "Sensitive data sent to a network sink",
+                "severity": "HIGH",
+            })
+            return
 
         # postMessage target-origin
         if "postmessage" in lower:
@@ -691,66 +740,198 @@ class TaintAnalyzer:
         )
 
     def _regex_analyze(self):
-        lines = self.content.splitlines()
-        # Track tainted vars from source reads.
-        tainted = set()
-        for i, line in enumerate(lines, 1):
-            for source_re, label in [
-                (r"\b(?:location\.search|url\.search|location\.hash|location\.href|document\.referrer|window\.location)\b", "URL"),
-                (r"new\s+URLSearchParams\(|\.searchParams\.get\s*\(", "URL params"),
-                (r"(?:event|e|msg)\.data\b", "postMessage"),
-                (r"localStorage\.getItem\(|sessionStorage\.getItem\(|document\.cookie", "storage"),
-                (r"\.value\b", "user input"),
-            ]:
-                if re.search(source_re, line, re.I):
-                    # capture assignment target
-                    m = re.search(r"(?:const|let|var)?\s*([A-Za-z_$][\w$]*)\s*=\s*.*" + source_re, line)
-                    if m:
-                        tainted.add(m.group(1))
-                    elif re.search(r"\b(?:return|\(|[,=])", line):
-                        m2 = re.search(r"\b([A-Za-z_$][\w$]*)\s*=", line)
-                        if m2:
-                            tainted.add(m2.group(1))
+        """Conservative fallback for bundles the optional parser cannot parse.
 
-        for i, line in enumerate(lines, 1):
-            low = line.lower()
-            # assignment sinks
-            m_sink = None
-            if re.search(r"\binnerHTML\s*=|\.outerHTML\s*=|document\.write\s*\(|insertAdjacentHTML\s*\(|eval\s*\(|new\s+Function\s*\(|setTimeout\s*\(\s*['\"]|setInterval\s*\(\s*['\"]", line, re.I):
-                srcs = [v for v in tainted if v in line]
-                dynamic = bool(re.search(r"\b(?:innerHTML|eval|Function|document\.write|insertAdjacentHTML)\b", line, re.I))
+        The old fallback guessed the source variable from a whole minified
+        line, which frequently selected ``innerHTML`` or another sink.  This
+        version records explicit source labels and propagates simple aliases
+        and object properties without claiming unrelated patterns are flows.
+        """
+        text = self.content
+        tainted = {}
+        properties = {}
+
+        source_specs = [
+            (r"(?:new\s+URLSearchParams\s*\(\s*)?location\.search|url\.search|searchParams(?:\.get)?", "URL query string"),
+            (r"location\.hash|url\.hash", "URL fragment"),
+            (r"location\.href|window\.location", "full URL"),
+            (r"document\.referrer", "referrer"),
+            (r"(?:event|e|msg|message)\.data", "postMessage/window message data"),
+            (r"(?:localStorage|sessionStorage)\.getItem\s*\(", "browser storage"),
+            (r"document\.cookie", "document.cookie"),
+            (r"(?:document\.querySelector|document\.getElementById)\s*\([^)]*\)\s*\.value", "form/input value"),
+        ]
+
+        def source_for(expr):
+            for pattern, label in source_specs:
+                if re.search(pattern, expr, re.I):
+                    return label
+            return None
+
+        # Split at statement boundaries but retain line numbers. This works for
+        # ordinary source and still gives useful evidence for minified bundles.
+        statements = [(text[:m.start()].count("\n") + 1, m.group(0).strip())
+                      for m in re.finditer(r"[^;\n]+", text) if m.group(0).strip()]
+
+        for line_no, statement in statements:
+            assignment = re.match(
+                r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(.+)$",
+                statement, re.I | re.S,
+            ) or re.match(r"([A-Za-z_$][\w$]*)\s*=\s*(.+)$", statement, re.I | re.S)
+            if not assignment:
+                continue
+            name, expr = assignment.groups()
+            source = source_for(expr)
+            aliases = [value for value in tainted if re.search(rf"\b{re.escape(value)}\b", expr)]
+            if source or aliases:
+                value = {
+                    "sources": [f"source:{source}"] if source else [],
+                    "sanitized": any(h in expr.lower() for h in SANITIZER_HINTS),
+                    "path": [f"read {source}" if source else f"alias {', '.join(aliases)}"],
+                    "confidence": "high" if source else "medium",
+                }
+                for alias in aliases:
+                    for src in tainted[alias]["sources"]:
+                        if src not in value["sources"]:
+                            value["sources"].append(src)
+                    value["path"].extend(tainted[alias]["path"])
+                    value["sanitized"] = value["sanitized"] or tainted[alias]["sanitized"]
+                    value["confidence"] = _max_confidence(value["confidence"], tainted[alias]["confidence"])
+                if value["sanitized"]:
+                    value["path"].append("sanitized transformation")
+                tainted[name] = value
+
+            # Track object literal properties, e.g. { q: location.search }.
+            for prop, expr_value in re.findall(r"([A-Za-z_$][\w$]*)\s*:\s*([^,}]+)", expr):
+                prop_source = source_for(expr_value)
+                prop_alias = next((v for v in tainted if re.search(rf"\b{re.escape(v)}\b", expr_value)), None)
+                if prop_source or prop_alias:
+                    base = tainted[prop_alias] if prop_alias else None
+                    properties[f"{name}.{prop}"] = {
+                        "sources": [f"source:{prop_source}"] if prop_source else list(base["sources"]),
+                        "sanitized": bool(base and base["sanitized"]),
+                        "path": [f"read {prop_source}" if prop_source else f"property {name}.{prop}"],
+                        "confidence": "high" if prop_source else "medium",
+                    }
+
+        def combine(values):
+            if not values:
+                return None
+            sources, path, sanitized, confidence = [], [], False, "low"
+            for value in values:
+                for src in value["sources"]:
+                    if src not in sources:
+                        sources.append(src)
+                for step in value["path"]:
+                    if step not in path:
+                        path.append(step)
+                sanitized = sanitized or value["sanitized"]
+                confidence = _max_confidence(confidence, value["confidence"])
+            return {"sources": sources, "path": path, "sanitized": sanitized, "confidence": confidence}
+
+        def taints_in(expr):
+            values = []
+            for name, value in tainted.items():
+                if re.search(rf"\b{re.escape(name)}\b", expr):
+                    values.append(value)
+            for key, value in properties.items():
+                if re.search(rf"\b{re.escape(key)}\b", expr):
+                    values.append(value)
+            return values
+
+        for line_no, statement in statements:
+            sink = re.search(
+                r"(?:innerHTML|outerHTML|srcdoc)\s*=|insertAdjacentHTML\s*\(|"
+                r"document\.(?:write|writeln)\s*\(|\beval\s*\(|new\s+Function\s*\(",
+                statement, re.I,
+            )
+            if sink:
+                flow = combine(taints_in(statement[sink.end():]))
+                is_dom = bool(re.search(r"innerHTML|outerHTML|srcdoc|insertAdjacentHTML|document\.", statement, re.I))
+                if flow:
+                    self._record({
+                        "id": "dom_injection" if is_dom else "dangerous_dynamic_code",
+                        "type": "DOM injection" if is_dom else "Dangerous dynamic code execution",
+                        "severity": "LOW" if flow["sanitized"] else "HIGH",
+                        "confidence": "low" if flow["sanitized"] else flow["confidence"],
+                        "status": "informational" if flow["sanitized"] else ("confirmed" if flow["confidence"] == "high" else "potential"),
+                        "file": self.filename, "line": line_no,
+                        "source": " → ".join(s.replace("source:", "") for s in flow["sources"]),
+                        "sink": statement[sink.start():sink.end()].strip() + statement[sink.end():sink.end() + 120],
+                        "flow": flow["path"][:8], "sanitization_detected": flow["sanitized"],
+                        "evidence": ("sanitized: " if flow["sanitized"] else "") + statement[:240],
+                    })
+                elif not is_dom:
+                    self._record({
+                        "id": "dangerous_dynamic_code", "type": "Dangerous dynamic code execution", "severity": "MEDIUM",
+                        "confidence": "low", "status": "potential", "file": self.filename, "line": line_no,
+                        "source": "", "sink": statement[:160], "flow": [], "sanitization_detected": False,
+                        "evidence": statement[:240],
+                    })
+
+            redirect = re.search(r"\blocation\.(?:href|assign|replace)\s*(?:=|\()", statement, re.I)
+            if redirect:
+                flow = combine(taints_in(statement[redirect.end():]))
+                if flow:
+                    self._record({
+                        "id": "open_redirect", "type": "Client-side open redirect", "severity": "HIGH",
+                        "confidence": flow["confidence"],
+                        "status": "needs_review" if flow["sanitized"] else ("confirmed" if flow["confidence"] == "high" else "potential"),
+                        "file": self.filename, "line": line_no,
+                        "source": " → ".join(s.replace("source:", "") for s in flow["sources"]),
+                        "sink": statement[:160], "flow": flow["path"][:8],
+                        "sanitization_detected": flow["sanitized"], "evidence": statement[:240],
+                    })
+
+            if re.search(r"postMessage\s*\([^)]*,\s*['\"]\*['\"]", statement, re.I):
                 self._record({
-                    "id": "dangerous_pattern", "type": "Dangerous DOM/dynamic pattern", "severity": "HIGH" if dynamic else "MEDIUM",
-                    "confidence": "medium", "status": "confirmed" if srcs else "potential", "file": self.filename, "line": i,
-                    "source": " → ".join(srcs) or "unknown", "sink": line.strip()[:120], "flow": srcs[:6],
-                    "sanitization_detected": any(h in low for h in SANITIZER_HINTS),
-                    "evidence": line.strip()[:240],
+                    "id": "insecure_postmessage", "type": "Insecure postMessage", "severity": "MEDIUM",
+                    "confidence": "medium", "status": "needs_review", "file": self.filename, "line": line_no,
+                    "source": "message data", "sink": statement[:160], "flow": [],
+                    "sanitization_detected": False, "evidence": statement[:240],
                 })
-            # open redirect
-            if re.search(r"\blocation\.(?:href|assign|replace)\s*(?:=|\()", line, re.I):
-                srcs = [v for v in tainted if v in line]
+            if re.search(r"(?:__proto__|constructor\.prototype|Object\.assign\s*\([^)]*(?:__proto__|prototype))", statement, re.I):
                 self._record({
-                    "id": "open_redirect", "type": "Client-side open redirect", "severity": "HIGH",
-                    "confidence": "high" if srcs else "medium", "status": "confirmed" if srcs else "potential",
-                    "file": self.filename, "line": i, "source": " → ".join(srcs) or "unknown",
-                    "sink": line.strip()[:120], "flow": srcs[:6], "sanitization_detected": any(h in low for h in SANITIZER_HINTS),
-                    "evidence": line.strip()[:240],
+                    "id": "prototype_pollution", "type": "Prototype pollution", "severity": "MEDIUM",
+                    "confidence": "low", "status": "needs_review", "file": self.filename, "line": line_no,
+                    "source": "", "sink": statement[:160], "flow": [],
+                    "sanitization_detected": False, "evidence": statement[:240],
                 })
-            # postMessage '*'
-            m = re.match(r"\s*([^#]+?)\s*postMessage\s*\(", line, re.I)
-            if re.search(r"postMessage\s*\([^)]*,\s*['\"]\*['\"]", line, re.I):
+
+        # Small inter-procedural fallback: propagate a tainted argument into a
+        # function body when the AST parser is unavailable.  This is deliberately
+        # limited to named functions and direct calls.
+        for function in re.finditer(r"function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{([^{}]*)\}", text, re.I | re.S):
+            fn_name, params_text, body = function.groups()
+            params = [p.strip() for p in params_text.split(",") if p.strip()]
+            sink = re.search(r"(?:innerHTML|outerHTML|srcdoc)\s*=|insertAdjacentHTML\s*\(", body, re.I)
+            if not sink or not params:
+                continue
+            for call in re.finditer(rf"\b{re.escape(fn_name)}\s*\(([^)]*)\)", text[function.end():], re.I):
+                args = [a.strip() for a in call.group(1).split(",") if a.strip()]
+                if not args:
+                    continue
+                flow = combine(taints_in(args[0]))
+                if not flow:
+                    continue
+                rendered = body
+                for index, param in enumerate(params):
+                    if index < len(args):
+                        rendered = re.sub(rf"\b{re.escape(param)}\b", args[index], rendered)
+                line_no = text[:function.start()].count("\n") + 1
                 self._record({
-                    "id": "insecure_postmessage", "type": "Insecure postMessage", "severity": "MEDIUM", "confidence": "medium",
-                    "status": "potential", "file": self.filename, "line": i, "source": "message data", "sink": line.strip()[:120],
-                    "flow": [], "sanitization_detected": False, "evidence": line.strip()[:240],
+                    "id": "dom_injection", "type": "DOM injection",
+                    "severity": "LOW" if flow["sanitized"] else "HIGH",
+                    "confidence": "low" if flow["sanitized"] else flow["confidence"],
+                    "status": "informational" if flow["sanitized"] else ("confirmed" if flow["confidence"] == "high" else "potential"),
+                    "file": self.filename, "line": line_no,
+                    "source": " → ".join(src.replace("source:", "") for src in flow["sources"]),
+                    "sink": rendered[sink.start():sink.end()].strip() + rendered[sink.end():sink.end() + 120],
+                    "flow": flow["path"][:8] + [f"call {fn_name}"],
+                    "sanitization_detected": flow["sanitized"],
+                    "evidence": ("sanitized: " if flow["sanitized"] else "") + rendered[:240],
                 })
-            # prototype pollution
-            if re.search(r"(?:__proto__|constructor\.prototype|Object\.assign\s*\([^)]*(?:__proto__|prototype))", line, re.I):
-                self._record({
-                    "id": "prototype_pollution", "type": "Prototype pollution", "severity": "MEDIUM", "confidence": "medium",
-                    "status": "potential", "file": self.filename, "line": i, "source": "dynamic input", "sink": line.strip()[:120],
-                    "flow": [], "sanitization_detected": False, "evidence": line.strip()[:240],
-                })
+
 
 
 content_low = ""
