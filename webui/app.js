@@ -536,11 +536,15 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
         const domains = Array.from(new Set(external.map((d) => d.domain).filter(Boolean))).slice(0, 6);
         const apis = (s.browser_apis || []).filter((a) => a.enabled);
         const runtimeRequests = s.runtime_requests || [];
+        const loadedBy = s.loaded_by || [];
+        const pagesPresent = s.pages_present || [];
         return `<div class="finding-chip" style="animation-delay:${i * 0.05}s">
           <span class="chip-title" style="color:${partyColor[s.party] || "#22d3ee"}">
             ${escapeHtml(s.name)} · ${escapeHtml(s.party || "unknown")} · risk ${risk.score || 0}/100
           </span>
           <div style="color:#8ea2c1">${escapeHtml(s.load_method || "unknown")} · ${escapeHtml(s.domain || "inline")} · ${s.finding_count || 0} findings</div>
+          ${loadedBy.length ? `<div><b>Loaded by:</b> ${loadedBy.slice(0, 4).map(escapeHtml).join(" · ")}</div>` : ""}
+          ${pagesPresent.length ? `<div><b>Present on:</b> ${pagesPresent.slice(0, 4).map(escapeHtml).join(" · ")}</div>` : ""}
           ${risk.factors && risk.factors.length ? `<div><b>Why:</b> ${risk.factors.slice(0, 4).map(escapeHtml).join(" · ")}</div>` : ""}
           ${reads.length ? `<div><b>Reads:</b> ${reads.map(escapeHtml).join(", ")}</div>` : ""}
           ${writes.length ? `<div><b>Writes:</b> ${writes.map(escapeHtml).join(", ")}</div>` : ""}
@@ -570,7 +574,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
   function runtimeItemText(item) {
     if (typeof item === "string") return item;
     if (!item) return "";
-    if (item.method && item.url) return `${item.method} ${item.url}${item.status ? ` [${item.status}]` : ""}`;
+    if (item.method && item.url) return `${item.method} ${item.url}${item.status ? ` [${item.status}]` : ""}${item.initiated_by?.length ? ` · initiated by ${item.initiated_by.slice(0, 2).join(", ")}` : ""}`;
     if (item.sink) return `${item.sink}: ${item.value || ""}`;
     if (item.kind) return item.code ? `${item.kind}: ${item.code}` : item.kind;
     if (item.storage) return item.key ? `${item.storage} ${item.operation || "setItem"} → ${item.key} (${item.valueLength || ""} chars)` : item.storage;
