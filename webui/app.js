@@ -25,6 +25,15 @@
   let payload = null;
   let lastQuery = null;
 
+  /* API base: same origin locally, or a hosted Python backend on Pages. */
+  function apiBase() {
+    return (window.SCRIPTSENTRY_API || "").replace(/\/+$/, "");
+  }
+
+  function apiUrl(path) {
+    return `${apiBase()}${path.startsWith("/") ? path : `/${path}`}`;
+  }
+
   /* ---------------- Core helpers ---------------- */
 
   function escapeHtml(value) {
@@ -37,7 +46,7 @@
   }
 
   async function postJSON(url, data) {
-    const res = await fetch(url, {
+    const res = await fetch(apiUrl(url), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -234,7 +243,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     }
     showLoading("Generating report…");
     try {
-      const res = await fetch(`/api/report?format=${format}`, {
+      const res = await fetch(apiUrl(`/api/report?format=${format}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(lastQuery),
