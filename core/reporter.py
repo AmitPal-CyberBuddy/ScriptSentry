@@ -200,6 +200,8 @@ def build_report_model(results, ai_summary=None, metadata=None):
     all_transport = set()
     all_flows = []
     all_findings = []
+    runtime_evidence = results.get("__runtime_evidence__") or {}
+    runtime_findings = results.get("__runtime_findings__") or []
     all_attack_surface = {
         "endpoints": [], "websockets": [], "sse": [], "graphql": [],
         "parameters": [], "domains": [], "headers": [], "body_fields": [],
@@ -210,6 +212,8 @@ def build_report_model(results, ai_summary=None, metadata=None):
     max_file_score = 0
 
     for file_name, data in results.items():
+        if str(file_name).startswith("__"):
+            continue
         norm = _normalize_data(file_name, data)
         score, label, findings = score_risk(norm)
         norm["score"] = score
@@ -251,6 +255,23 @@ def build_report_model(results, ai_summary=None, metadata=None):
         asrf = norm.get("attack_surface", {}) or {}
         for key in all_attack_surface.keys():
             all_attack_surface[key].extend(asrf.get(key, []) or [])
+
+    # Runtime evidence is global (not tied to one downloaded file). It enters
+    # the same finding/signal pipelines so CSV/SARIF/TXT/HTML all see it.
+    for runtime_finding in runtime_findings or []:
+        if not isinstance(runtime_finding, dict):
+            continue
+        all_findings.append({**runtime_finding, "file": runtime_finding.get("file", runtime_evidence.get("url", ""))})
+        all_signals.append({
+            "id": runtime_finding.get("id", "runtime_finding"),
+            "severity": runtime_finding.get("severity", "MEDIUM"),
+            "title": runtime_finding.get("type", runtime_finding.get("id", "Runtime evidence")),
+            "evidence": runtime_finding.get("evidence") or runtime_finding.get("sink", ""),
+            "file": runtime_finding.get("file", runtime_evidence.get("url", "")),
+            "status": runtime_finding.get("status", "needs_review"),
+            "confidence": runtime_finding.get("confidence", "medium"),
+            "evidence_type": runtime_finding.get("evidence_type", "runtime_browser"),
+        })
 
     # Aggregate category counts for a compact table.
     def count(attr):
@@ -337,6 +358,8 @@ def build_report_model(results, ai_summary=None, metadata=None):
         "all_dependencies": list(dict.fromkeys([(d.get("name") or d.get("source")) for d in all_dependencies if d.get("name") or d.get("source")]))[:40],
         "all_endpoints": list(dict.fromkeys([str(e) for e in all_endpoints]))[:60],
         "attack_surface": dedup_attack,
+        "runtime": runtime_evidence,
+        "runtime_findings": deduplicate_findings(runtime_findings),
         "ai_summary": ai_summary or {},
     }
 
@@ -387,6 +410,12 @@ def _remediation(model):
         steps.append("Never rely on browser-side crypto for authorization; enforce encryption rules server-side.")
     if "obfuscation" in ids:
         steps.append("Review obfuscated/decoded paths for embedded control logic before trusting them.")
+    if "runtime_eval" in ids or "runtime_string_timer" in ids:
+        steps.append("Remove browser-side eval / string-timer execution paths; use a safe parser or whitelisted logic instead.")
+    if "runtime_dom_sink" in ids:
+        steps.append("Audit runtime DOM writes and replace innerHTML/insertAdjacentHTML/document.write with textContent or DOM APIs.")
+    if "runtime_sensitive_storage" in ids:
+        steps.append("Move runtime-stored secrets/session material into httpOnly cookies or server-held short-lived sessions.")
     if "api_surface" in ids or model["summary"]["transport"]:
         steps.append("Validate every exposed endpoint and apply server-side authorization + rate limiting.")
     if not steps:
@@ -545,6 +574,21 @@ def generate_report(results, ai_summary=None):
             for finding in norm["findings"]:
                 report.append(f"  - {safe_text(finding)}")
 
+    # Runtime evidence
+    runtime = model.get("runtime") or {}
+    if runtime:
+        report.append("\n\n========== RUNTIME EVIDENCE ==========")
+        if runtime.get("captured"):
+            report.append(f"  - Status: captured in {runtime.get('duration_ms', 0)} ms")
+            report.append(f"  - Final URL: {safe_text(runtime.get('final_url') or runtime.get('url'))}")
+            report.append(f"  - Requests: {len(runtime.get('requests', []) or [])} · Console: {len(runtime.get('console', []) or [])} · Errors: {len(runtime.get('page_errors', []) or [])}")
+            report.append(f"  - EVAL calls: {len(runtime.get('eval_calls', []) or [])} · DOM sinks: {len(runtime.get('dom_sinks', []) or [])} · WebSockets: {len(runtime.get('websockets', []) or [])}")
+            for item in runtime.get("requests", []) or []:
+                report.append(f"      {safe_text(item.get('method', 'GET'))} {safe_text(item.get('url', ''))} [{safe_text(item.get('status', ''))}]")
+        else:
+            report.append(f"  - Status: {safe_text(runtime.get('status') or 'unavailable')}")
+            report.append(f"  - Note: {safe_text(runtime.get('reason') or 'Runtime capture was not performed.')}")
+
     # Global summary
     report.append("\n\n========== GLOBAL SUMMARY ==========")
     report.append(f"  Overall risk: {summary['risk_label']} ({summary['total_score']})")
@@ -569,6 +613,7 @@ def generate_report(results, ai_summary=None):
 
     report.append("\n[Methodology]")
     report.append("  - Regex + AST-based static analysis of client-side JavaScript.")
+    report.append("  - Optional local headless-browser runtime evidence for dynamic loads, console errors and DOM sinks.")
     report.append("  - Findings are deterministic signals for triage, not proof of exploitation.")
     report.append("  - Always validate with server-side behavior and manual review.")
 
@@ -685,6 +730,26 @@ def generate_html_report(results, ai_summary=None):
         sev = sig.get("severity", "INFO")
         html.append(f"<div class=\"sig\"><span class=\"sev sev-{esc(sev)}\">{esc(sev)}</span><div><b>{esc(sig.get('title',''))}</b> — {esc(sig.get('file',''))}<br><span>{esc(' · '.join([str(x) for x in (sig.get('evidence', []) or [])][:2]))}</span></div></div>")
     html.append("</div>")
+
+    # Runtime evidence
+    runtime = model.get("runtime") or {}
+    if runtime:
+        html.append("<h2>🖥️ Runtime Evidence</h2><div class=\"card\">")
+        if runtime.get("captured"):
+            runtime_reqs = runtime.get("requests", []) or []
+            html.append(f"<p class=\"muted\">Local headless-browser run · {runtime.get('duration_ms', 0)} ms · {len(runtime_reqs)} requests · {len(runtime.get('console', []) or [])} console entries · {len(runtime.get('dom_sinks', []) or [])} DOM sink writes</p>")
+            runtime_rpf = [f"{r.get('method', 'GET')} {r.get('url', '')} [{r.get('status', '')}]" for r in runtime_reqs[:14]]
+            html.append(f"<div class=\"sec\"><h4>Observed Requests</h4><ul>{items_html(runtime_rpf, 14)}</ul></div>")
+            websockets = runtime.get("websockets", []) or []
+            if websockets:
+                html.append(f"<div class=\"sec\"><h4>WebSockets</h4><ul>{items_html(websockets, 8)}</ul></div>")
+            dom_sinks = [str(x.get('sink', '')) + ': ' + str(x.get('value', '')) for x in runtime.get('dom_sinks', []) if isinstance(x, dict)]
+            if dom_sinks:
+                html.append(f"<div class=\"sec\"><h4>DOM Sinks</h4><ul>{items_html(dom_sinks, 8)}</ul></div>")
+        else:
+            runtime_note = runtime.get("reason") or "Runtime evidence status: {}".format(runtime.get("status", "unavailable"))
+            html.append(f"<p class=\"muted\">{esc(runtime_note)}</p>")
+        html.append("</div>")
 
     # Details per file
     html.append("<h2>🔎 Detailed Analysis</h2>")
@@ -978,6 +1043,8 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
     findings = []
     flow_count = 0
     overall = 0
+    runtime_evidence = results.get("__runtime_evidence__") or {}
+    runtime_findings = results.get("__runtime_findings__") or []
 
     category_meta = [
         ("secrets", "Secrets & Credentials", "#ff4d6d", "shield"),
@@ -1005,6 +1072,8 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
     all_findings = []
 
     for file_name, data in results.items():
+        if str(file_name).startswith("__"):
+            continue
         diag = _file_diagnostic(file_name, data)
         files.append(diag)
         overall += diag["score"]
@@ -1050,6 +1119,21 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         all_methods.update(diag["methods"])
         all_transport.update(diag["transport"])
 
+    for runtime_finding in runtime_findings or []:
+        if not isinstance(runtime_finding, dict):
+            continue
+        all_findings.append({**runtime_finding, "file": runtime_finding.get("file", runtime_evidence.get("url", ""))})
+        all_signals.append({
+            "id": runtime_finding.get("id", "runtime_finding"),
+            "severity": runtime_finding.get("severity", "MEDIUM"),
+            "title": runtime_finding.get("type", runtime_finding.get("id", "Runtime evidence")),
+            "evidence": runtime_finding.get("evidence") or runtime_finding.get("sink", ""),
+            "file": runtime_finding.get("file", runtime_evidence.get("url", "")),
+            "status": runtime_finding.get("status", "needs_review"),
+            "confidence": runtime_finding.get("confidence", "medium"),
+            "evidence_type": runtime_finding.get("evidence_type", "runtime_browser"),
+        })
+
     all_signals = _dedupe_signals(all_signals)
     max_file_score = max((f["score"] for f in files), default=0)
 
@@ -1092,6 +1176,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
             "analysis_mode": metadata.get("mode", "code") if metadata else "code",
             "source": metadata.get("source", "") if metadata else "",
             "files": len(files),
+            "runtime_evidence": bool(runtime_evidence.get("captured")),
         },
         "summary": {
             "overall_score": overall,
@@ -1116,6 +1201,8 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         "radar": {"labels": radar_categories, "values": radar_values},
         "donut": {"labels": donut_labels, "values": donut_values, "colors": donut_colors},
         "timeline": timeline,
+        "runtime_evidence": runtime_evidence,
+        "runtime_findings": deduplicate_findings(runtime_findings),
         "ai_summary": ai_summary or {},
     }
     return payload

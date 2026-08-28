@@ -5,6 +5,28 @@ OUTPUT_DIR = "output"
 JS_DIR = f"{OUTPUT_DIR}/js_files"
 BEAUTIFY_DIR = f"{OUTPUT_DIR}/beautified"
 
+# Shared browser-ish User-Agent used by both the HTTP discovery layer and the
+# local headless browser (when Playwright runtime evidence is enabled).
+REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0 Safari/537.36"
+    )
+}
+
+# Runtime evidence capture (local headless browser).
+# The feature is optional: if Playwright or Chromium is not installed, the
+# engine silently falls back to static analysis and reports why.
+# Override with SCRIPTSENTRY_RUNTIME_EVIDENCE=0/1 in the server process.
+RUNTIME_EVIDENCE = {
+    "enabled": True,
+    "timeout_ms": 15_000,
+    "wait_after_load_ms": 1_500,
+    "max_requests": 300,
+    "max_console": 120,
+}
+
 DEFAULT_PROFILE = "balanced"
 REPORT_FORMATS = ["txt", "json", "html", "csv", "sarif", "all"]
 

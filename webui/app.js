@@ -353,6 +353,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     renderFlows();
     renderSecrets();
     renderUnifiedFindings();
+    renderRuntime();
     renderFiles();
   }
 
@@ -386,6 +387,71 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
   }
 
   /* ---------------- Dedicated view rendering ---------------- */
+
+  function runtimeItemText(item) {
+    if (typeof item === "string") return item;
+    if (!item) return "";
+    if (item.method && item.url) return `${item.method} ${item.url}${item.status ? ` [${item.status}]` : ""}`;
+    if (item.sink) return `${item.sink}: ${item.value || ""}`;
+    if (item.kind) return item.code ? `${item.kind}: ${item.code}` : item.kind;
+    if (item.storage) return item.key ? `${item.storage} ${item.operation || "setItem"} → ${item.key} (${item.valueLength || ""} chars)` : item.storage;
+    return item.code || item.value || item.key || item.url || item.text || item.name || "";
+  }
+
+  function renderRuntime() {
+    const evidence = payload.runtime_evidence || {};
+    const findings = payload.runtime_findings || [];
+    const panel = $("#runtime-panel");
+    if (!panel) return;
+
+    if (!evidence.status) {
+      panel.innerHTML = `<div class="finding-chip"><span class="chip-title">No runtime pass was run for this analysis.</span></div>`;
+      return;
+    }
+
+    const statusText = {
+      captured: "Captured locally",
+      missing_dependency: "Playwright not installed",
+      disabled: "Disabled",
+      browser_failed: "Browser failed",
+      error: "Capture failed",
+    }[evidence.status] || evidence.status;
+    const statusColor = evidence.captured ? "#34d399" : "#fbbf24";
+    const detail = (arr) => (arr || []).map(runtimeItemText).filter(Boolean);
+
+    const metrics = [
+      ["Status", statusText, statusColor],
+      ["Duration", `${evidence.duration_ms || 0} ms`, "#22d3ee"],
+      ["Requests", (evidence.requests || []).length, "#38bdf8"],
+      ["Console", (evidence.console || []).length, "#a78bfa"],
+      ["DOM Sinks", (evidence.dom_sinks || []).length, "#fb7185"],
+      ["Eval / Timers", (evidence.eval_calls || []).length + (evidence.string_timers || []).length, "#f97316"],
+      ["WebSockets", (evidence.websockets || []).length, "#f472b6"],
+      ["Storage Keys", new Set([...(evidence.local_storage_keys || []), ...(evidence.session_storage_keys || []), ...(evidence.cookie_names || [])]).size, "#8b5cf6"],
+    ];
+
+    const panels = [
+      ["Network Requests", detail(evidence.requests).slice(0, 28), "#38bdf8"],
+      ["Console", detail(evidence.console).slice(0, 28), "#a78bfa"],
+      ["Page / Request Errors", detail([...(evidence.page_errors || []).map((x) => ({ text: x })), ...(evidence.failed_requests || [])]).slice(0, 20), "#fb7185"],
+      ["WebSockets", detail(evidence.websockets).slice(0, 20), "#f472b6"],
+      ["Eval & String Timers", detail([...(evidence.eval_calls || []), ...(evidence.string_timers || [])]).slice(0, 20), "#f97316"],
+      ["DOM Sinks", detail(evidence.dom_sinks).slice(0, 20), "#fb7185"],
+      ["Storage & Cookies", detail(evidence.storage_writes).concat((evidence.cookie_names || []).map((n) => `cookie: ${n}`)).concat((evidence.local_storage_keys || []).map((n) => `localStorage key: ${n}`)).concat((evidence.session_storage_keys || []).map((n) => `sessionStorage key: ${n}`)).slice(0, 30), "#8b5cf6"],
+      ["Dynamic Scripts / Frames", detail([...(evidence.scripts || []), ...(evidence.frames || [])]).slice(0, 30), "#60a5fa"],
+      ["Runtime Findings", findings.map((f) => `${f.severity || "MEDIUM"} · ${f.type || f.id} · ${(f.evidence || []).join(" · ")}`).slice(0, 20), "#ff4d6d"],
+    ].filter(([, v]) => v && v.length);
+
+    panel.innerHTML = `
+      <div class="finding-grid" style="margin-bottom:14px">
+        ${metrics.map(([n, v, color]) => `<div class="finding-chip"><span class="chip-title" style="color:${color}">${escapeHtml(n)}</span><div>${escapeHtml(v)}</div></div>`).join("")}
+      </div>
+      ${!evidence.captured ? `<div class="finding-chip" style="margin-bottom:14px"><span class="chip-title" style="color:#fbbf24">${escapeHtml(statusText)}</span><div>${escapeHtml(evidence.reason || evidence.status)}</div></div>` : ""}
+      <div class="finding-grid">
+        ${panels.map(([name, vals, color]) => `<div class="finding-chip"><span class="chip-title" style="color:${color}">${escapeHtml(name)} · ${vals.length}</span>${vals.map((v) => `<div>• ${escapeHtml(v)}</div>`).join("")}</div>`).join("") || `<div class="finding-chip"><span class="chip-title">No notable runtime activity observed.</span></div>`}
+      </div>
+    `;
+  }
 
   function aggregateAttackSurface() {
     const byKey = {};

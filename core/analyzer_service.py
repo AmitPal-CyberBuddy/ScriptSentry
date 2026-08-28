@@ -14,6 +14,7 @@ from core.beautifier import beautify
 from core.crypto import extract_crypto_material
 from core.discovery import extract_js
 from core.downloader import download_js
+from core.runtime_evidence import attach_runtime_evidence, capture_runtime_evidence, runtime_evidence_enabled
 from core.scanner import scan_file
 
 
@@ -122,15 +123,42 @@ def _walk_imports(content, path, results, base_url, depth, max_depth, seen_hashe
         _walk_imports(next_content, next_path, results, base_url, depth + 1, max_depth, seen_hashes=seen_hashes)
 
 
+def _attach_runtime(results, url, timeout=15, max_files=50):
+    """Load the page in a local headless browser and merge its evidence."""
+    if not runtime_evidence_enabled():
+        runtime = {
+            "enabled": False,
+            "available": False,
+            "captured": False,
+            "status": "disabled",
+            "reason": "Runtime evidence is disabled by configuration.",
+            "url": url,
+        }
+        return attach_runtime_evidence(results, runtime, target_url=url)
+
+    runtime = capture_runtime_evidence(
+        url,
+        timeout_ms=max(2_000, int(float(timeout or 15) * 1000)),
+        max_requests=max(60, min(max(50, int(max_files or 50) * 6), 600)),
+    )
+    return attach_runtime_evidence(results, runtime, target_url=url)
+
+
 def analyze_url(url, max_depth=5, timeout=15, max_files=50):
-    """Discover, download, beautify and recursively analyze a web app's JS."""
+    """Discover, download, beautify and recursively analyze a web app's JS.
+
+    After the static pass the entry page is also executed in a local headless
+    browser so dynamic chunks, console errors, DOM sinks, network/WebSocket and
+    storage behaviour become verifiable runtime evidence. The browser path is
+    optional and gracefully degrades when Playwright is not installed.
+    """
     results = {}
     os.makedirs(JS_DIR, exist_ok=True)
     os.makedirs(BEAUTIFY_DIR, exist_ok=True)
 
     js_links = extract_js(url)
     if not js_links:
-        return results
+        return _attach_runtime(results, url, timeout=timeout, max_files=max_files)
 
     js_links = js_links[:max_files]
     downloads = download_js(js_links)
@@ -145,4 +173,4 @@ def analyze_url(url, max_depth=5, timeout=15, max_files=50):
         _merge_into(results, path, content, seen_hashes=seen_hashes)
         _walk_imports(content, path, results, url, 1, max_depth, seen_hashes=seen_hashes)
 
-    return results
+    return _attach_runtime(results, url, timeout=timeout, max_files=max_files)

@@ -12,6 +12,10 @@ technology stacks and data flows — then presents everything in a modern, anima
   a motion-rich analysis journey.
 - **Paste-code analysis** — drop any JS snippet and get instant structured results.
 - **Live URL scanning** — discover, download, beautify and recursively analyze JavaScript assets.
+- **Optional local runtime evidence** — Playwright-driven headless-browser pass that captures dynamic
+  chunks, console errors, DOM sink writes, network/WebSocket activity and storage-key usage visible
+  only when the page actually executes. Cookies: names only; request bodies/localStorage values are
+  never stored.
 - **20+ detection modules**:
   - Secrets & credentials (JWT, API keys, auth headers, private keys)
   - Crypto routines, keys and IV/nonce extraction
@@ -37,6 +41,11 @@ technology stacks and data flows — then presents everything in a modern, anima
 
 ```bash
 pip install -r requirements.txt
+
+# Optional: enable the local headless-browser runtime evidence pass.
+# If you skip this, URL scans still work with static analysis only.
+python -m playwright install chromium
+
 python3 server.py
 ```
 
@@ -131,6 +140,8 @@ python3 main.py https://example.com --ai openai --api-key YOUR_KEY --model gpt-4
 │   downloader.py — parallel downloads         │
 │   beautifier.py — JSON/JS beautify           │
 │   reporter.py — report model, TXT/HTML/GUI   │
+│   runtime_evidence.py — optional Playwright  │
+│   runtime DOM/network/storage capture        │
 │                                              │
 │  analyzers/ — additive analysis modules      │
 │  ai/ — optional AI summary                   │
@@ -143,4 +154,6 @@ python3 main.py https://example.com --ai openai --api-key YOUR_KEY --model gpt-4
 The dashboard uses a deterministic rule-based engine. Every detection is independently scored
 and normalized into a single dashboard payload, so the same JavaScript always produces the same
 risk picture. URL scanning requires `requests` + `beautifulsoup4`; snippet analysis only needs
-Python's standard library.
+Python's standard library. The optional runtime pass additionally requires `playwright` and a
+local Chromium install; when those are absent ScriptSentry reports `missing_dependency` and
+continues with static analysis.

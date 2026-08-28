@@ -139,6 +139,7 @@
         <button class="view-tab" data-view="flows">🔁 Data Flows</button>
         <button class="view-tab" data-view="secrets">🔐 Secrets</button>
         <button class="view-tab" data-view="deps">🧰 Dependencies</button>
+        <button class="view-tab" data-view="runtime">🖥️ Runtime</button>
       </div>
 
       <div class="grid grid-2 view-group" data-view="overview">
@@ -213,6 +214,16 @@
       <div class="card view-group" style="margin-top:18px" data-view="deps">
         <h3>🧰 Dependencies &amp; Transport</h3>
         <div class="finding-grid" id="dep-panel"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="runtime">
+        <h3>🖥️ Runtime Evidence</h3>
+        <p class="modal-note" style="margin:0 0 8px">
+          Evidence is captured on your machine with a local headless browser. ScriptSentry keeps URLs, console
+          text, DOM sink values, storage <b>key names</b>, and cookie <b>names only</b> — never cookie values,
+          request bodies, or localStorage values.
+        </p>
+        <div id="runtime-panel"></div>
       </div>
 
       <div class="card view-group" style="margin-top:18px" data-view="assets">

@@ -23,6 +23,7 @@ from core.reporter import (
     generate_report,
     generate_sarif_report,
 )
+from core.runtime_evidence import attach_runtime_evidence, capture_runtime_evidence, runtime_evidence_enabled
 from core.scanner import scan_file
 
 RED = "\033[91m"
@@ -213,7 +214,9 @@ def print_final_summary():
     aes_detected = False
     env_keys = []
 
-    for _, data in all_results.items():
+    for key, data in all_results.items():
+        if str(key).startswith("__"):
+            continue
         keys += [k.get("value") if isinstance(k, dict) else k for k in data.get("keys", [])]
         ivs += [i.get("value") if isinstance(i, dict) else i for i in data.get("ivs", [])]
         for ev in data.get("env_vars", []):
@@ -253,12 +256,15 @@ def print_final_summary():
 def save_json(ai_summary=None):
     path = os.path.join(OUTPUT_DIR, "report.json")
     try:
+        runtime_results = {k: v for k, v in all_results.items() if not k.startswith("__")}
         payload = {
             "metadata": {
                 "profile": DEFAULT_PROFILE,
-                "total_files": len(all_results)
+                "total_files": len(runtime_results)
             },
-            "results": all_results,
+            "results": runtime_results,
+            "runtime_evidence": all_results.get("__runtime_evidence__"),
+            "runtime_findings": all_results.get("__runtime_findings__", []),
             "report_model": build_report_model(all_results, ai_summary=ai_summary),
             "dashboard": build_dashboard_payload(all_results, ai_summary=ai_summary),
             "ai_summary": ai_summary or {}
@@ -336,10 +342,21 @@ def run(urls, max_depth=5, timeout=15, profile="balanced", output_formats=None, 
         for file_path in beautified:
             deep_scan(file_path, max_depth=max_depth)
 
+    # Optional local browser pass after static discovery; if Playwright is not
+    # installed the scanner reports missing_dependency and continues statically.
+    if urls and runtime_evidence_enabled():
+        runtime = capture_runtime_evidence(
+            urls[0],
+            timeout_ms=max(2_000, int(float(timeout or 15) * 1000)),
+            max_requests=max(100, min(600, int(max_depth or 5) * 80)),
+        )
+        attach_runtime_evidence(all_results, runtime, target_url=urls[0])
+
     print_final_summary()
     ai_summary = None
     if ai_provider != "disabled":
-        ai_summary = build_ai_summary(all_results, provider=ai_provider, api_key=api_key, model=model)
+        no_runtime_files = {k: v for k, v in all_results.items() if not k.startswith("__")}
+        ai_summary = build_ai_summary(no_runtime_files, provider=ai_provider, api_key=api_key, model=model)
     report = generate_report(all_results, ai_summary=ai_summary)
 
     if "all" in output_formats or "txt" in output_formats:

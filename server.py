@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from config import ALLOWED_ORIGINS, DEFAULT_PROFILE, SCAN_PROFILES
 from core.analyzer_service import analyze_content, analyze_url
+from core.runtime_evidence import playwright_available, runtime_evidence_enabled
 from core.reporter import (
     build_dashboard_payload,
     generate_csv_report,
@@ -102,7 +103,16 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             if self._reject_untrusted_origin():
                 return
             if parsed.path == "/api/health":
-                self._send_json({"ok": True, "engine": "ScriptSentry Analyzer", "version": "2.0", "privacy": "local-only"})
+                self._send_json({
+                    "ok": True,
+                    "engine": "ScriptSentry Analyzer",
+                    "version": "2.0",
+                    "privacy": "local-only",
+                    "runtime_evidence": {
+                        "enabled": runtime_evidence_enabled(),
+                        "playwright": playwright_available(),
+                    },
+                })
                 return
             self._send_error_json("Not found", 404)
             return

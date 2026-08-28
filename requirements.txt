@@ -4,3 +4,4 @@ colorama
 tqdm
 jsbeautifier
 esprima
+playwright

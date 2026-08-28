@@ -29,6 +29,26 @@ This is the **free, privacy-first** setup:
   before starting `server.py`.
 - If a visitor changes the port, they update `webui/config.js` to the matching port.
 
+### Optional: local runtime evidence (Playwright)
+
+URL scans can additionally execute the target page in a local headless Chromium to capture
+dynamic scripts, console errors, DOM sink writes, network/WebSocket activity and storage-key usage.
+
+```bash
+pip install -r requirements.txt
+python -m playwright install chromium        # once, on the machine running server.py
+python3 server.py --port 8000
+```
+
+Privacy invariants for this pass:
+
+- The browser runs on the same machine as the local engine; nothing is uploaded.
+- Only URLs, console text, DOM sink values, storage **key names** and cookie **names** are kept.
+- Cookie values, request bodies and localStorage values are not persisted.
+- Disable it on a shared/hosted backend with `SCRIPTSENTRY_RUNTIME_EVIDENCE=0` if browser
+  dependencies are unwanted. When Playwright/Chromium is missing, scans degrade gracefully to
+  static analysis and the dashboard shows `missing_dependency` on the Runtime view.
+
 ### Set it up
 1. Copy `deployment/deploy-pages.yml` to `.github/workflows/deploy-pages.yml`.
 2. Enable **Settings → Pages → Source → GitHub Actions**.
@@ -54,7 +74,8 @@ runtime and deploy the UI as a static frontend pointing to it.
 ## ✅ Recommended: GitHub Pages frontend + hosted Python backend
 
 This keeps the **full accurate engine** (regex + AST + crypto + dependency scanner),
-while the dashboard lives on GitHub Pages.
+while the dashboard lives on GitHub Pages. Runtime browser evidence is optional in this mode:
+either install a headless Chromium on the host or set `SCRIPTSENTRY_RUNTIME_EVIDENCE=0`.
 
 ### 1. Host the Python backend
 
