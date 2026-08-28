@@ -167,6 +167,6 @@ CONFIDENCE = {
 # 📦 FILE RULES
 # ===============================
 FILE_RULES = {
-    "min_js_size": 50,       # ignore tiny responses
+    "min_js_size": 1,        # keep tiny modules; only drop empty responses
     "max_js_size": 2_000_000  # skip very large files (optional)
 }

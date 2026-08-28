@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from config import ALLOWED_ORIGINS, DEFAULT_PROFILE, SCAN_PROFILES
 from core.analyzer_service import analyze_content, analyze_url
+from core.jobs import jobs
 from core.runtime_evidence import playwright_available, runtime_evidence_enabled
 from core.reporter import (
     build_dashboard_payload,
@@ -97,6 +98,13 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
 
+    def _query_param(self, parsed, key, default=""):
+        if not parsed.query:
+            return default
+        import urllib.parse as _up
+        values = dict(_up.parse_qsl(parsed.query))
+        return values.get(key, default)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path.startswith("/api/"):
@@ -113,6 +121,27 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                         "playwright": playwright_available(),
                     },
                 })
+                return
+            if parsed.path == "/api/status":
+                job_id = self._query_param(parsed, "job_id", "")
+                status = jobs.status(job_id)
+                if status is None:
+                    self._send_error_json("Unknown job_id", 404)
+                    return
+                self._send_json({"ok": True, "job": status})
+                return
+            if parsed.path == "/api/result":
+                job_id = self._query_param(parsed, "job_id", "")
+                job = jobs.get(job_id)
+                if job is None:
+                    self._send_error_json("Unknown job_id", 404)
+                    return
+                if job.status != "done":
+                    self._send_json({"ok": True, "job": job.snapshot(), "ready": False})
+                    return
+                raw = jobs.result(job_id)
+                payload = self._payload(raw, metadata={"mode": job.mode, "source": job.source})
+                self._send_json({"ok": True, "job": job.snapshot(), "ready": True, "payload": payload})
                 return
             self._send_error_json("Not found", 404)
             return
@@ -153,12 +182,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
 
         mode = str(body.get("mode", "code")).strip().lower()
-        if mode == "url":
-            self._handle_url_analysis(body)
-        elif mode == "code":
-            self._handle_code_analysis(body)
-        else:
+        if mode not in ("url", "code"):
             self._send_error_json("mode must be 'code' or 'url'", 400)
+            return
+        self._handle_async_analysis(body, mode)
 
     def _handle_report(self, parsed, body):
         report_format = ""
@@ -170,7 +197,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     query[k] = v
         report_format = query.get("format", "html").lower()
         try:
-            results = self._run_analysis(body)
+            job_id = str(body.get("job_id", "")).strip()
+            if job_id:
+                job = jobs.get(job_id)
+                if job is None:
+                    self._send_error_json("Unknown job_id", 404)
+                    return
+                if job.status == "done":
+                    results = jobs.result(job_id) or {}
+                elif job.status in ("queued", "running"):
+                    self._send_error_json("Analysis is still running; wait for completion before exporting.", 409)
+                    return
+                else:
+                    self._send_error_json(job.error or "Analysis failed.", 500)
+                    return
+            else:
+                results = self._run_analysis(body)
         except Exception as exc:
             self._send_error_json(f"Analysis failed: {exc}", 500)
             return
@@ -236,7 +278,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             profile_cfg = SCAN_PROFILES.get(profile, SCAN_PROFILES[DEFAULT_PROFILE])
             max_depth = max(1, min(int(body.get("max_depth", profile_cfg["max_depth"])), 10))
             timeout = max(2, min(int(body.get("timeout", profile_cfg["timeout"])), 60))
-            max_files = max(1, min(int(body.get("max_files", profile_cfg["max_files"])), 200))
+            max_files = max(1, min(int(body.get("max_files", profile_cfg["max_files"])), 1000))
             return analyze_url(url, max_depth=max_depth, timeout=timeout, max_files=max_files)
         code = body.get("code")
         if not isinstance(code, str) or not code.strip():
@@ -256,6 +298,41 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": True, "type": "code", "payload": payload})
         except Exception as exc:
             self._send_error_json(f"Analysis failed: {exc}", 500)
+
+    def _handle_async_analysis(self, body, mode):
+        if mode == "url":
+            url = str(body.get("url", "")).strip()
+            if not url.startswith(("http://", "https://")):
+                self._send_error_json("Enter a valid http(s) URL", 400)
+                return
+            profile = str(body.get("profile", DEFAULT_PROFILE)).strip()
+            profile_cfg = SCAN_PROFILES.get(profile, SCAN_PROFILES[DEFAULT_PROFILE])
+            max_depth = max(1, min(int(body.get("max_depth", profile_cfg["max_depth"])), 10))
+            timeout = max(2, min(int(body.get("timeout", profile_cfg["timeout"])), 60))
+            max_files = max(1, min(int(body.get("max_files", profile_cfg["max_files"])), 1000))
+            job = jobs.create(
+                mode="url", source=url, profile=profile,
+                max_files=max_files, max_depth=max_depth, timeout=timeout,
+            )
+            jobs.start(
+                job.id,
+                analyze_url,
+                url,
+                max_depth=max_depth,
+                timeout=timeout,
+                max_files=max_files,
+                progress_callback=lambda **kw: job.update(**kw),
+            )
+        else:
+            code = body.get("code")
+            if not isinstance(code, str) or not code.strip():
+                self._send_error_json("Paste some JavaScript to analyze", 400)
+                return
+            filename = str(body.get("filename", "inline.js")).strip() or "inline.js"
+            job = jobs.create(mode="code", source=filename, max_files=1)
+            jobs.start(job.id, analyze_content, code, filename=filename)
+
+        self._send_json({"ok": True, "job_id": job.id, "job": job.snapshot()})
 
     def _handle_url_analysis(self, body):
         url = str(body.get("url", "")).strip()

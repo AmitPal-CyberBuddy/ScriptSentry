@@ -211,6 +211,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
     all_findings = []
     runtime_evidence = results.get("__runtime_evidence__") or {}
     runtime_findings = results.get("__runtime_findings__") or []
+    scan_summary = results.get("__scan_summary__") or {}
     page_url = runtime_evidence.get("url") or (metadata or {}).get("source", "")
     if page_url and not str(page_url).startswith(("http://", "https://")):
         page_url = ""
@@ -371,6 +372,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
             "engine_version": "2.0",
             "source": (metadata or {}).get("source", ""),
             "mode": (metadata or {}).get("mode", "code"),
+            "scan_summary": scan_summary,
         },
         "summary": {
             "total_files": len(files),
@@ -395,6 +397,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
         "runtime_findings": deduplicate_findings(runtime_findings),
         "script_inventory": script_inventory,
         "exfil_candidates": deduplicate_findings(exfil_candidates),
+        "scan_summary": scan_summary,
         "ai_summary": ai_summary or {},
     }
 
@@ -1122,6 +1125,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
     overall = 0
     runtime_evidence = results.get("__runtime_evidence__") or {}
     runtime_findings = results.get("__runtime_findings__") or []
+    scan_summary = results.get("__scan_summary__") or {}
     page_url = runtime_evidence.get("url") or (metadata or {}).get("source", "")
     if page_url and not str(page_url).startswith(("http://", "https://")):
         page_url = ""
@@ -1276,6 +1280,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
             "source": metadata.get("source", "") if metadata else "",
             "files": len(files),
             "runtime_evidence": bool(runtime_evidence.get("captured")),
+            "scan_summary": scan_summary,
         },
         "summary": {
             "overall_score": overall,
@@ -1283,6 +1288,12 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
             "risk_color": risk_color,
             "total_findings": len(all_findings) or sum(totals.values()),
             "total_files": len(files),
+            "skipped_files": scan_summary.get("skipped_files", 0),
+            "bytes_scanned": scan_summary.get("bytes_scanned", 0),
+            "total_bytes": scan_summary.get("total_bytes", 0),
+            "total_discovered": scan_summary.get("total_discovered", len(files)),
+            "runtime_status": scan_summary.get("runtime_status", "not_run"),
+            "capped": bool(scan_summary.get("capped", False)),
             "crypto_flow_count": flow_count,
             "categories": [
                 {"key": key, "label": label, "value": totals.get(key, 0),
@@ -1304,6 +1315,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         "runtime_findings": deduplicate_findings(runtime_findings),
         "script_inventory": script_inventory,
         "exfil_candidates": deduplicate_findings(exfil_candidates),
+        "scan_summary": scan_summary,
         "ai_summary": ai_summary or {},
     }
     return payload

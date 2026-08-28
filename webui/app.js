@@ -24,6 +24,7 @@
 
   let payload = null;
   let lastQuery = null;
+  let lastJobId = null;
   let backendConnected = false;
   let backendChecked = false;
 
@@ -120,6 +121,59 @@
     return body;
   }
 
+  async function getJSON(url) {
+    const res = await fetch(apiUrl(url), { cache: "no-store" });
+    let body;
+    try {
+      body = await res.json();
+    } catch {
+      throw new Error("The analysis engine returned an unreadable response.");
+    }
+    if (!res.ok || body.ok === false) {
+      throw new Error(body.error || "Analysis failed with an unknown error.");
+    }
+    return body;
+  }
+
+  function formatBytes(value) {
+    const n = Number(value || 0);
+    if (!n) return "0 B";
+    const units = ["B", "KB", "MB", "GB"];
+    let i = 0;
+    let v = n;
+    while (v >= 1024 && i < units.length - 1) {
+      v /= 1024;
+      i++;
+    }
+    return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`;
+  }
+
+  function formatDuration(ms) {
+    const total = Math.max(0, Number(ms || 0));
+    const s = Math.floor(total / 1000);
+    const m = Math.floor(s / 60);
+    return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
+  }
+
+  function renderProgress(job) {
+    const text = $("loading-text");
+    const fill = $("#progress-fill");
+    const stats = $("#progress-stats");
+    if (!text || !fill || !stats) return;
+    const pct = Math.max(0, Math.min(100, Number(job.percent || 0)));
+    text.textContent = job.message || (job.phase || "Working…");
+    fill.style.width = `${pct}%`;
+    const eta = job.eta_seconds == null ? "—" : formatDuration(job.eta_seconds * 1000);
+    stats.innerHTML = [
+      ["phase", job.phase || "queued"],
+      ["files", `${job.files_scanned || 0}${job.total ? `/${job.total}` : ""}`],
+      ["bytes", formatBytes(job.bytes_scanned)],
+      ["pct", `${pct.toFixed(0)}%`],
+      ["elapsed", formatDuration(job.elapsed_ms)],
+      ["eta", eta],
+    ].map(([k, v]) => `<b>${escapeHtml(k)}</b>: ${escapeHtml(v)}`).join(" · ");
+  }
+
   function showLoading(text) {
     $("#loading").classList.add("show");
     $("#loading-text").textContent = text || "Analyzing…";
@@ -131,6 +185,10 @@
     $("#loading").classList.remove("show");
     $("#analyze-code").disabled = false;
     $("#analyze-url").disabled = false;
+    const fill = $("#progress-fill");
+    const stats = $("#progress-stats");
+    if (fill) fill.style.width = "0%";
+    if (stats) stats.innerHTML = "";
   }
 
   function animateNumber(el, target, suffix = "") {
@@ -238,6 +296,29 @@ function dangerous() {
 CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 `;
 
+  async function pollJob(jobId) {
+    let latest = null;
+    for (let i = 0; i < 1200; i++) {
+      const status = await getJSON(`/api/status?job_id=${encodeURIComponent(jobId)}`);
+      latest = status.job;
+      renderProgress(latest);
+      if (latest.status === "done") return latest;
+      if (latest.status === "error") throw new Error(latest.error || "Analysis failed.");
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    throw new Error("Analysis timed out while waiting for the local engine.");
+  }
+
+  async function finishJob(jobId) {
+    const data = await getJSON(`/api/result?job_id=${encodeURIComponent(jobId)}`);
+    if (!data.ready) {
+      throw new Error("The analysis is not ready yet.");
+    }
+    payload = data.payload;
+    renderDashboard();
+    $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   async function analyzeCode() {
     const code = $("#code-input").value;
     if (!code.trim()) {
@@ -254,9 +335,10 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       };
       lastQuery = query;
       const data = await postJSON("/api/analyze", query);
-      payload = data.payload;
-      renderDashboard();
-      $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
+      lastJobId = data.job_id;
+      renderProgress(data.job || { percent: 0, message: "Starting…" });
+      await pollJob(data.job_id);
+      await finishJob(data.job_id);
     } catch (err) {
       setEngineStatus("offline");
       openPrivacyModal();
@@ -284,9 +366,10 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       };
       lastQuery = query;
       const data = await postJSON("/api/analyze", query);
-      payload = data.payload;
-      renderDashboard();
-      $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
+      lastJobId = data.job_id;
+      renderProgress(data.job || { percent: 0, message: "Starting…" });
+      await pollJob(data.job_id);
+      await finishJob(data.job_id);
     } catch (err) {
       setEngineStatus("offline");
       openPrivacyModal();
@@ -295,6 +378,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     }
   }
 
+
   /* ---------------- Report export ---------------- */
 
   async function exportReport(format) {
@@ -302,14 +386,14 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       alert("Analyze something before exporting a report.");
       return;
     }
-    showLoading("Generating report…");
     if (!(await ensureBackend())) return;
     showLoading("Generating report…");
     try {
+      const query = lastJobId ? { ...lastQuery, job_id: lastJobId } : lastQuery;
       const res = await fetch(apiUrl(`/api/report?format=${format}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(lastQuery),
+        body: JSON.stringify(query),
       });
       if (!res.ok) {
         const err = await res.text().catch(() => "");
@@ -355,6 +439,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     renderSecrets();
     renderUnifiedFindings();
     renderRuntime();
+    renderScanSummary();
     renderFiles();
   }
 
@@ -892,6 +977,38 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       )
       .join("");
     $$("#timeline .value").forEach((el) => animateNumber(el, parseInt(el.dataset.count, 10) || 0));
+  }
+
+  function renderScanSummary() {
+    const panel = $("#scan-summary");
+    if (!panel) return;
+    const s = payload.scan_summary || {};
+    const summary = payload.summary || {};
+    const files = (payload.files || []).length;
+    if (!Object.keys(s).length && summary.total_files != null) {
+      panel.innerHTML = [
+        ["Files analyzed", summary.total_files || files, "#22d3ee"],
+        ["Bytes scanned", formatBytes(summary.bytes_scanned), "#38bdf8"],
+        ["Runtime evidence", summary.runtime_status || "not_run", "#a78bfa"],
+      ].map(([n, v, c]) => `<div class="finding-chip"><span class="chip-title" style="color:${c}">${escapeHtml(n)}</span><div>${escapeHtml(v)}</div></div>`).join("");
+      return;
+    }
+    const skipped = Number(s.skipped_files || 0);
+    const runtime = s.runtime_status || "not_run";
+    const runtimeColor = s.runtime_captured ? "#34d399" : "#fbbf24";
+    const chips = [
+      ["Discovered links", s.total_discovered ?? files, "#22d3ee"],
+      ["Files analyzed", s.total_files ?? files, "#38bdf8"],
+      ["Skipped", skipped, skipped ? "#fb7185" : "#34d399"],
+      ["Bytes scanned", formatBytes(s.bytes_scanned), "#a78bfa"],
+      ["Bundle bytes", formatBytes(s.total_bytes), "#60a5fa"],
+      ["Runtime", runtime, runtimeColor],
+      ["Hard cap hit", s.capped ? "yes" : "no", s.capped ? "#fb7185" : "#34d399"],
+    ];
+    const reasons = (s.skipped_reasons || []).slice(0, 6);
+    panel.innerHTML = chips
+      .map(([n, v, c]) => `<div class="finding-chip"><span class="chip-title" style="color:${c}">${escapeHtml(n)}</span><div>${escapeHtml(v)}</div></div>`)
+      .join("") + (reasons.length ? `<div class="finding-chip" style="grid-column:1/-1"><span class="chip-title" style="color:#fb7185">Why some files were skipped</span><div>${reasons.map(escapeHtml).join(" · ")}</div></div>` : "");
   }
 
   function renderFiles() {

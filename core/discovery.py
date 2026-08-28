@@ -31,6 +31,25 @@ def fetch_url(url):
     return ""
 
 
+def extract_inline_scripts(url, limit=80):
+    """Return inline <script> bodies from a page for direct analysis."""
+    html = fetch_url(url)
+    if not html or BeautifulSoup is None:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    scripts = []
+    for script in soup.find_all("script"):
+        src = script.get("src")
+        if src or not script.string:
+            continue
+        body = script.string.strip()
+        if len(body) >= 20:
+            scripts.append(body)
+        if len(scripts) >= limit:
+            break
+    return scripts
+
+
 def extract_js(url):
     html = fetch_url(url)
     if not html:
@@ -44,6 +63,28 @@ def extract_js(url):
             src = script.get("src")
             if src:
                 js_files.add(urljoin(url, src))
+
+        # Modern module/asset delivery: Vite/Next/webpack emit modulepreload,
+        # preload(as=script) and module links that a plain <script src> scan
+        # would otherwise miss.
+        for link in soup.find_all("link"):
+            href = link.get("href")
+            rel = (link.get("rel") or [])
+            as_value = link.get("as") or ""
+            if not href:
+                continue
+            if "modulepreload" in rel or "preload" in rel and as_value == "script" or "prefetch" in rel:
+                if href.endswith((".js", ".mjs")) or "modulepreload" in rel or as_value == "script":
+                    js_files.add(urljoin(url, href))
+
+        for script in soup.find_all("script"):
+            if not script.get("src") and script.get("type") == "module" and script.string:
+                for pattern in [
+                    r'["\']([^"\']+\.js[^"\']*)["\']',
+                    r'["\']([^"\']*chunk-[A-Za-z0-9]+\.js[^"\']*)["\']',
+                ]:
+                    for match in re.findall(pattern, script.string):
+                        js_files.add(urljoin(url, match))
 
         for script in soup.find_all("script"):
             if script.string:

@@ -12,7 +12,11 @@ and how risky that behavior is, all in a modern, animated dashboard.
 - **Visual Web Dashboard** with animated risk gauge, count-up metrics, radar + donut charts and
   a motion-rich analysis journey.
 - **Paste-code analysis** — drop any JS snippet and get instant structured results.
-- **Live URL scanning** — discover, download, beautify and recursively analyze JavaScript assets.
+- **Live URL scanning** — discover, download, beautify and recursively analyze *every* JavaScript
+  asset the page references: inline modules, `<script>`, `<link modulepreload>/preload`, static
+  `import`/`require`, dynamic `import()`, Webpack/Vite/Next `chunk-*` files, `/static/js` and
+  `assets/**`. URL-unique filenames keep same-named bundles from different folders from colliding,
+  and the recursive walk resolves each nested chunk against its own URL instead of the page URL.
 - **Optional local runtime evidence** — Playwright-driven headless-browser pass that captures dynamic
   chunks, console errors, DOM sink writes, network/WebSocket activity and storage-key usage visible
   only when the page actually executes. Cookies: names only; request bodies/localStorage values are
@@ -36,6 +40,11 @@ and how risky that behavior is, all in a modern, animated dashboard.
     headers, JSON body fields, auth and internal-endpoint hints
   - **Framework-aware rules** — React `dangerouslySetInnerHTML`, Angular `bypassSecurityTrust*`,
     Vue `v-html`, jQuery DOM sinks
+- **Live progress + ETA** — URL scans run as a background job. The dashboard polls
+  `/api/status` and shows discovery/download/recursive-scan/runtime phases, files scanned,
+  bytes scanned, percent, elapsed time and estimated time remaining before rendering
+  `/api/result`. If a configured per-file or file-count limit is hit, the Assets view
+  reports exactly how many files were skipped and why instead of silently dropping them.
 - **Report suite**:
   - Animated web export (HTML), plain text, CSV and SARIF from the dashboard
   - CLI TXT / JSON / HTML / CSV / SARIF reports
@@ -164,3 +173,19 @@ risk picture. URL scanning requires `requests` + `beautifulsoup4`; snippet analy
 Python's standard library. The optional runtime pass additionally requires `playwright` and a
 local Chromium install; when those are absent ScriptSentry reports `missing_dependency` and
 continues with static analysis.
+
+### Deep JavaScript discovery
+
+The URL analyzer does not stop at the entry `<script>` tags. After the initial discovery it
+walks every script/module reference found inside each downloaded bundle, so nested route-level
+chunks and lazy-loaded modules are included too. Assets are saved with URL-derived unique names
+(such as `app-1a2b3c4d5e.js`) so many `app.js` files under different paths never overwrite each
+other. The scan report includes:
+
+* `total_discovered` — page-level script/entry points
+* `total_files` — unique files actually analyzed (including recursively found chunks)
+* `skipped_files` + `skipped_reasons` — explicit accounting when limits are hit
+* `bytes_scanned`, `total_bytes`, `runtime_status`, and whether a hard cap was reached
+
+The dashboard exposes these in the **📁 JavaScript Assets** view, while the console shows the
+live phase, file/byte counters and ETA during the scan.

@@ -114,7 +114,11 @@
 
         <div class="loading" id="loading">
           <span class="spinner"></span>
-          <span id="loading-text">Analyzing…</span>
+          <span class="progress-wrap">
+            <span id="loading-text">Analyzing…</span>
+            <span class="progress-track" aria-hidden="true"><i class="progress-fill" id="progress-fill"></i></span>
+            <span class="progress-stats" id="progress-stats"></span>
+          </span>
         </div>
       </div>
     </section>
@@ -235,6 +239,7 @@
 
       <div class="card view-group" style="margin-top:18px" data-view="assets">
         <h3>📁 JavaScript Assets</h3>
+        <div class="finding-grid" id="scan-summary"></div>
         <div class="file-tabs" id="file-tabs"></div>
         <div id="file-panel"></div>
       </div>
