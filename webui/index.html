@@ -133,6 +133,7 @@
 
       <div class="view-tabs fade-up" id="view-tabs">
         <button class="view-tab active" data-view="overview">📊 Overview</button>
+        <button class="view-tab" data-view="scripts">📚 Scripts</button>
         <button class="view-tab" data-view="assets">📁 Assets</button>
         <button class="view-tab" data-view="attack">🎯 Attack Surface</button>
         <button class="view-tab" data-view="findings">🚦 Findings</button>
@@ -182,6 +183,12 @@
           <h3>Analysis Journey</h3>
           <div class="timeline" id="timeline"></div>
         </div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="scripts">
+        <h3>📚 Script Inventory &amp; Behavior</h3>
+        <p class="modal-note" style="margin:0 0 8px">Every discovered script gets a behavior profile: first/third-party attribution, sensitive reads, DOM/network writes, browser APIs, loading method, and a 0–100 script risk score.</p>
+        <div id="script-panel"></div>
       </div>
 
       <div class="card view-group" style="margin-top:18px" data-view="findings">

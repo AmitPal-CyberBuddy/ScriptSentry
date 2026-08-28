@@ -2,9 +2,10 @@
 
 **Watch every line. Detect every risk.**
 
-ScriptSentry is a visual JavaScript intelligence and security analyzer. It finds hardcoded
+ScriptSentry is a visual JavaScript security and script-behavior intelligence platform. It finds hardcoded
 secrets, crypto material, endpoints, API calls, storage usage, DOM/XSS patterns, obfuscation,
-technology stacks and data flows — then presents everything in a modern, animated dashboard.
+technology stacks and data flows — then explains *which script* does what, where its data can go,
+and how risky that behavior is, all in a modern, animated dashboard.
 
 ## ✨ Features
 
@@ -16,6 +17,10 @@ technology stacks and data flows — then presents everything in a modern, anima
   chunks, console errors, DOM sink writes, network/WebSocket activity and storage-key usage visible
   only when the page actually executes. Cookies: names only; request bodies/localStorage values are
   never stored.
+- **Script inventory & behavior intelligence** — first/third-party attribution, inline/external/
+  dynamic loading method, script hashes, sensitive reads (URL/cookies/storage/forms), DOM/network
+  writes, browser API map, external destinations, script risk score, and static/runtime
+  data-exfiltration correlation.
 - **20+ detection modules**:
   - Secrets & credentials (JWT, API keys, auth headers, private keys)
   - Crypto routines, keys and IV/nonce extraction
@@ -142,6 +147,8 @@ python3 main.py https://example.com --ai openai --api-key YOUR_KEY --model gpt-4
 │   reporter.py — report model, TXT/HTML/GUI   │
 │   runtime_evidence.py — optional Playwright  │
 │   runtime DOM/network/storage capture        │
+│   script_intel.py — script inventory,        │
+│   behavior profiles, risk scoring, exfil     │
 │                                              │
 │  analyzers/ — additive analysis modules      │
 │  ai/ — optional AI summary                   │

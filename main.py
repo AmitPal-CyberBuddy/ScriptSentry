@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -114,6 +115,7 @@ def deep_scan(file_path, depth=0, max_depth=5):
 
     crypto = extract_crypto_material(content)
     scan.update(crypto)
+    scan["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
     all_results[file_path] = scan
 
     if scan.get("real_crypto_detected"):

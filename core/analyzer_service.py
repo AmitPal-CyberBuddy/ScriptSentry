@@ -45,6 +45,7 @@ def _merge_into(results, path, content, seen_hashes=None):
     data = scan_file(path, content=content)
     crypto = extract_crypto_material(content, filename=os.path.basename(path))
     data.update(crypto)
+    data["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
     results[path] = data
 
 

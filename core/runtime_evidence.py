@@ -472,6 +472,15 @@ def _sensitive_key(key):
     return any(term in lower for term in ("token", "secret", "password", "auth", "session", "credential", "api_key", "jwt", "private", "key"))
 
 
+def _domain(url):
+    from urllib.parse import urlparse
+
+    try:
+        return (urlparse(str(url or "")).hostname or "").lower()
+    except Exception:
+        return ""
+
+
 def build_runtime_findings(runtime, target_url=""):
     """Convert captured browser evidence into normalized finding dicts.
 
@@ -658,6 +667,33 @@ def build_runtime_findings(runtime, target_url=""):
             "sink": "fetch / XHR / resource request",
             "flow": ["runtime request observed"],
             "evidence": seen_urls,
+            "sanitization_detected": False,
+            "framework": "Playwright runtime",
+            "evidence_type": "runtime_browser",
+        })
+
+    # 8) Data exfiltration correlation: sensitive runtime storage/cookie access
+    # plus network activity to external domains.
+    page_host = _domain(runtime.get("url") or runtime.get("final_url") or target_url)
+    external_urls = []
+    for request in requests:
+        url = request.get("url", "") if isinstance(request, dict) else ""
+        domain = _domain(url)
+        if url and domain and domain != page_host and f"{domain} {url}" not in external_urls:
+            external_urls.append(f"{domain} {url}")
+    if storage_keys and external_urls:
+        findings.append({
+            "id": "runtime_data_exfiltration_candidate",
+            "type": "Sensitive runtime data sent to external destination",
+            "severity": "HIGH",
+            "confidence": "medium",
+            "status": "needs_review",
+            "file": target_url,
+            "line": 0,
+            "source": " + ".join(storage_keys),
+            "sink": "external network",
+            "flow": ["sensitive runtime storage", "external network request"],
+            "evidence": [f"storage keys: {', '.join(storage_keys)}", "external domains: " + ", ".join(sorted({d.split(maxsplit=1)[0] for d in external_urls})[:6])],
             "sanitization_detected": False,
             "framework": "Playwright runtime",
             "evidence_type": "runtime_browser",

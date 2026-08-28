@@ -1,7 +1,16 @@
 import html
 import itertools
+import os
 
 from core.analysis_model import deduplicate_findings
+from core.script_intel import build_script_intel, data_exfiltration_candidates
+
+
+def _basename_safe(value):
+    try:
+        return os.path.basename(str(value).rstrip("/")) or str(value)
+    except Exception:
+        return str(value)
 
 
 def safe_text(val):
@@ -202,6 +211,11 @@ def build_report_model(results, ai_summary=None, metadata=None):
     all_findings = []
     runtime_evidence = results.get("__runtime_evidence__") or {}
     runtime_findings = results.get("__runtime_findings__") or []
+    page_url = runtime_evidence.get("url") or (metadata or {}).get("source", "")
+    if page_url and not str(page_url).startswith(("http://", "https://")):
+        page_url = ""
+    script_inventory = build_script_intel(results, runtime_evidence, page_url)
+    exfil_candidates = data_exfiltration_candidates(results, runtime_evidence, page_url)
     all_attack_surface = {
         "endpoints": [], "websockets": [], "sse": [], "graphql": [],
         "parameters": [], "domains": [], "headers": [], "body_fields": [],
@@ -222,6 +236,8 @@ def build_report_model(results, ai_summary=None, metadata=None):
         # human-readable `findings` list carry the coarse risk strings for TXT/HTML.
         norm["rich_findings"] = [f for f in norm.get("findings", []) if isinstance(f, dict)]
         norm["findings"] = findings
+        intel_match = next((entry for entry in script_inventory if entry.get("path") == file_name or entry.get("name") == _basename_safe(file_name)), {})
+        norm["script_intel"] = intel_match
         files.append(norm)
         total_score += score
         max_file_score = max(max_file_score, score)
@@ -271,6 +287,23 @@ def build_report_model(results, ai_summary=None, metadata=None):
             "status": runtime_finding.get("status", "needs_review"),
             "confidence": runtime_finding.get("confidence", "medium"),
             "evidence_type": runtime_finding.get("evidence_type", "runtime_browser"),
+        })
+
+    # Script-behavior exfiltration candidates are script-centric and therefore
+    # live alongside the other unified findings.
+    for candidate in exfil_candidates or []:
+        if not isinstance(candidate, dict):
+            continue
+        all_findings.append(candidate)
+        all_signals.append({
+            "id": candidate.get("id", "data_exfiltration_candidate"),
+            "severity": candidate.get("severity", "MEDIUM"),
+            "title": candidate.get("type", candidate.get("id", "Data exfiltration candidate")),
+            "evidence": candidate.get("evidence") or candidate.get("sink", ""),
+            "file": candidate.get("file", ""),
+            "status": candidate.get("status", "needs_review"),
+            "confidence": candidate.get("confidence", "medium"),
+            "evidence_type": candidate.get("evidence_type", "behavioral_correlation"),
         })
 
     # Aggregate category counts for a compact table.
@@ -360,6 +393,8 @@ def build_report_model(results, ai_summary=None, metadata=None):
         "attack_surface": dedup_attack,
         "runtime": runtime_evidence,
         "runtime_findings": deduplicate_findings(runtime_findings),
+        "script_inventory": script_inventory,
+        "exfil_candidates": deduplicate_findings(exfil_candidates),
         "ai_summary": ai_summary or {},
     }
 
@@ -416,6 +451,8 @@ def _remediation(model):
         steps.append("Audit runtime DOM writes and replace innerHTML/insertAdjacentHTML/document.write with textContent or DOM APIs.")
     if "runtime_sensitive_storage" in ids:
         steps.append("Move runtime-stored secrets/session material into httpOnly cookies or server-held short-lived sessions.")
+    if "data_exfiltration_candidate" in ids or "runtime_data_exfiltration_candidate" in ids:
+        steps.append("Review script-to-external-domain data flows; limit third-party scripts and block unnecessary external transmission.")
     if "api_surface" in ids or model["summary"]["transport"]:
         steps.append("Validate every exposed endpoint and apply server-side authorization + rate limiting.")
     if not steps:
@@ -574,6 +611,23 @@ def generate_report(results, ai_summary=None):
             for finding in norm["findings"]:
                 report.append(f"  - {safe_text(finding)}")
 
+    # Script intelligence
+    if model.get("script_inventory"):
+        report.append("\n\n========== SCRIPT INVENTORY ==========")
+        for script in model["script_inventory"][:40]:
+            risk = script.get("risk") or {}
+            report.append(f"  - {safe_text(script.get('name'))} · {script.get('party') or 'unknown'} · {script.get('load_method')} · risk {risk.get('score', 0)}/100")
+            caps = ", ".join(script.get("capabilities", {}).get("reads", []) + script.get("capabilities", {}).get("writes", []))
+            if caps:
+                report.append(f"      behavior: {safe_text(caps)}")
+            external = script.get("capabilities", {}).get("external_destinations", [])
+            if external:
+                domains = sorted({d.get("domain", "") for d in external if isinstance(d, dict)})
+                report.append(f"      external destinations: {safe_text(', '.join(domains[:6]))}")
+            api_names = [a.get("label") for a in script.get("browser_apis", []) if isinstance(a, dict) and a.get("enabled")]
+            if api_names:
+                report.append(f"      browser APIs: {safe_text(', '.join(api_names[:8]))}")
+
     # Runtime evidence
     runtime = model.get("runtime") or {}
     if runtime:
@@ -730,6 +784,29 @@ def generate_html_report(results, ai_summary=None):
         sev = sig.get("severity", "INFO")
         html.append(f"<div class=\"sig\"><span class=\"sev sev-{esc(sev)}\">{esc(sev)}</span><div><b>{esc(sig.get('title',''))}</b> — {esc(sig.get('file',''))}<br><span>{esc(' · '.join([str(x) for x in (sig.get('evidence', []) or [])][:2]))}</span></div></div>")
     html.append("</div>")
+
+    # Script inventory / behavior intelligence
+    if model.get("script_inventory"):
+        html.append("<h2>📚 Script Inventory</h2>")
+        for script in model["script_inventory"][:24]:
+            caps = script.get("capabilities", {}) or {}
+            risk = script.get("risk", {}) or {}
+            reads = caps.get("reads", []) or []
+            writes = caps.get("writes", []) or []
+            external = caps.get("external_destinations", []) or []
+            domains = sorted({d.get("domain", "") for d in external if isinstance(d, dict)})
+            api_names = [a.get("label") for a in script.get("browser_apis", []) if isinstance(a, dict) and a.get("enabled")]
+            html.append(
+                f"<div class=\"card\"><div class=\"file-head\"><h3>{esc(script.get('name'))}</h3>"
+                f"<span class=\"pill\">{esc(script.get('party') or 'unknown')} · risk {risk.get('score', 0)}/100</span></div>"
+                f"<p style=\"color:#6b7891;font-size:12px\">{esc(script.get('load_method'))} · {esc(script.get('domain') or 'inline')} · {len(reads)} reads · {len(writes)} writes</p>"
+                f"<div class=\"cols\">"
+                f"<div class=\"sec\"><h4>Reads</h4><ul>{items_html(reads, 8)}</ul></div>"
+                f"<div class=\"sec\"><h4>Writes</h4><ul>{items_html(writes, 8)}</ul></div>"
+                f"<div class=\"sec\"><h4>External Destinations</h4><ul>{items_html(domains, 6)}</ul></div>"
+                f"<div class=\"sec\"><h4>Browser APIs</h4><ul>{items_html(api_names, 8)}</ul></div>"
+                f"</div></div>"
+            )
 
     # Runtime evidence
     runtime = model.get("runtime") or {}
@@ -1045,6 +1122,11 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
     overall = 0
     runtime_evidence = results.get("__runtime_evidence__") or {}
     runtime_findings = results.get("__runtime_findings__") or []
+    page_url = runtime_evidence.get("url") or (metadata or {}).get("source", "")
+    if page_url and not str(page_url).startswith(("http://", "https://")):
+        page_url = ""
+    script_inventory = build_script_intel(results, runtime_evidence, page_url)
+    exfil_candidates = data_exfiltration_candidates(results, runtime_evidence, page_url)
 
     category_meta = [
         ("secrets", "Secrets & Credentials", "#ff4d6d", "shield"),
@@ -1075,6 +1157,8 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         if str(file_name).startswith("__"):
             continue
         diag = _file_diagnostic(file_name, data)
+        intel_match = next((entry for entry in script_inventory if entry.get("path") == file_name or entry.get("name") == _basename_safe(file_name)), None)
+        diag["script_intel"] = intel_match or {}
         files.append(diag)
         overall += diag["score"]
         for key, label, color, icon in category_meta:
@@ -1132,6 +1216,21 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
             "status": runtime_finding.get("status", "needs_review"),
             "confidence": runtime_finding.get("confidence", "medium"),
             "evidence_type": runtime_finding.get("evidence_type", "runtime_browser"),
+        })
+
+    for candidate in exfil_candidates or []:
+        if not isinstance(candidate, dict):
+            continue
+        all_findings.append(candidate)
+        all_signals.append({
+            "id": candidate.get("id", "data_exfiltration_candidate"),
+            "severity": candidate.get("severity", "MEDIUM"),
+            "title": candidate.get("type", candidate.get("id", "Data exfiltration candidate")),
+            "evidence": candidate.get("evidence") or candidate.get("sink", ""),
+            "file": candidate.get("file", ""),
+            "status": candidate.get("status", "needs_review"),
+            "confidence": candidate.get("confidence", "medium"),
+            "evidence_type": candidate.get("evidence_type", "behavioral_correlation"),
         })
 
     all_signals = _dedupe_signals(all_signals)
@@ -1203,6 +1302,8 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         "timeline": timeline,
         "runtime_evidence": runtime_evidence,
         "runtime_findings": deduplicate_findings(runtime_findings),
+        "script_inventory": script_inventory,
+        "exfil_candidates": deduplicate_findings(exfil_candidates),
         "ai_summary": ai_summary or {},
     }
     return payload

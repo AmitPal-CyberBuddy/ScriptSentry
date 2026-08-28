@@ -346,6 +346,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     $("#result-meta").textContent = `${payload.meta.engine} · ${payload.meta.analysis_mode === "url" ? "Remote URL" : "Source snippet"} · ${payload.meta.generated_at || ""}`;
     renderSummary();
     renderSignals();
+    renderScripts();
     renderDeps();
     renderCharts();
     renderTimeline();
@@ -371,6 +372,42 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
           )
           .join("")
       : `<li><span class="risk-dot" style="color:#22d3ee"></span><span>No high-priority risk signals raised.</span></li>`;
+  }
+
+  function renderScripts() {
+    const scripts = payload.script_inventory || [];
+    const panel = $("#script-panel");
+    if (!panel) return;
+    if (!scripts.length) {
+      panel.innerHTML = `<div class="finding-chip"><span class="chip-title">No script inventory available for this analysis.</span></div>`;
+      return;
+    }
+
+    const partyColor = { first_party: "#34d399", third_party: "#fb7185", inline: "#22d3ee", file: "#f97316", unknown: "#a78bfa" };
+    const sorted = scripts.slice().sort((a, b) => ((b.risk || {}).score || 0) - ((a.risk || {}).score || 0));
+
+    panel.innerHTML = sorted
+      .map((s, i) => {
+        const caps = s.capabilities || {};
+        const risk = s.risk || {};
+        const reads = caps.reads || [];
+        const writes = caps.writes || [];
+        const external = caps.external_destinations || [];
+        const domains = Array.from(new Set(external.map((d) => d.domain).filter(Boolean))).slice(0, 6);
+        const apis = (s.browser_apis || []).filter((a) => a.enabled);
+        return `<div class="finding-chip" style="animation-delay:${i * 0.05}s">
+          <span class="chip-title" style="color:${partyColor[s.party] || "#22d3ee"}">
+            ${escapeHtml(s.name)} · ${escapeHtml(s.party || "unknown")} · risk ${risk.score || 0}/100
+          </span>
+          <div style="color:#8ea2c1">${escapeHtml(s.load_method || "unknown")} · ${escapeHtml(s.domain || "inline")} · ${s.finding_count || 0} findings</div>
+          ${risk.factors && risk.factors.length ? `<div><b>Why:</b> ${risk.factors.slice(0, 4).map(escapeHtml).join(" · ")}</div>` : ""}
+          ${reads.length ? `<div><b>Reads:</b> ${reads.map(escapeHtml).join(", ")}</div>` : ""}
+          ${writes.length ? `<div><b>Writes:</b> ${writes.map(escapeHtml).join(", ")}</div>` : ""}
+          ${domains.length ? `<div><b>External destinations:</b> ${domains.map(escapeHtml).join(", ")}</div>` : ""}
+          ${apis.length ? `<div><b>Browser APIs:</b> ${apis.map((a) => `${a.label} ${a.enabled ? "✓" : "✗"}`).join(" · ")}</div>` : ""}
+        </div>`;
+      })
+      .join("");
   }
 
   function renderDeps() {
