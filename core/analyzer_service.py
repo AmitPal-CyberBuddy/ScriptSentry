@@ -2,6 +2,8 @@
 import hashlib
 import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urljoin, urlparse, unquote
 
 try:
@@ -9,7 +11,7 @@ try:
 except ImportError:  # allow pure-paste code analysis without network deps
     requests = None
 
-from config import BEAUTIFY_DIR, FILE_RULES, JS_DIR
+from config import BEAUTIFY_DIR, FILE_RULES, JS_DIR, SCAN_MAX_WORKERS
 from core.beautifier import beautify
 from core.crypto import extract_crypto_material
 from core.discovery import extract_inline_scripts, extract_js
@@ -25,6 +27,20 @@ REQUEST_HEADERS = {
         "Chrome/124.0 Safari/537.36"
     )
 }
+
+
+def _scan_document(path, content):
+    """Run the full scanner plus crypto extractor for one JS document.
+
+    This is the expensive part and is safe to call outside any lock, so a URL
+    scan can parallelize many bundles without serializing CPU work.
+    """
+    content = content or ""
+    data = scan_file(path, content=content)
+    crypto = extract_crypto_material(content, filename=os.path.basename(path))
+    data.update(crypto)
+    data["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+    return data
 
 
 def _merge_into(results, path, content, seen_hashes=None):
@@ -46,10 +62,7 @@ def _merge_into(results, path, content, seen_hashes=None):
         if digest in seen_hashes:
             return False
         seen_hashes.add(digest)
-    data = scan_file(path, content=content)
-    crypto = extract_crypto_material(content, filename=os.path.basename(path))
-    data.update(crypto)
-    data["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+    data = _scan_document(path, content)
     results[path] = data
     return True
 
@@ -276,13 +289,20 @@ def _attach_runtime(results, url, timeout=15, max_files=50, progress_callback=No
     return attach_runtime_evidence(results, runtime, target_url=url)
 
 
-def analyze_url(url, max_depth=5, timeout=15, max_files=100, progress_callback=None):
+def analyze_url(
+    url,
+    max_depth=5,
+    timeout=15,
+    max_files=100,
+    progress_callback=None,
+    max_workers=None,
+):
     """Discover, download, beautify and recursively analyze a web app's JS.
 
-    The scan is breadth-first across module/chunk references rather than only
-    the entry scripts. Progress is reported through ``progress_callback`` so the
-    dashboard can show phase, file count, byte count and an ETA while a large
-    URL is being crawled.
+    The scan is a bounded-parallel breadth-first walk across module/chunk
+    references rather than only the entry scripts. The worker pool is capped at
+    ``max_workers`` (default from config, 6) so a 50+ bundle site is scanned
+    quickly without exhausting the local machine.
 
     Every discoverable script is followed: static ``import``/``require``,
     dynamic ``import()``, ``chunk-*`` bundles, ``/static/js`` and ``assets``
@@ -293,11 +313,41 @@ def analyze_url(url, max_depth=5, timeout=15, max_files=100, progress_callback=N
     max_files = int(max_files or 1000)
     if max_files <= 0:
         max_files = 1000
+    workers = max(1, min(int(max_workers or SCAN_MAX_WORKERS), 32))
     results = {}
     os.makedirs(JS_DIR, exist_ok=True)
     os.makedirs(BEAUTIFY_DIR, exist_ok=True)
 
-    state = {"skipped_files": 0, "skipped_reasons": [], "path_to_url": {}}
+    state = {
+        "skipped_files": 0,
+        "skipped_reasons": set(),
+        "path_to_url": {},
+        "script_urls": [],
+    }
+    lock = threading.Lock()
+    seen_hashes = set()
+    visited_urls = set()
+    known_paths = set()
+
+    def record_skip(reason):
+        with lock:
+            state["skipped_files"] += 1
+            state["skipped_reasons"].add(reason)
+
+    def scanned_bytes():
+        with lock:
+            return sum(data.get("file_size", 0) for data in results.values())
+
+    def scan_progress(phase, message):
+        _notify(
+            progress_callback,
+            phase=phase,
+            current=len(results),
+            total=max_files,
+            scanned_bytes=scanned_bytes(),
+            total_bytes=max(1, total_bytes),
+            message=message,
+        )
 
     _notify(progress_callback, phase="recon", current=0, total=1, message="Reading page and extracting script references")
     js_links = extract_js(url)
@@ -316,16 +366,7 @@ def analyze_url(url, max_depth=5, timeout=15, max_files=100, progress_callback=N
             total_bytes=0,
         )
 
-    # URL-unique naming guarantees the same basename from different folders does
-    # not collide; keep the URL list itself too so the JS inventory can attribute
-    # every downloaded asset back to its full source.
-    for link in discovered[:max_files]:
-        state.setdefault("script_urls", [])
-        state["script_urls"].append(link)
-    if len(discovered) > max_files:
-        state["skipped_files"] += len(discovered) - max_files
-        state.setdefault("skipped_reasons", []).append("discovered_scripts_limit")
-
+    state["script_urls"].extend(discovered[:max_files])
     _notify(
         progress_callback,
         phase="download",
@@ -339,9 +380,8 @@ def analyze_url(url, max_depth=5, timeout=15, max_files=100, progress_callback=N
         _notify(progress_callback, phase="beautify", current=0, total=len(downloads), message="Normalizing downloaded bundles")
         beautified = beautify(downloads)
 
-    seen_hashes = set()
-    visited = set()
     total_bytes = sum((os.path.getsize(path) if os.path.isfile(path) else 0) for path in beautified)
+    total_bytes += sum(len(body.encode("utf-8", errors="ignore")) for body in inline_scripts)
 
     # Top-level downloads keep the URL-unique safe name, so we can restore the
     # per-file base URL before walking that bundle's nested imports.
@@ -349,80 +389,112 @@ def analyze_url(url, max_depth=5, timeout=15, max_files=100, progress_callback=N
     for link in discovered[:max_files]:
         safe_name_to_url[get_safe_filename(link)] = link
 
-    def scan_progress(phase, message):
-        scanned = sum(data.get("file_size", 0) for data in results.values())
-        _notify(
-            progress_callback,
-            phase=phase,
-            current=len(results),
-            total=max_files,
-            scanned_bytes=scanned,
-            total_bytes=max(1, total_bytes),
-            message=message,
-        )
-
-    # Inline page scripts are part of the surface too; they are not ignored.
+    # Seed the first round with inline scripts plus every beautified entry.
+    initial_tasks = []
     for index, body in enumerate(inline_scripts):
-        if len(results) >= max_files:
-            state["skipped_files"] += 1
-            state.setdefault("skipped_reasons", []).append("scanned_files_limit")
-            break
-        path = f"inline-{index + 1}.js"
-        if not _merge_into(results, path, body, seen_hashes=seen_hashes):
-            state["skipped_files"] += 1
-            state.setdefault("skipped_reasons", []).append("duplicate_content")
-            continue
-        scan_progress("inline_scan", f"Analyzing inline script {index + 1}/{len(inline_scripts)}")
-
+        initial_tasks.append((f"inline-{index + 1}.js", url, body, "inline_scan", 1))
     for path in beautified:
-        if len(results) >= max_files:
-            state["skipped_files"] += 1
-            state.setdefault("skipped_reasons", []).append("scanned_files_limit")
-            break
-        if path in results:
-            continue
-        try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                content = f.read()
-        except Exception:
-            state["skipped_files"] += 1
-            state.setdefault("skipped_reasons", []).append("read_error")
-            continue
+        current_url = safe_name_to_url.get(os.path.basename(path)) or url
+        initial_tasks.append((path, current_url, None, "scan", 1))
+
+    if len(initial_tasks) > max_files:
+        excess = len(initial_tasks) - max_files
+        with lock:
+            state["skipped_files"] += excess
+            state["skipped_reasons"].add("scanned_files_limit")
+        initial_tasks = initial_tasks[:max_files]
+
+    for path, _, _, _, _ in initial_tasks:
+        known_paths.add(path)
+
+    def merge_document(path, base_url, content):
+        """Thread-safe merge. Returns a skip reason, or None when added."""
+        content = content or ""
         if len(content.encode("utf-8", errors="ignore")) > FILE_RULES.get("max_js_size", 2_000_000):
-            state["skipped_files"] += 1
-            state.setdefault("skipped_reasons", []).append("oversized_script")
-            scan_progress("scan", f"Skipping oversized script {os.path.basename(path)}")
-            continue
-        if not _merge_into(results, path, content, seen_hashes=seen_hashes):
-            state["skipped_files"] += 1
-            state.setdefault("skipped_reasons", []).append("duplicate_content")
-            scan_progress("scan", f"Skipping duplicate script {os.path.basename(path)}")
-            continue
-        current_url = safe_name_to_url.get(os.path.basename(path)) or state.get("path_to_url", {}).get(path) or url
-        state.setdefault("path_to_url", {})[path] = current_url
-        scan_progress("scan", f"Analyzing {os.path.basename(path)} ({len(results)}/{max_files})")
-        _walk_imports(
-            content,
-            path,
-            results,
-            current_url,
-            1,
-            max_depth,
-            seen_hashes=seen_hashes,
-            max_files=max_files,
-            visited=visited,
-            progress_callback=progress_callback,
-            state=state,
-        )
+            record_skip("oversized_script")
+            return "oversized_script"
+        digest = hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()
+        with lock:
+            if digest in seen_hashes:
+                state["skipped_files"] += 1
+                state["skipped_reasons"].add("duplicate_content")
+                return "duplicate_content"
+            seen_hashes.add(digest)
+        data = _scan_document(path, content)
+        with lock:
+            results[path] = data
+            state["path_to_url"][path] = base_url
+            state["script_urls"].append(base_url)
+        return None
+
+    def discover_tasks(content, base_url, depth):
+        if depth >= max_depth:
+            return []
+        new_tasks = []
+        for ref in extract_script_refs(content):
+            with lock:
+                at_cap = len(results) >= max_files
+            if at_cap:
+                record_skip("scanned_files_limit")
+                return new_tasks
+            absolute_url = urljoin(base_url, ref) if not ref.startswith(("http://", "https://")) else ref
+            key = absolute_url.split("?")[0].split("#")[0]
+            with lock:
+                if key in visited_urls:
+                    continue
+                visited_urls.add(key)
+            next_path = _resolve_chunk(ref, base_url)
+            if not next_path:
+                continue
+            with lock:
+                if next_path in known_paths or len(results) + len(new_tasks) >= max_files:
+                    continue
+                known_paths.add(next_path)
+                state["script_urls"].append(absolute_url)
+            new_tasks.append((next_path, absolute_url, None, "recursive_scan", depth + 1))
+        return new_tasks
+
+    def process_task(task):
+        path, base_url, inline_content, phase, depth = task
+        if inline_content is not None:
+            content = inline_content
+        else:
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                record_skip("read_error")
+                return []
+        skipped = merge_document(path, base_url, content)
+        if skipped:
+            scan_progress(phase, f"Skipping {skipped.replace('_', ' ')} {os.path.basename(path)}")
+            return []
+        scan_progress(phase, f"Analyzing {os.path.basename(path)} ({len(results)}/{max_files})")
+        return discover_tasks(content, base_url, depth)
+
+    # Bounded-parallel BFS rounds. Each round scans current assets with a
+    # worker pool, then hands discovered chunks to the next round.
+    current_round = initial_tasks
+    while current_round and len(results) < max_files:
+        next_round = []
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {executor.submit(process_task, task): task for task in current_round}
+            for future in as_completed(future_map):
+                try:
+                    next_round.extend(future.result() or [])
+                except Exception:
+                    record_skip("worker_error")
+        current_round = next_round[: max(0, max_files - len(results))]
 
     results["__scan_summary__"] = {
         "total_discovered": len(discovered) + len(inline_scripts),
         "total_files": len(results),
         "skipped_files": state.get("skipped_files", 0),
-        "skipped_reasons": sorted(set(state.get("skipped_reasons", []))),
-        "bytes_scanned": sum(data.get("file_size", 0) for data in results.values()),
+        "skipped_reasons": sorted(state.get("skipped_reasons", [])),
+        "bytes_scanned": scanned_bytes(),
         "total_bytes": max(1, total_bytes),
         "max_files": max_files,
+        "max_workers": workers,
         "capped": state.get("skipped_files", 0) > 0,
         "script_urls": sorted(set(state.get("script_urls", []))),
     }

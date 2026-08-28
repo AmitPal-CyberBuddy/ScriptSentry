@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from config import ALLOWED_ORIGINS, DEFAULT_PROFILE, SCAN_PROFILES
+from config import ALLOWED_ORIGINS, DEFAULT_PROFILE, SCAN_MAX_WORKERS, SCAN_PROFILES
 from core.analyzer_service import analyze_content, analyze_url
 from core.jobs import jobs
 from core.runtime_evidence import playwright_available, runtime_evidence_enabled
@@ -279,7 +279,11 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             max_depth = max(1, min(int(body.get("max_depth", profile_cfg["max_depth"])), 10))
             timeout = max(2, min(int(body.get("timeout", profile_cfg["timeout"])), 60))
             max_files = max(1, min(int(body.get("max_files", profile_cfg["max_files"])), 1000))
-            return analyze_url(url, max_depth=max_depth, timeout=timeout, max_files=max_files)
+            max_workers = max(1, min(int(body.get("max_workers", SCAN_MAX_WORKERS)), 32))
+            return analyze_url(
+                url, max_depth=max_depth, timeout=timeout,
+                max_files=max_files, max_workers=max_workers,
+            )
         code = body.get("code")
         if not isinstance(code, str) or not code.strip():
             raise ValueError("Paste some JavaScript to analyze")
@@ -310,6 +314,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             max_depth = max(1, min(int(body.get("max_depth", profile_cfg["max_depth"])), 10))
             timeout = max(2, min(int(body.get("timeout", profile_cfg["timeout"])), 60))
             max_files = max(1, min(int(body.get("max_files", profile_cfg["max_files"])), 1000))
+            max_workers = max(1, min(int(body.get("max_workers", SCAN_MAX_WORKERS)), 32))
             job = jobs.create(
                 mode="url", source=url, profile=profile,
                 max_files=max_files, max_depth=max_depth, timeout=timeout,
@@ -321,6 +326,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 max_depth=max_depth,
                 timeout=timeout,
                 max_files=max_files,
+                max_workers=max_workers,
                 progress_callback=lambda **kw: job.update(**kw),
             )
         else:
@@ -343,9 +349,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         profile_cfg = SCAN_PROFILES.get(profile, SCAN_PROFILES[DEFAULT_PROFILE])
         max_depth = max(1, min(int(body.get("max_depth", profile_cfg["max_depth"])), 10))
         timeout = max(2, min(int(body.get("timeout", profile_cfg["timeout"])), 60))
-        max_files = max(1, min(int(body.get("max_files", profile_cfg["max_files"])), 200))
+        max_files = max(1, min(int(body.get("max_files", profile_cfg["max_files"])), 1000))
+        max_workers = max(1, min(int(body.get("max_workers", SCAN_MAX_WORKERS)), 32))
         try:
-            results = analyze_url(url, max_depth=max_depth, timeout=timeout, max_files=max_files)
+            results = analyze_url(url, max_depth=max_depth, timeout=timeout, max_files=max_files, max_workers=max_workers)
             if not results:
                 self._send_json({"ok": True, "type": "url", "payload": self._payload({}, metadata={"mode": "url", "source": url})})
                 return

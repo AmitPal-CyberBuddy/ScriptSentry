@@ -1,3 +1,5 @@
+import os
+
 # ===============================
 # 📁 PATH CONFIG
 # ===============================
@@ -29,6 +31,12 @@ RUNTIME_EVIDENCE = {
 
 DEFAULT_PROFILE = "balanced"
 REPORT_FORMATS = ["txt", "json", "html", "csv", "sarif", "all"]
+
+# Bounded worker pool used while scanning/downloaded assets are analyzed and
+# nested chunks are followed. Raise this on a fast machine for very large
+# bundle sets; lower it when the local engine is memory constrained.
+# Override with SCRIPTSENTRY_SCAN_WORKERS in the server process.
+SCAN_MAX_WORKERS = int(os.environ.get("SCRIPTSENTRY_SCAN_WORKERS", "6"))
 
 # Local engine trust boundary:
 # The static UI may be served from a localhost page OR a hosted GitHub Pages

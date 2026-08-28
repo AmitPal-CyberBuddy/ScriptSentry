@@ -45,6 +45,10 @@ and how risky that behavior is, all in a modern, animated dashboard.
   bytes scanned, percent, elapsed time and estimated time remaining before rendering
   `/api/result`. If a configured per-file or file-count limit is hit, the Assets view
   reports exactly how many files were skipped and why instead of silently dropping them.
+- **Bounded-parallel scanning** — once bundles are downloaded, analysis and nested-chunk
+  following run through a capped worker pool (default 6; adjustable in the UI, via
+  `SCRIPTSENTRY_SCAN_WORKERS`, or `max_workers` in the API body) so large real-world
+  sites finish quickly instead of being processed one file at a time.
 - **Report suite**:
   - Animated web export (HTML), plain text, CSV and SARIF from the dashboard
   - CLI TXT / JSON / HTML / CSV / SARIF reports

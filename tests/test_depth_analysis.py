@@ -121,6 +121,7 @@ class ProgressAndSummaryTest(unittest.TestCase):
             self.assertEqual(summary["total_discovered"], 3)
             self.assertEqual(summary["skipped_files"], 0)
             self.assertGreater(summary["bytes_scanned"], 0)
+            self.assertEqual(summary["max_workers"], analyzer_service.SCAN_MAX_WORKERS)
             self.assertIn("done", [c.get("phase") for c in calls])
             self.assertTrue(any(c.get("phase") == "inline_scan" for c in calls))
 

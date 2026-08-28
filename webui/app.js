@@ -362,6 +362,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
         profile: $("#profile").value,
         max_depth: parseInt($("#max-depth").value, 10),
         max_files: parseInt($("#max-files").value, 10),
+        max_workers: parseInt($("#workers").value, 10),
         timeout: 30,
       };
       lastQuery = query;
@@ -1003,6 +1004,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       ["Bytes scanned", formatBytes(s.bytes_scanned), "#a78bfa"],
       ["Bundle bytes", formatBytes(s.total_bytes), "#60a5fa"],
       ["Runtime", runtime, runtimeColor],
+      ["Workers", s.max_workers || "-", "#60a5fa"],
       ["Hard cap hit", s.capped ? "yes" : "no", s.capped ? "#fb7185" : "#34d399"],
     ];
     const reasons = (s.skipped_reasons || []).slice(0, 6);
