@@ -6,7 +6,7 @@ JS_DIR = f"{OUTPUT_DIR}/js_files"
 BEAUTIFY_DIR = f"{OUTPUT_DIR}/beautified"
 
 DEFAULT_PROFILE = "balanced"
-REPORT_FORMATS = ["txt", "json", "html", "all"]
+REPORT_FORMATS = ["txt", "json", "html", "csv", "sarif", "all"]
 
 SCAN_PROFILES = {
     "balanced": {

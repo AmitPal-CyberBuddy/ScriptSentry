@@ -15,7 +15,14 @@ from core.crypto import extract_crypto_material
 from core.discovery import extract_js
 from core.downloader import download_js
 from ai.llm_engine import build_ai_summary
-from core.reporter import build_dashboard_payload, build_report_model, generate_html_report, generate_report
+from core.reporter import (
+    build_dashboard_payload,
+    build_report_model,
+    generate_csv_report,
+    generate_html_report,
+    generate_report,
+    generate_sarif_report,
+)
 from core.scanner import scan_file
 
 RED = "\033[91m"
@@ -283,6 +290,26 @@ def save_html_report(report_html):
         print(f"{RED}[!] HTML report save failed: {exc}{RESET}")
 
 
+def save_csv_report(report_csv):
+    path = os.path.join(OUTPUT_DIR, "report.csv")
+    try:
+        with open(path, "w", encoding="utf-8", newline="") as file:
+            file.write(report_csv)
+        print(f"{GREEN}[+] CSV report saved: {path}{RESET}")
+    except Exception as exc:
+        print(f"{RED}[!] CSV report save failed: {exc}{RESET}")
+
+
+def save_sarif_report(report_sarif):
+    path = os.path.join(OUTPUT_DIR, "report.sarif")
+    try:
+        with open(path, "w", encoding="utf-8") as file:
+            file.write(report_sarif)
+        print(f"{GREEN}[+] SARIF report saved: {path}{RESET}")
+    except Exception as exc:
+        print(f"{RED}[!] SARIF report save failed: {exc}{RESET}")
+
+
 def run(urls, max_depth=5, timeout=15, profile="balanced", output_formats=None, ai_provider="disabled", api_key=None, model=None):
     global BASE_URL, DEFAULT_PROFILE
     reset_state()
@@ -321,6 +348,10 @@ def run(urls, max_depth=5, timeout=15, profile="balanced", output_formats=None, 
         save_json(ai_summary=ai_summary)
     if "all" in output_formats or "html" in output_formats:
         save_html_report(generate_html_report(all_results, ai_summary=ai_summary))
+    if "all" in output_formats or "csv" in output_formats:
+        save_csv_report(generate_csv_report(all_results, ai_summary=ai_summary))
+    if "all" in output_formats or "sarif" in output_formats:
+        save_sarif_report(generate_sarif_report(all_results, ai_summary=ai_summary))
 
     print(f"\n{BLUE}========== FINAL REPORT =========={RESET}\n")
     print(report)

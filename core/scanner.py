@@ -5,8 +5,11 @@ import os
 
 from config import CRYPTO_KEYWORDS, SECRET_REGEX
 from core.ast_analyzer import analyze_ast
+from core.attack_surface import extract_attack_surface
 from core.crypto import looks_like_url_or_path
 from core.decoder import decode_candidate_strings, extract_hidden_values
+from core.framework_rules import analyze_framework
+from core.taint import analyze_taint
 
 
 def _run_additional_analyzers(content, results):
@@ -64,6 +67,11 @@ def scan_file(file_path, content=None):
         "ast_analysis": {},
         "dependency_scan": [],
         "risk_signals": [],
+        "dataflows": [],
+        "attack_surface": {},
+        "framework_findings": [],
+        "findings": [],
+        "finding_statuses": {},
         "score": 0,
     }
 
@@ -311,6 +319,26 @@ def scan_file(file_path, content=None):
         if entity and source not in seen_deps:
             seen_deps.add(source)
             dependency_scan.append({**entity, "source": source, "evidence": f"import {source}"})
+
+    # Explicit `import ... from 'pkg'`, `require('pkg')`, and dynamic `import('pkg')`.
+    import_sources = set()
+    for pattern in (
+        r"""\b(?:from\s+|import\s*\()\s*['"]([a-zA-Z0-9_.@/-]+)['"]""",
+        r"""\brequire\s*\(\s*['"]([a-zA-Z0-9_.@/-]+)['"]""",
+        r"""\bimport\s+['"]([a-zA-Z0-9_.@/-]+)['"]""",
+    ):
+        for source in re.findall(pattern, content):
+            source = (source or "").split("/")[0]
+            if source and source not in seen_deps:
+                seen_deps.add(source)
+                entity = dep_entity.get(source)
+                dependency_scan.append({
+                    **({"name": entity["name"], "kind": entity["kind"]} if entity else {"name": source, "kind": "node/npm"}),
+                    "source": source,
+                    "evidence": f"import/require {source}",
+                })
+            import_sources.add(source)
+
     # Regex fallbacks for common libraries that live in the bundle itself.
     for marker, entity in dep_entity.items():
         if entity["kind"].lower() in ("framework", "library") and marker in content.lower():
@@ -408,6 +436,64 @@ def scan_file(file_path, content=None):
     if results.get("obfuscation_analysis", {}).get("evidence"):
         risk_signals.append({"id": "obfuscation", "severity": "LOW", "title": "Obfuscation signals", "evidence": results["obfuscation_analysis"].get("evidence", [])[:3]})
     results["risk_signals"] = risk_signals
+
+    # =========================================
+    # 🔁 SOURCE→SINK DATA FLOWS & FRAMEWORK RULES
+    # =========================================
+    filename = results.get("loc_id", "inline.js")
+    try:
+        results["dataflows"] = analyze_taint(content, filename=filename)
+    except Exception:
+        results["dataflows"] = []
+    try:
+        results["framework_findings"] = analyze_framework(content, filename=filename)
+    except Exception:
+        results["framework_findings"] = []
+
+    # =========================================
+    # 🎯 ATTACK SURFACE
+    # =========================================
+    try:
+        results["attack_surface"] = extract_attack_surface(content, filename=filename)
+    except Exception:
+        results["attack_surface"] = {}
+
+    # Unify findings (taint > framework > coarse risk signals) for UI/reports.
+    findings = []
+    seen = set()
+    for item in results["dataflows"] + results["framework_findings"]:
+        key = (item.get("id"), item.get("line"), item.get("sink"))
+        if key not in seen:
+            seen.add(key)
+            findings.append(item)
+    existing_ids = {item.get("id") for item in results["dataflows"] + results["framework_findings"]}
+    for sig in results.get("risk_signals", []) or []:
+        # Avoid duplicate coarse signals when taint/framework already produced the
+        # same finding (e.g. a confirmed DOM-injection flow plus a generic DOM signal).
+        if sig.get("id") in existing_ids:
+            continue
+        level = sig.get("severity", "MEDIUM")
+        confidence = "high" if level in ("CRITICAL", "HIGH") else ("medium" if level == "MEDIUM" else "low")
+        item = {
+            "id": sig.get("id"),
+            "type": sig.get("title", sig.get("id", "")),
+            "severity": level,
+            "confidence": confidence,
+            "status": "confirmed" if confidence == "high" else "potential",
+            "file": filename,
+            "line": 0,
+            "source": "",
+            "sink": " ".join(str(x) for x in (sig.get("evidence", []) or [])[:2])[:120],
+            "flow": [],
+            "sanitization_detected": False,
+            "evidence": " ".join(str(x) for x in (sig.get("evidence", []) or [])[:2])[:240],
+        }
+        key = (item.get("id"), item.get("line"), item.get("sink"))
+        if key not in seen:
+            seen.add(key)
+            findings.append(item)
+    results["findings"] = findings[:80]
+    results["finding_statuses"] = {}
 
     results["score"] = score
     return results

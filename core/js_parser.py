@@ -280,6 +280,25 @@ def parse_ast(content):
     return result
 
 
+def parse_raw(content):
+    """Return the raw parsed AST as a plain dict, or None.
+
+    Used by downstream analyzers that need the full ESTree shape (e.g.
+    source/sink data-flow analysis) rather than the summarized report dict.
+    """
+    if esprima is None:
+        return None
+    tree, error = _parse(content)
+    if tree is None:
+        return None
+    if not isinstance(tree, dict):
+        try:
+            tree = esprima.toDict(tree)
+        except Exception:  # noqa: BLE001
+            return None
+    return tree if isinstance(tree, dict) else None
+
+
 def extract_imports(content):
     """Fallback regex import extraction when the parser is unavailable."""
     imports = []

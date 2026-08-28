@@ -630,6 +630,54 @@ select {
   display: block;
 }
 
+.view-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.view-tab {
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(4, 9, 22, 0.6);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s ease;
+  font-family: inherit;
+}
+
+.view-tab.active {
+  color: #04131c;
+  background: linear-gradient(135deg, #67e8f9, #38bdf8);
+  border-color: transparent;
+}
+
+.view-group {
+  display: none;
+}
+
+/* triage status chips */
+.status-chip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+  border: 1px solid transparent;
+  text-transform: uppercase;
+}
+
+.status-confirmed { background: rgba(255,77,109,.16); color:#ff8fa3; }
+.status-false_positive { background: rgba(34,211,238,.16); color:#7dd3fc; }
+.status-informational { background: rgba(163,163,163,.16); color:#cbd5e1; }
+.status-needs_review { background: rgba(255,159,67,.16); color:#ffc089; }
+
 .results-header {
   display: flex;
   align-items: center;

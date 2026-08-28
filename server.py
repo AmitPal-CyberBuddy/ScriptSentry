@@ -18,7 +18,13 @@ from urllib.parse import urlparse
 
 from config import DEFAULT_PROFILE, SCAN_PROFILES
 from core.analyzer_service import analyze_content, analyze_url
-from core.reporter import build_dashboard_payload, generate_html_report, generate_report
+from core.reporter import (
+    build_dashboard_payload,
+    generate_csv_report,
+    generate_html_report,
+    generate_report,
+    generate_sarif_report,
+)
 
 WEB_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webui")
 MAX_BODY = 4 * 1024 * 1024  # 4 MB
@@ -129,6 +135,32 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Disposition", "attachment; filename=scriptsentry-report.txt")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Private-Network", "true")
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+        if report_format == "csv":
+            text = generate_csv_report(results)
+            data = text.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", "attachment; filename=scriptsentry-report.csv")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Private-Network", "true")
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+        if report_format == "sarif":
+            text = generate_sarif_report(results)
+            data = text.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/sarif+json; charset=utf-8")
+            self.send_header("Content-Disposition", "attachment; filename=scriptsentry-report.sarif")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Private-Network", "true")

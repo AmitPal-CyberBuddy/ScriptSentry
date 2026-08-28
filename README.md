@@ -20,10 +20,16 @@ technology stacks and data flows — then presents everything in a modern, anima
   - Hardcoded configs, decoded/obfuscated strings
   - Technology stack, dependency ecosystem, notable features, data-flow summary
   - **AST profile** — imports/exports, functions, classes, call graph, complexity
+  - **Source→sink taint analysis** — URL/query/hash, postMessage, storage, cookies, form
+    values → innerHTML / eval / redirect / prototype pollution, with sanitizer awareness
+  - **Context-aware attack surface** — fetch/axios/XHR, WebSocket/SSE, GraphQL, query params,
+    headers, JSON body fields, auth and internal-endpoint hints
+  - **Framework-aware rules** — React `dangerouslySetInnerHTML`, Angular `bypassSecurityTrust*`,
+    Vue `v-html`, jQuery DOM sinks
 - **Report suite**:
-  - Animated web export (HTML) and plain text export from the dashboard
-  - CLI TXT / JSON / HTML reports
-  - Structured risk signals, remediation plan, attack surface summary
+  - Animated web export (HTML), plain text, CSV and SARIF from the dashboard
+  - CLI TXT / JSON / HTML / CSV / SARIF reports
+  - Structured risk signals, unified triage findings, remediation plan, attack surface summary
 - **Deterministic rule + AST engine** — no external LLM required, with an optional AI-style summary.
 
 ## 🚀 Quick Start
@@ -62,6 +68,12 @@ From the web UI press one of the header buttons after analysis:
 - **Export HTML Report** — polished shareable report (executive summary, risk signals,
   category bars, per-file detail, remediation plan)
 - **Export Text Report** — triage-friendly CLI-style report
+- **Export CSV Report** — spreadsheet-friendly unified findings (id, severity, file, line,
+  source → sink, flow, status)
+- **Export SARIF Report** — SARIF 2.1.0 for GitHub code scanning / CI tooling
+
+The dashboard has an analyst **Findings** tab where you can triage each signal as
+*Confirmed / False positive / Informational / Needs review* (stored only in your browser).
 
 Equivalent API endpoints (used by the UI, also callable directly):
 
@@ -69,6 +81,10 @@ Equivalent API endpoints (used by the UI, also callable directly):
 curl -X POST localhost:8000/api/report?format=html \
   -H 'Content-Type: application/json' \
   -d '{"mode":"code","code":"const key=EncryptionKey=\"abc\";"}'
+
+curl -X POST "localhost:8000/api/report?format=csv" \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"code","code":"const q=location.search;innerHTML=q;"}'
 ```
 
 ## 🧪 CLI Scan
@@ -79,7 +95,8 @@ python3 main.py "https://example.com/static/js/app.js"
 python3 main.py https://example.com --max-depth 5 --profile strict --format html
 ```
 
-Output is written to `output/` (`report.txt`, `report.json`, `report.html`).
+Output is written to `output/` (`report.txt`, `report.json`, `report.html`,
+`report.csv`, `report.sarif`).
 
 Optional AI-style summary:
 
@@ -99,6 +116,9 @@ python3 main.py https://example.com --ai openai --api-key YOUR_KEY --model gpt-4
 │   scanner.py — regex signal detection        │
 │   ast_analyzer.py — AST intelligence         │
 │   js_parser.py — optional esprima wrapper    │
+│   taint.py — AST source→sink taint analysis  │
+│   attack_surface.py — endpoint/API surface   │
+│   framework_rules.py — React/Angular/Vue/jQ  │
 │   crypto.py — key / IV / crypto extraction   │
 │   decoder.py — base64 + hex decoding         │
 │   discovery.py — JS asset discovery          │

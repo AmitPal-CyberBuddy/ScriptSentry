@@ -319,7 +319,12 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = format === "txt" ? "scriptsentry-report.txt" : "scriptsentry-report.html";
+      link.download = {
+        txt: "scriptsentry-report.txt",
+        html: "scriptsentry-report.html",
+        csv: "scriptsentry-report.csv",
+        sarif: "scriptsentry-report.sarif",
+      }[format] || "scriptsentry-report.txt";
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -344,6 +349,10 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     renderDeps();
     renderCharts();
     renderTimeline();
+    renderAttack();
+    renderFlows();
+    renderSecrets();
+    renderUnifiedFindings();
     renderFiles();
   }
 
@@ -374,6 +383,191 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       .filter(([, v]) => v && v.length)
       .map(([name, vals, color]) => `<div class="finding-chip"><span class="chip-title" style="color:${color}">${escapeHtml(name)} · ${vals.length}</span>${vals.map((v) => `<div>• ${escapeHtml(v)}</div>`).join("")}</div>`)
       .join(`<div class="finding-chip"><span class="chip-title">No external dependencies mapped</span></div>`);
+  }
+
+  /* ---------------- Dedicated view rendering ---------------- */
+
+  function aggregateAttackSurface() {
+    const byKey = {};
+    (payload.files || []).forEach((f) => {
+      const as = f.attack_surface || {};
+      (as.endpoints || []).forEach((e) => {
+        const k = `${e.method || "GET"} ${e.url || ""}`;
+        byKey[k] = byKey[k] || { method: e.method || "GET", url: e.url || "", params: e.params || {}, headers: e.headers || {}, body_fields: e.body_fields || [], auth: e.auth || "", internal: !!e.internal, count: 0 };
+        byKey[k].count++;
+      });
+      (as.websockets || []).forEach((e) => {
+        const k = `WS ${e.url || ""}`;
+        byKey[k] = byKey[k] || { method: "WS", url: e.url || "", protocols: e.protocols || [], count: 0 };
+        byKey[k].count++;
+      });
+      (as.sse || []).forEach((e) => {
+        const k = `SSE ${e.url || ""}`;
+        byKey[k] = byKey[k] || { method: "SSE", url: e.url || "", count: 0 };
+        byKey[k].count++;
+      });
+    });
+    return Object.values(byKey);
+  }
+
+  function renderAttack() {
+    const endpoints = aggregateAttackSurface();
+    const graphql = (payload.files || []).flatMap((f) => (f.attack_surface || {}).graphql?.operations || []);
+    const params = [];
+    const headers = [];
+    const body = [];
+    const auth = [];
+    const internal = [];
+    (payload.files || []).forEach((f) => {
+      const as = f.attack_surface || {};
+      params.push(...(as.parameters || []));
+      headers.push(...(as.headers || []));
+      body.push(...(as.body_fields || []));
+      auth.push(...(as.auth_hints || []));
+      internal.push(...(as.internal_endpoints || []));
+    });
+
+    const panels = [
+      ["Endpoints & Realtime", endpoints, (e) => `${e.method} ${e.url}${e.internal ? " ⚠internal" : ""}`, "#22d3ee"],
+      ["GraphQL Operations", graphql, (g) => `${g.operation}${g.line ? ` (L${g.line})` : ""}`, "#a78bfa"],
+      ["Parameters", params, (p) => p, "#38bdf8"],
+      ["Headers", headers, (h) => h, "#fb7185"],
+      ["Body Fields", body, (b) => b, "#34d399"],
+      ["Auth Hints", auth, (a) => a.type || a.url || "", "#fbbf24"],
+      ["Internal / Hidden", internal, (e) => e.url || e.method || "", "#ff4d6d"],
+    ];
+    $("#attack-panel").innerHTML = panels
+      .filter(([, v]) => Array.isArray(v) && v.length)
+      .map(([name, vals, fmt, color]) => {
+        const unique = Array.from(new Set(vals.map(fmt))).filter(Boolean).slice(0, 30);
+        return `<div class="finding-chip"><span class="chip-title" style="color:${color}">${escapeHtml(name)} · ${unique.length}</span>${unique.map((v) => `<div>• ${escapeHtml(v)}</div>`).join("")}</div>`;
+      })
+      .join(`<div class="finding-chip"><span class="chip-title">No endpoints mapped</span></div>`);
+  }
+
+  function renderFlows() {
+    const flows = (payload.files || []).flatMap((f) => (f.dataflows || []).map((flow) => ({ ...flow, file: f.name })));
+    $("#flow-panel").innerHTML = flows.length
+      ? flows.slice(0, 40).map((flow, i) => {
+          const sev = flow.severity || "MEDIUM";
+          const color = { CRITICAL: "#ff4d6d", HIGH: "#ff9f43", MEDIUM: "#ffd166", LOW: "#22d3ee" }[sev] || "#22d3ee";
+          const path = (flow.flow || []).slice(0, 8).join(" → ");
+          return `<li style="animation-delay:${i * 0.04}s">
+            <span class="risk-dot" style="color:${color}"></span>
+            <span><b>${escapeHtml(flow.type || "Source→sink flow")}</b> · ${escapeHtml(flow.status || "potential")} · ${escapeHtml(flow.file || "")} ${flow.line ? `· L${flow.line}` : ""}
+            <br><span style="color:#8ea2c1">source: ${escapeHtml(flow.source || "unknown")} → sink: ${escapeHtml(flow.sink || "")}</span>
+            ${path ? `<br><span style="color:#c084fc">path: ${escapeHtml(path)}</span>` : ""}</span>
+          </li>`;
+        }).join("")
+      : `<li><span class="risk-dot" style="color:#22d3ee"></span><span>No source-to-sink flows detected.</span></li>`;
+  }
+
+  function renderSecrets() {
+    const secrets = (payload.files || []).flatMap((f) => (f.secrets || []).map((s) => ({ s, f: f.name })));
+    const keys = (payload.files || []).flatMap((f) => (f.keys || []).map((s) => ({ s, f: f.name })));
+    const ivs = (payload.files || []).flatMap((f) => (f.ivs || []).map((s) => ({ s, f: f.name })));
+    const configs = (payload.files || []).flatMap((f) => (f.configs || []).map((s) => ({ s, f: f.name })));
+    const panels = [
+      ["Secrets", secrets, (x) => `${x.s} (${x.f})`, "#ff4d6d"],
+      ["Crypto Keys", keys, (x) => `${x.s} (${x.f})`, "#ff9f43"],
+      ["IV / Nonce", ivs, (x) => `${x.s} (${x.f})`, "#ffd166"],
+      ["Hardcoded Config", configs, (x) => `${x.s}`, "#fbbf24"],
+    ];
+    $("#secrets-panel").innerHTML = panels
+      .filter(([, v]) => v && v.length)
+      .map(([name, vals, fmt, color]) => `<div class="finding-chip"><span class="chip-title" style="color:${color}">${escapeHtml(name)} · ${vals.length}</span>${vals.slice(0, 30).map((x) => `<div>• ${escapeHtml(fmt(x))}</div>`).join("")}</div>`)
+      .join(`<div class="finding-chip"><span class="chip-title">No sensitive data surfaced</span></div>`);
+  }
+
+  const STATUS_CYCLE = ["confirmed", "false_positive", "informational", "needs_review"];
+
+  function findingKey(f) {
+    return `${f.id || f.type || "finding"}|${f.file || ""}|${f.line || 0}|${String(f.sink || "").slice(0, 80)}`;
+  }
+
+  function getStatus(f) {
+    const key = findingKey(f);
+    const stored = (localStorage.getItem("scriptsentry-triage") || "{}");
+    try {
+      const map = JSON.parse(stored);
+      return map[key] || f.status || "needs_review";
+    } catch {
+      return f.status || "needs_review";
+    }
+  }
+
+  function setStatus(f) {
+    const key = findingKey(f);
+    const cur = STATUS_CYCLE.indexOf(getStatus(f));
+    const next = STATUS_CYCLE[(cur + 1) % STATUS_CYCLE.length];
+    let map;
+    try { map = JSON.parse(localStorage.getItem("scriptsentry-triage") || "{}"); } catch { map = {}; }
+    map[key] = next;
+    localStorage.setItem("scriptsentry-triage", JSON.stringify(map));
+    renderUnifiedFindings();
+  }
+
+  function renderUnifiedFindings() {
+    const all = (payload.summary.findings || []).concat(payload.summary.dataflows || []).map((f) => ({ ...f, file: f.file || payload.meta.source }));
+    const unique = new Map();
+    all.forEach((f) => unique.set(findingKey(f), f));
+    const findings = Array.from(unique.values());
+    $("#finding-filters").innerHTML = [
+      ["all", "All"],
+      ["confirmed", "Confirmed"],
+      ["false_positive", "False positive"],
+      ["informational", "Info"],
+      ["needs_review", "Needs review"],
+    ].map(([v, label]) => `<button class="file-tab ${v === "all" ? "active" : ""}" data-f="${v}">${label}</button>`).join("");
+
+    const filter = (window.__findingFilter || "all");
+    const list = findings.filter((f) => filter === "all" || getStatus(f) === filter);
+    $("#unified-findings").innerHTML = list.length
+      ? list.slice(0, 80).map((f, i) => {
+          const sev = f.severity || "MEDIUM";
+          const color = { CRITICAL: "#ff4d6d", HIGH: "#ff9f43", MEDIUM: "#ffd166", LOW: "#22d3ee" }[sev] || "#22d3ee";
+          const st = getStatus(f);
+          return `<li style="animation-delay:${i * 0.03}s">
+            <span class="risk-dot" style="color:${color}"></span>
+            <span><b>${escapeHtml(f.type || f.id || "finding")}</b> · ${escapeHtml(f.severity || "")} · ${escapeHtml(f.file || "")}${f.line ? ` · L${f.line}` : ""}<br>
+            <span style="color:#8ea2c1">${escapeHtml(f.source ? `${f.source} → ` : "")}${escapeHtml(f.sink || f.evidence || "")}</span>
+            <button class="status-chip status-${st}" data-key="${encodeURIComponent(findingKey(f))}">${escapeHtml(st.replace("_", " "))}</button></span>
+          </li>`;
+        }).join("")
+      : `<li><span class="risk-dot" style="color:#22d3ee"></span><span>No findings for this filter.</span></li>`;
+
+    $("#unified-findings").querySelectorAll(".status-chip").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = decodeURIComponent(btn.dataset.key || "");
+        const f = findings.find((x) => findingKey(x) === key);
+        if (f) setStatus(f);
+      });
+    });
+
+    const filters = $("#finding-filters");
+    filters.querySelectorAll(".file-tab").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.f === filter);
+      btn.onclick = () => {
+        window.__findingFilter = btn.dataset.f;
+        renderUnifiedFindings();
+      };
+    });
+  }
+
+  function activateView(view) {
+    $$(".view-tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
+    $$(".view-group").forEach((group) => {
+      group.style.display = group.dataset.view === view ? "" : "none";
+    });
+    window.__activeView = view;
+  }
+
+  function initViews() {
+    $$(".view-tab").forEach((tab) => {
+      tab.addEventListener("click", () => activateView(tab.dataset.view));
+    });
+    window.ScriptSentryTriage = (f) => setStatus(f);
+    activateView("overview");
   }
 
   function renderSummary() {
@@ -694,11 +888,14 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
   function init() {
     initParticles();
     initTabs();
+    initViews();
     $("#code-input").value = SAMPLE;
     $("#analyze-code").addEventListener("click", analyzeCode);
     $("#analyze-url").addEventListener("click", analyzeUrl);
     $("#export-html").addEventListener("click", () => exportReport("html"));
     $("#export-txt").addEventListener("click", () => exportReport("txt"));
+    $("#export-csv").addEventListener("click", () => exportReport("csv"));
+    $("#export-sarif").addEventListener("click", () => exportReport("sarif"));
     $("#load-sample").addEventListener("click", () => {
       $("#code-input").value = SAMPLE;
       $("#pane-code").scrollIntoView({ behavior: "smooth", block: "center" });

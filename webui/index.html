@@ -124,12 +124,24 @@
         <h2>📊 Analysis Dashboard</h2>
         <div class="row" style="margin:0">
           <div class="meta" id="result-meta"></div>
-          <button class="btn ghost" id="export-html">📄 Export HTML Report</button>
-          <button class="btn ghost" id="export-txt">📝 Export Text Report</button>
+          <button class="btn ghost" id="export-html">📄 HTML</button>
+          <button class="btn ghost" id="export-txt">📝 TXT</button>
+          <button class="btn ghost" id="export-csv">📊 CSV</button>
+          <button class="btn ghost" id="export-sarif">🧾 SARIF</button>
         </div>
       </div>
 
-      <div class="grid grid-2">
+      <div class="view-tabs fade-up" id="view-tabs">
+        <button class="view-tab active" data-view="overview">📊 Overview</button>
+        <button class="view-tab" data-view="assets">📁 Assets</button>
+        <button class="view-tab" data-view="attack">🎯 Attack Surface</button>
+        <button class="view-tab" data-view="findings">🚦 Findings</button>
+        <button class="view-tab" data-view="flows">🔁 Data Flows</button>
+        <button class="view-tab" data-view="secrets">🔐 Secrets</button>
+        <button class="view-tab" data-view="deps">🧰 Dependencies</button>
+      </div>
+
+      <div class="grid grid-2 view-group" data-view="overview">
         <div class="card">
           <h3>Overall Risk</h3>
           <div class="gauge-wrap">
@@ -153,9 +165,9 @@
         </div>
       </div>
 
-      <div class="grid grid-4" style="margin-top:18px" id="metrics"></div>
+      <div class="grid grid-4 view-group" style="margin-top:18px" data-view="overview" id="metrics"></div>
 
-      <div class="grid grid-3" style="margin-top:18px">
+      <div class="grid grid-3 view-group" style="margin-top:18px" data-view="overview">
         <div class="card chart-card">
           <h3>Finding Mix</h3>
           <svg class="chart" id="donut-chart" viewBox="0 0 220 220"></svg>
@@ -171,18 +183,40 @@
         </div>
       </div>
 
-      <div class="card" style="margin-top:18px">
+      <div class="card view-group" style="margin-top:18px" data-view="findings">
         <h3>🚦 Risk Signals</h3>
         <div class="find-list" id="risk-signals"></div>
       </div>
 
-      <div class="card" style="margin-top:18px">
+      <div class="card view-group" style="margin-top:18px" data-view="findings">
+        <h3>🛠️ Unified Findings</h3>
+        <p class="modal-note" style="margin:0 0 8px">Click <b>status</b> to mark as Confirmed / False Positive / Informational / Needs Review (stored in your browser only).</p>
+        <div class="file-tabs" id="finding-filters"></div>
+        <div class="find-list" id="unified-findings"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="attack">
+        <h3>🎯 Attack Surface</h3>
+        <div class="finding-grid" id="attack-panel"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="flows">
+        <h3>🔁 Source → Sink Data Flows</h3>
+        <div class="find-list" id="flow-panel"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="secrets">
+        <h3>🔐 Secrets &amp; Sensitive Data</h3>
+        <div class="finding-grid" id="secrets-panel"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="deps">
         <h3>🧰 Dependencies &amp; Transport</h3>
         <div class="finding-grid" id="dep-panel"></div>
       </div>
 
-      <div class="card" style="margin-top:18px">
-        <h3>File Findings</h3>
+      <div class="card view-group" style="margin-top:18px" data-view="assets">
+        <h3>📁 JavaScript Assets</h3>
         <div class="file-tabs" id="file-tabs"></div>
         <div id="file-panel"></div>
       </div>

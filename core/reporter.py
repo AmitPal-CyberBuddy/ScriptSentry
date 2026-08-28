@@ -146,6 +146,13 @@ def _normalize_data(file_name, data):
         "transport": data.get("transport", []),
         "request_methods": data.get("request_methods", []),
         "notable_features": data.get("notable_features", []),
+        "dataflows": data.get("dataflows", []),
+        "attack_surface": data.get("attack_surface", {}),
+        "framework_findings": data.get("framework_findings", []),
+        "findings": data.get("findings", []),
+        "finding_statuses": data.get("finding_statuses", {}),
+        "file_size": data.get("file_size", 0),
+        "line_count": data.get("line_count", 0),
     }
 
 
@@ -171,6 +178,13 @@ def build_report_model(results, ai_summary=None, metadata=None):
     all_endpoints = []
     all_methods = set()
     all_transport = set()
+    all_flows = []
+    all_findings = []
+    all_attack_surface = {
+        "endpoints": [], "websockets": [], "sse": [], "graphql": [],
+        "parameters": [], "domains": [], "headers": [], "body_fields": [],
+        "auth_hints": [], "internal_endpoints": [],
+    }
     total_score = 0
     total_count = 0
     max_file_score = 0
@@ -180,6 +194,9 @@ def build_report_model(results, ai_summary=None, metadata=None):
         score, label, findings = score_risk(norm)
         norm["score"] = score
         norm["risk"] = label
+        # Keep the structured taint/framework/risk findings for exports and let the
+        # human-readable `findings` list carry the coarse risk strings for TXT/HTML.
+        norm["rich_findings"] = [f for f in norm.get("findings", []) if isinstance(f, dict)]
         norm["findings"] = findings
         files.append(norm)
         total_score += score
@@ -190,6 +207,28 @@ def build_report_model(results, ai_summary=None, metadata=None):
         all_methods.update(norm.get("request_methods", []) or [])
         all_transport.update(norm.get("transport", []) or [])
         total_count += len(findings)
+        for flow in norm.get("dataflows", []) or []:
+            all_flows.append({**flow, "file": file_name})
+            all_signals.append({
+                "id": flow.get("id", "dataflow"), "severity": flow.get("severity", "HIGH"),
+                "title": flow.get("type", flow.get("id", "Source-to-sink flow")),
+                "evidence": flow.get("evidence") or flow.get("sink", ""), "file": file_name,
+                "status": flow.get("status", "potential"), "confidence": flow.get("confidence", "medium"),
+            })
+        for fw in norm.get("framework_findings", []) or []:
+            all_findings.append({**fw, "file": file_name})
+            all_signals.append({
+                "id": fw.get("id", "framework"), "severity": fw.get("severity", "MEDIUM"),
+                "title": fw.get("type", fw.get("id", "Framework risk")),
+                "evidence": fw.get("evidence") or fw.get("sink", ""), "file": file_name,
+                "status": fw.get("status", "potential"), "confidence": fw.get("confidence", "medium"),
+            })
+        for f in norm.get("rich_findings", []) or []:
+            if isinstance(f, dict):
+                all_findings.append({**f, "file": f.get("file", file_name)})
+        asrf = norm.get("attack_surface", {}) or {}
+        for key in all_attack_surface.keys():
+            all_attack_surface[key].extend(asrf.get(key, []) or [])
 
     # Aggregate category counts for a compact table.
     def count(attr):
@@ -222,6 +261,32 @@ def build_report_model(results, ai_summary=None, metadata=None):
         severity = signal.get("severity", "INFO")
         signal_severities[severity] = signal_severities.get(severity, 0) + 1
 
+    def _dedupe_flows(flows):
+        out = []
+        seen = set()
+        for f in flows or []:
+            key = (f.get("id"), f.get("line"), str(f.get("sink", "")))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(f)
+        return out
+
+    dedup_attack = {}
+    for key, items in all_attack_surface.items():
+        uniq = []
+        seen = set()
+        for item in items or []:
+            if isinstance(item, dict):
+                sig = (item.get("url") or item.get("operation") or item.get("type") or "", item.get("method") or "", item.get("line") or 0)
+            else:
+                sig = (str(item),)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            uniq.append(item)
+        dedup_attack[key] = uniq[:80]
+
     return {
         "meta": {
             "generated_at": (metadata or {}).get("generated_at", ""),
@@ -242,10 +307,13 @@ def build_report_model(results, ai_summary=None, metadata=None):
             "transport": sorted(all_transport),
             "signal_counts": signal_severities,
             "signals": [s for s in all_signals if s.get("id") != "notable_features"],
+            "findings": all_findings[:120],
+            "dataflows": _dedupe_flows(all_flows)[:80],
         },
         "files": files,
         "all_dependencies": list(dict.fromkeys([(d.get("name") or d.get("source")) for d in all_dependencies if d.get("name") or d.get("source")]))[:40],
         "all_endpoints": list(dict.fromkeys([str(e) for e in all_endpoints]))[:60],
+        "attack_surface": dedup_attack,
         "ai_summary": ai_summary or {},
     }
 
@@ -601,6 +669,122 @@ def generate_html_report(results, ai_summary=None):
     return "\n".join(html)
 
 
+def _all_unified_findings(model):
+    """Return the richest unified finding list for structured exports."""
+    out = []
+    seen = set()
+    flows = model["summary"].get("dataflows", []) or []
+    findings = model["summary"].get("findings", []) or []
+    for item in findings:
+        key = (item.get("id"), item.get("line"), str(item.get("sink", "")))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    for item in flows:
+        key = (item.get("id"), item.get("line"), str(item.get("sink", "")))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def generate_csv_report(results, ai_summary=None):
+    """Generate a CSV export of unified findings."""
+    import csv
+    import io
+
+    model = build_report_model(results, ai_summary=ai_summary)
+    findings = _all_unified_findings(model)
+    fields = [
+        "id", "type", "severity", "confidence", "status", "file", "line",
+        "source", "sink", "flow", "evidence", "sanitization_detected", "framework",
+    ]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for f in findings:
+        flow = " -> ".join(f.get("flow", []) or [])
+        writer.writerow({
+            "id": f.get("id", ""),
+            "type": f.get("type", ""),
+            "severity": f.get("severity", ""),
+            "confidence": f.get("confidence", ""),
+            "status": f.get("status", ""),
+            "file": f.get("file", ""),
+            "line": f.get("line", 0),
+            "source": f.get("source", ""),
+            "sink": f.get("sink", ""),
+            "flow": flow,
+            "evidence": f.get("evidence", ""),
+            "sanitization_detected": f.get("sanitization_detected", False),
+            "framework": f.get("framework", ""),
+        })
+    return buf.getvalue()
+
+
+def generate_sarif_report(results, ai_summary=None):
+    """Generate a SARIF 2.1.0 export of unified findings."""
+    import json
+    import uuid
+
+    model = build_report_model(results, ai_summary=ai_summary)
+    findings = _all_unified_findings(model)
+    rules_map = {}
+    results_out = []
+    for i, f in enumerate(findings, 1):
+        rule_id = str(f.get("id") or f.get("type") or "unknown")
+        if rule_id not in rules_map:
+            rules_map[rule_id] = {
+                "id": rule_id,
+                "name": rule_id,
+                "shortDescription": {"text": str(f.get("type") or rule_id)},
+                "help": {"text": f"ScriptSentry deterministic finding: {f.get('type', rule_id)}"},
+                "properties": {"tags": [str(f.get("severity", "")).lower()]},
+            }
+        # line numbers are typically 1-indexed in ESTree; SARIF expects 0-indexed.
+        start_line = max(0, int(f.get("line", 1) or 1) - 1)
+        message = f.get("sink") or f.get("evidence") or f.get("type", rule_id)
+        if f.get("source"):
+            message = f"{f.get('source')} -> {message}"
+        if f.get("flow"):
+            message += " | path: " + " -> ".join(f.get("flow", [])[:6])
+        result = {
+            "ruleId": rule_id,
+            "level": _sarif_level(f.get("severity", "MEDIUM")),
+            "message": {"text": str(message)[:1000]},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": str(f.get("file", ""))},
+                    "region": {"startLine": start_line},
+                }
+            }],
+            "properties": {
+                "confidence": f.get("confidence", ""),
+                "status": f.get("status", ""),
+                "source": f.get("source", ""),
+                "sink": f.get("sink", ""),
+                "sanitization_detected": f.get("sanitization_detected", False),
+            },
+        }
+        results_out.append(result)
+    return json.dumps({
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {"name": "ScriptSentry", "version": "2.0",
+                               "informationUri": "https://github.com/AmitPal-CyberBuddy/ScriptSentry",
+                               "rules": list(rules_map.values())}},
+            "results": results_out,
+        }],
+    }, indent=2, ensure_ascii=False)
+
+
+def _sarif_level(severity):
+    return {"CRITICAL": "error", "HIGH": "error", "MEDIUM": "warning", "LOW": "note", "INFO": "note"}.get(str(severity).upper(), "warning")
+
+
 # =========================================
 # 🎨 DASHBOARD / GUI PAYLOAD
 # =========================================
@@ -662,6 +846,9 @@ def _file_diagnostic(file_name, data):
         "decoded_strings": len(data.get("decoded_strings", []) or []),
         "technology_stack": len(data.get("technology_stack", []) or []),
         "notable_features": len(data.get("notable_features", []) or []),
+        "dataflows": len(data.get("dataflows", []) or []),
+        "framework_findings": len(data.get("framework_findings", []) or []),
+        "findings": len(data.get("findings", []) or []),
     }
     score, label, findings = score_risk(data)
     ast = data.get("ast_analysis", {}) or {}
@@ -694,6 +881,11 @@ def _file_diagnostic(file_name, data):
         "exports_count": len(ast.get("exports", []) or []),
         "functions_count": len(ast.get("functions", []) or []),
         "classes_count": len(ast.get("classes", []) or []),
+        "dataflows": data.get("dataflows", [])[:12],
+        "attack_surface": data.get("attack_surface", {}) or {},
+        "framework_findings": data.get("framework_findings", [])[:12],
+        "rich_findings": data.get("findings", [])[:20],
+        "finding_statuses": data.get("finding_statuses", {}) or {},
         "crypto_flows": _crypto_flow_text(data.get("crypto_flows", []))[:12],
         "secrets": _clean_list(data.get("secret_analysis", []), 8) or _clean_list(data.get("secrets", []), 8),
         "keys": _clean_list(data.get("keys", []), 8),
@@ -734,12 +926,16 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         ("decoded_strings", "Decoded / Obfuscated", "#34d399", "sparkles"),
         ("technology_stack", "Tech Stack", "#60a5fa", "layers"),
         ("notable_features", "Notable Features", "#c084fc", "star"),
+        ("dataflows", "Source→Sink Flows", "#fb7185", "flow"),
+        ("framework_findings", "Framework Risks", "#f97316", "layers"),
     ]
 
     all_signals = []
     all_deps = []
     all_methods = set()
     all_transport = set()
+    all_flows = []
+    all_findings = []
 
     for file_name, data in results.items():
         diag = _file_diagnostic(file_name, data)
@@ -750,10 +946,39 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         flow_count += len(diag["crypto_flows"])
         for finding in diag["findings"]:
             findings.append(finding)
+        for flow in diag["dataflows"]:
+            all_flows.append({**flow, "file": file_name})
+        for finding in diag["rich_findings"]:
+            all_findings.append({**finding, "file": finding.get("file", file_name)})
+        flow_ids = {f.get("id") for f in diag["dataflows"]} | {f.get("id") for f in diag["framework_findings"]}
         for sig in diag["signals"]:
-            if sig.get("id") in ("api_surface", "notable_features"):
+            if sig.get("id") in ("api_surface", "notable_features") or sig.get("id") in flow_ids:
                 continue
             all_signals.append({**sig, "file": diag["name"]})
+        # Source→sink data flows are the highest-value signals.
+        for flow in diag["dataflows"]:
+            all_signals.append({
+                "id": flow.get("id", "dataflow"),
+                "severity": flow.get("severity", "HIGH"),
+                "title": flow.get("type", flow.get("id", "Source-to-sink flow")),
+                "evidence": flow.get("evidence") or flow.get("sink", ""),
+                "source": flow.get("source", ""),
+                "sink": flow.get("sink", ""),
+                "flow": flow.get("flow", []),
+                "status": flow.get("status", "potential"),
+                "confidence": flow.get("confidence", "medium"),
+                "file": diag["name"],
+            })
+        for fw in diag["framework_findings"]:
+            all_signals.append({
+                "id": fw.get("id", "framework_finding"),
+                "severity": fw.get("severity", "MEDIUM"),
+                "title": fw.get("type", fw.get("id", "Framework risk")),
+                "evidence": fw.get("evidence") or fw.get("sink", ""),
+                "file": diag["name"],
+                "status": fw.get("status", "potential"),
+                "confidence": fw.get("confidence", "medium"),
+            })
         all_deps.extend(diag["deps"])
         all_methods.update(diag["methods"])
         all_transport.update(diag["transport"])
@@ -816,6 +1041,8 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
             "dependencies": list(dict.fromkeys(all_deps))[:40],
             "methods": sorted(all_methods),
             "transport": sorted(all_transport),
+            "dataflows": all_flows[:80],
+            "findings": all_findings[:120],
         },
         "files": files,
         "radar": {"labels": radar_categories, "values": radar_values},

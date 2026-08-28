@@ -2,8 +2,10 @@ import json
 import unittest
 
 from core.analyzer_service import analyze_content
+from core.attack_surface import extract_attack_surface
 from core.crypto import extract_crypto_material
-from core.reporter import build_dashboard_payload, build_report_model, generate_html_report
+from core.reporter import build_dashboard_payload, build_report_model, generate_csv_report, generate_html_report, generate_sarif_report
+from core.taint import analyze_taint
 
 
 class DashboardAnalysisTest(unittest.TestCase):
@@ -107,6 +109,60 @@ eval(userInput);
         self.assertIn("Authentication Analysis", html)
         self.assertIn("API Inventory", html)
         self.assertIn("Technology Stack", html)
+
+
+    def test_taint_url_search_params_to_innerhtml(self):
+        code = """
+        const p = new URLSearchParams(location.search);
+        const q = p.get('q');
+        const el = document.getElementById('msg');
+        el.innerHTML = q;
+        """
+        flows = analyze_taint(code, "t.js")
+        confirmed = [x for x in flows if x.get("status") == "confirmed"]
+        self.assertTrue(any("innerHTML" in (x.get("sink") or "") for x in confirmed))
+
+    def test_taint_sanitized_flow_is_informational(self):
+        code = """
+        const q = new URLSearchParams(location.search).get('q');
+        const clean = DOMPurify.sanitize(q);
+        document.body.innerHTML = clean;
+        """
+        flows = analyze_taint(code, "t.js")
+        info = [x for x in flows if x.get("status") == "informational"]
+        self.assertTrue(any(x.get("sanitization_detected") or "sanitized" in str(x.get("evidence") or "").lower() for x in info))
+
+    def test_taint_open_redirect(self):
+        code = """
+        const q = new URLSearchParams(location.search).get('next');
+        window.location.href = q;
+        """
+        flows = analyze_taint(code, "t.js")
+        self.assertTrue(any(x.get("id") == "open_redirect" and x.get("status") == "confirmed" for x in flows))
+
+    def test_taint_postmessage_wildcard(self):
+        code = "window.parent.postMessage(userData, '*');"
+        flows = analyze_taint(code, "t.js")
+        self.assertTrue(any("postMessage" in (x.get("type") or "") and "*" in (x.get("evidence") or "") for x in flows))
+
+    def test_attack_surface_extracts_endpoints_and_flags(self):
+        code = """
+        fetch('/api/v1/users?limit=10&admin=1', { method: 'POST', body: JSON.stringify({ name, email }), headers: { 'Authorization': 'Bearer token' } });
+        fetch('/internal/health');
+        new WebSocket('wss://example.com/socket?token=abc');
+        """
+        surface = extract_attack_surface(code, "a.js")
+        self.assertTrue(any(e.get("url", "").startswith("/api/v1/users") for e in surface.get("endpoints", [])))
+        self.assertTrue(any(e.get("url") == "/internal/health" and e.get("internal") for e in surface.get("endpoints", [])))
+        self.assertTrue(any("wss://example.com/socket" in (e.get("url") or "") for e in surface.get("websockets", [])))
+        self.assertTrue(surface.get("auth_hints"))
+
+    def test_csv_and_sarif_reports_gen(self):
+        results = analyze_content("const q = location.search; document.getElementById('x').innerHTML = q;", "p.js")
+        csv = generate_csv_report(results)
+        sarif = generate_sarif_report(results)
+        self.assertIn("id,type,severity", csv)
+        self.assertIn("runs", sarif)
 
 
 if __name__ == "__main__":
