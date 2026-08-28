@@ -1,8 +1,19 @@
+# GitHub Pages workflow template for ScriptSentry.
+#
+# GitHub's hosted runners will not allow a GitHub App without `workflows`
+# permission to create or update files under `.github/workflows/`. To use this
+# workflow, copy this file to `.github/workflows/deploy-pages.yml` in your repo
+# (or the platform used to manage the repo), then enable:
+#   Settings → Pages → Source → GitHub Actions
+#
+# Alternatively, push this file manually with a token that has `workflows`
+# scope (e.g. `gh auth login` with scopes including workflows).
+
 name: Deploy dashboard to GitHub Pages
 
 on:
   push:
-    branches: [main, arena/01a0450f-scriptsentry]
+    branches: [main]
   workflow_dispatch:
 
 permissions:

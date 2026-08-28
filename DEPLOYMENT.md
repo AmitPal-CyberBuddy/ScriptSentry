@@ -51,7 +51,16 @@ Use the included Actions workflow (below), or manually publish the `webui/` fold
 
 ## ⚙️ GitHub Pages workflow (static UI only)
 
-Add `.github/workflows/deploy-pages.yml` and set the repo **Pages → Source → GitHub Actions**.
+A ready-to-use template lives at `deployment/deploy-pages.yml`. Copy it into
+`.github/workflows/deploy-pages.yml`, then set the repo **Pages → Source → GitHub Actions**:
+
+```bash
+cp deployment/deploy-pages.yml .github/workflows/deploy-pages.yml
+```
+
+> Note: hosted GitHub Apps without `workflows` permission cannot create or update
+> `.github/workflows/` files automatically. Copy the template into place from a
+> token/context that has `workflows` scope.
 
 ```yaml
 name: Deploy dashboard to GitHub Pages
