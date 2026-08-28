@@ -24,6 +24,8 @@
 
   let payload = null;
   let lastQuery = null;
+  let backendConnected = false;
+  let backendChecked = false;
 
   /* API base: same origin locally, or a hosted Python backend on Pages. */
   function apiBase() {
@@ -32,6 +34,61 @@
 
   function apiUrl(path) {
     return `${apiBase()}${path.startsWith("/") ? path : `/${path}`}`;
+  }
+
+  /* Backend liveness + privacy gate */
+  function setEngineStatus(state, text) {
+    const dot = $("#engine-dot");
+    const label = $("#engine-status-text");
+    if (!dot || !label) return;
+    dot.className = "dot" + (state === "offline" ? " offline" : state === "checking" ? " checking" : "");
+    label.textContent = text || "Local engine offline — run server.py";
+  }
+
+  async function checkBackend() {
+    const dot = $("#engine-dot");
+    setEngineStatus("checking", "Checking local engine…");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    try {
+      const res = await fetch(apiUrl("/api/health"), { cache: "no-store", signal: controller.signal });
+      if (res.ok) {
+        backendConnected = true;
+        backendChecked = true;
+        setEngineStatus("", "🟢 Local engine connected · private analysis ready");
+        return true;
+      }
+      throw new Error("health not ok");
+    } catch {
+      backendConnected = false;
+      backendChecked = true;
+      setEngineStatus("offline", "🔴 Local engine offline — run server.py");
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function ensureBackend() {
+    if (backendChecked && backendConnected) return true;
+    const ok = await checkBackend();
+    if (!ok) openPrivacyModal();
+    return ok;
+  }
+
+  function openPrivacyModal() {
+    const modal = $("#privacy-modal");
+    if (modal) modal.hidden = false;
+  }
+
+  function closePrivacyModal() {
+    const modal = $("#privacy-modal");
+    if (modal) modal.hidden = true;
+  }
+
+  async function retryBackend() {
+    const ok = await checkBackend();
+    if (ok) closePrivacyModal();
   }
 
   /* ---------------- Core helpers ---------------- */
@@ -187,6 +244,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       alert("Paste some JavaScript first.");
       return;
     }
+    if (!(await ensureBackend())) return;
     showLoading("Analyzing JavaScript…");
     try {
       const query = {
@@ -200,7 +258,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       renderDashboard();
       $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (err) {
-      alert(err.message);
+      setEngineStatus("offline");
+      openPrivacyModal();
     } finally {
       hideLoading();
     }
@@ -212,6 +271,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       alert("Enter a target URL.");
       return;
     }
+    if (!(await ensureBackend())) return;
     showLoading("Discovering and scanning JavaScript… this can take a moment.");
     try {
       const query = {
@@ -228,7 +288,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       renderDashboard();
       $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (err) {
-      alert(err.message);
+      setEngineStatus("offline");
+      openPrivacyModal();
     } finally {
       hideLoading();
     }
@@ -241,6 +302,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       alert("Analyze something before exporting a report.");
       return;
     }
+    showLoading("Generating report…");
+    if (!(await ensureBackend())) return;
     showLoading("Generating report…");
     try {
       const res = await fetch(apiUrl(`/api/report?format=${format}`), {
@@ -262,7 +325,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
     } catch (err) {
-      alert(err.message);
+      setEngineStatus("offline");
+      openPrivacyModal();
     } finally {
       hideLoading();
     }
@@ -639,12 +703,31 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       $("#code-input").value = SAMPLE;
       $("#pane-code").scrollIntoView({ behavior: "smooth", block: "center" });
     });
+    $("#close-modal").addEventListener("click", closePrivacyModal);
+    $("#retry-backend").addEventListener("click", retryBackend);
+    $("#copy-setup").addEventListener("click", () => {
+      const code = $("#setup-code").textContent;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(code);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = code;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+      }
+      $("#copy-setup").textContent = "✅ Copied";
+      setTimeout(() => ($("#copy-setup").textContent = "📋 Copy"), 1600);
+    });
     document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closePrivacyModal();
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         if ($("#pane-code").classList.contains("active")) analyzeCode();
         else analyzeUrl();
       }
     });
+    checkBackend();
   }
 
   document.addEventListener("DOMContentLoaded", init);

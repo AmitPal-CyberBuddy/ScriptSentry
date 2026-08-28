@@ -25,9 +25,9 @@
           <div class="sub">JS Intelligence Studio</div>
         </span>
       </div>
-      <div class="status">
-        <span class="dot"></span>
-        Engine online · 12 detection modules
+      <div class="status" id="engine-status">
+        <span class="dot" id="engine-dot"></span>
+        <span id="engine-status-text">Checking local engine…</span>
       </div>
     </header>
 
@@ -39,10 +39,20 @@
         through a motion-rich dashboard.
       </p>
       <div class="badges">
+        <span class="badge">🔒 100% local analysis</span>
+        <span class="badge">🆓 Free &amp; open source</span>
         <span class="badge">⚡ Real-time analysis</span>
         <span class="badge">🔐 Crypto &amp; key hunts</span>
         <span class="badge">🌐 API surface mapping</span>
-        <span class="badge">🧠 Visual risk scoring</span>
+      </div>
+
+      <div class="privacy-banner fade-up">
+        <div class="privacy-ico">🔒</div>
+        <div>
+          <b>Private by design.</b> This hosted page is just the interface. Your JavaScript
+          never leaves your computer — it is analyzed on <code>localhost</code> by
+          <b>ScriptSentry&nbsp;server.py</b>. No code uploads, no clouds, no accounts.
+        </div>
       </div>
     </section>
 
@@ -179,8 +189,39 @@
     </section>
 
     <footer class="footer">
-      ScriptSentry · JS Intelligence Studio · run <code>python3 server.py</code>
+      ScriptSentry · JS Intelligence Studio · <strong>private &amp; free</strong> · run <code>python3 server.py</code>
     </footer>
+  </div>
+
+  <div class="modal-overlay" id="privacy-modal" hidden>
+    <div class="modal" role="dialog" aria-labelledby="privacy-title">
+      <div class="modal-ico">🔒</div>
+      <h2 id="privacy-title">Run it locally — it's free &amp; private</h2>
+      <p>
+        You're viewing the <b>hosted interface</b>. For privacy, ScriptSentry never sends your
+        code to a cloud. Start the local engine, then this page will connect to it automatically.
+      </p>
+      <ol class="setup-steps">
+        <li><b>Get the project:</b> clone or download <code>ScriptSentry</code>.</li>
+        <li><b>Open a terminal</b> inside the project folder.</li>
+        <li><b>Install deps:</b> <code>pip install -r requirements.txt</code></li>
+        <li><b>Start the server:</b> <code>python3 server.py --port 8000</code></li>
+        <li><b>Keep this page open</b> and press <em>Retry connection</em> (connected via <code>127.0.0.1</code>).</li>
+      </ol>
+      <div class="code-box">
+        <pre id="setup-code">cd ScriptSentry
+pip install -r requirements.txt
+python3 server.py --port 8000</pre>
+        <button class="btn ghost" id="copy-setup">📋 Copy</button>
+      </div>
+      <p class="modal-note">
+        ⚠️ If you change the port, update <code>webui/config.js</code> to the same port.
+      </p>
+      <div class="modal-actions">
+        <button class="btn secondary" id="close-modal">Got it</button>
+        <button class="btn" id="retry-backend">🔄 Retry connection</button>
+      </div>
+    </div>
   </div>
 
   <script src="/app.js"></script>

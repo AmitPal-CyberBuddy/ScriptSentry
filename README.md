@@ -36,6 +36,19 @@ python3 server.py
 Open the dashboard URL printed by the server, paste JavaScript, or enter a target URL.
 The dashboard can **Export HTML Report** and **Export Text Report** after any analysis.
 
+### 🌐 GitHub Pages / hosted UI (free & private)
+
+You can host the dashboard UI on GitHub Pages. The backend stays **entirely local**:
+
+1. Publish `webui/` to Pages (see `deployment/deploy-pages.yml`).
+2. A visitor opens the hosted page and gets a **privacy-first setup guide** if `server.py` isn't
+   running locally.
+3. They run `pip install -r requirements.txt && python3 server.py --port 8000` on their machine.
+4. The hosted page connects to the local engine (`http://127.0.0.1:8000`) and runs fully private —
+   no code ever uploads to the cloud.
+
+See `DEPLOYMENT.md` for the full guide.
+
 Launch the dashboard directly from the CLI too:
 
 ```bash

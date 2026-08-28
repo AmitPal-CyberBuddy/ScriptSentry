@@ -1,5 +1,38 @@
 # 🚀 Deployment Guide
 
+## 🔒 Privacy-first static UI + local engine (recommended)
+
+This is the **free, privacy-first** setup:
+
+- GitHub Pages hosts the UI (`webui/index.html`, `app.js`, `styles.css`, `config.js`).
+- The analyzer runs **only on the visitor's machine** via `python3 server.py`.
+- No JavaScript ever uploads to a cloud. The page is just chrome; `server.py` does the work locally.
+
+### How it works
+1. A visitor opens the hosted page.
+2. If `server.py` is not running, the UI shows an engine-status badge:
+   `🔴 Local engine offline — run server.py`.
+3. When they press Analyze / Scan / Export, a **privacy modal** opens with a short setup guide.
+4. They run `python3 server.py --port 8000` locally.
+5. The hosted page connects to `http://127.0.0.1:8000` and the tool runs from the hosted UI.
+
+### Wiring
+- `webui/config.js` auto-selects the API base:
+  - served from localhost → same origin
+  - hosted on GitHub Pages → `http://127.0.0.1:8000`
+- `server.py` exposes `/api/health`, `/api/analyze`, `/api/report` with CORS +
+  `Access-Control-Allow-Private-Network: true` so a public page can talk to the loopback engine.
+- If a visitor changes the port, they update `webui/config.js` to the matching port.
+
+### Set it up
+1. Copy `deployment/deploy-pages.yml` to `.github/workflows/deploy-pages.yml`.
+2. Enable **Settings → Pages → Source → GitHub Actions**.
+3. Publish `webui/` (the workflow copies `webui/*` into `_site/`).
+
+---
+
+## Hosted backend alternative
+
 ScriptSentry has two parts:
 
 | Part | Files | Can it run on GitHub Pages? |
