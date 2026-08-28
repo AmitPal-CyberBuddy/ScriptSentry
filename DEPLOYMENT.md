@@ -15,6 +15,8 @@ This is the **free, privacy-first** setup:
 3. When they press Analyze / Scan / Export, a **privacy modal** opens with a short setup guide.
 4. They run `python3 server.py --port 8000` locally.
 5. The hosted page connects to `http://127.0.0.1:8000` and the tool runs from the hosted UI.
+6. Copy the pairing token printed by `server.py` into the UI's pairing field. It is kept only in
+   this tab's session storage and is sent in an auth header, never in a URL or report.
 
 ### Wiring
 - `webui/config.js` auto-selects the API base:
@@ -86,8 +88,10 @@ Any Python 3.11+ host works. Free options:
 - **HuggingFace Spaces** — `python3 server.py --port 7860`
 - **Any VPS** — `nohup python3 server.py --port 8000 &`
 
-The backend listens on `0.0.0.0` and already returns `Access-Control-Allow-Origin: *`
-on API responses, so it accepts requests from any GitHub Pages origin.
+The backend should be protected behind the platform's TLS/auth boundary when deployed publicly.
+It allows exact GitHub Pages origins (and exact values in `SCRIPTSENTRY_ALLOWED_ORIGINS`) and
+requires the process pairing token for analysis, status, results, cancellation, and reports.
+Do not put that token in a public repository or `config.js`; enter it in the dashboard session.
 
 ### 2. Point the frontend at the backend
 
@@ -160,8 +164,7 @@ jobs:
 
 > If you use a custom URL path (e.g. `https://user.github.io/repo/`), set asset
 > paths in `webui/index.html` to relative (`styles.css`, `app.js`, `config.js`)
-> rather than `/styles.css`. The included workflow uses absolute paths by default;
-> update the `link`/`script` tags if needed.
+> rather than `/styles.css`. The included UI already uses relative asset paths.
 
 ---
 

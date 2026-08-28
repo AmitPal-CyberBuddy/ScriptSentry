@@ -389,6 +389,22 @@ body {
   flex-wrap: wrap;
 }
 
+.error-note {
+  margin: 10px 0 0 !important;
+  padding: 10px 12px;
+  border: 1px solid rgba(251, 113, 133, .35);
+  border-radius: 10px;
+  background: rgba(251, 113, 133, .1);
+  color: #fecdd3 !important;
+  font-size: 12px !important;
+  overflow-wrap: anywhere;
+}
+
+.cancel-btn {
+  align-self: center;
+  white-space: nowrap;
+}
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }

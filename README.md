@@ -18,9 +18,13 @@ and how risky that behavior is, all in a modern, animated dashboard.
   `assets/**`. URL-unique filenames keep same-named bundles from different folders from colliding,
   and the recursive walk resolves each nested chunk against its own URL instead of the page URL.
 - **Optional local runtime evidence** — Playwright-driven headless-browser pass that captures dynamic
-  chunks, console errors, DOM sink writes, network/WebSocket activity and storage-key usage visible
-  only when the page actually executes. Cookies: names only; request bodies/localStorage values are
-  never stored.
+  chunks, console errors, DOM sink writes, network/WebSocket activity, storage reads/writes, cookie
+  access and `postMessage` activity visible only when the page actually executes. Bounded response
+  bodies are rescanned locally as runtime-loaded scripts; source code is removed from serialized
+  evidence. Cookies: names only; request bodies/localStorage values are never stored.
+- **Source-map awareness** — bounded external/inline map metadata (sources, sourceRoot, mappings
+  presence and fetch status) is attached to the owning script without exposing source-map bodies.
+  This improves provenance without turning the engine into an unrestricted source downloader.
 - **Script inventory & behavior intelligence** — first/third-party attribution, inline/external/
   dynamic loading method, script hashes, sensitive reads (URL/cookies/storage/forms), DOM/network
   writes, browser API map, external destinations, script risk score, and static/runtime
@@ -68,7 +72,10 @@ python3 server.py
 ```
 
 Open the dashboard URL printed by the server, paste JavaScript, or enter a target URL.
-The dashboard can **Export HTML Report** and **Export Text Report** after any analysis.
+The server prints a one-time-per-process **engine pairing token** at startup. Enter it in the
+privacy modal when prompted; the UI keeps it in this browser tab's session storage and sends it
+only as an `X-ScriptSentry-Token` header. The dashboard can **Export HTML Report** and **Export
+Text Report** after any analysis.
 
 ### 🌐 GitHub Pages / hosted UI (free & private)
 
@@ -82,8 +89,10 @@ You can host the dashboard UI on GitHub Pages. The backend stays **entirely loca
    no code ever uploads to the cloud.
 
 The local engine only accepts API calls from localhost/loopback origins and GitHub Pages
-origins (plus `SCRIPTSENTRY_ALLOWED_ORIGINS` if you host the UI on a custom domain). Other
-websites cannot drive it.
+origins (plus an exact `SCRIPTSENTRY_ALLOWED_ORIGINS` entry if you host the UI on a custom
+domain). Health is public, but analysis, status, results, cancellation, and exports require
+the pairing token. The crawler also rejects credential-bearing URLs, loopback/private IPs,
+and unsafe redirects. Other websites cannot drive it as an open proxy.
 
 See `DEPLOYMENT.md` for the full guide.
 
@@ -110,12 +119,14 @@ The dashboard has an analyst **Findings** tab where you can triage each signal a
 Equivalent API endpoints (used by the UI, also callable directly):
 
 ```bash
-curl -X POST localhost:8000/api/report?format=html \
-  -H 'Content-Type: application/json' \
+# Use the token printed by server.py; do not commit it or put it in a public config file.
+TOKEN='paste-the-process-token-here'
+curl -X POST 'http://localhost:8000/api/report?format=html' \
+  -H "X-ScriptSentry-Token: $TOKEN" -H 'Content-Type: application/json' \
   -d '{"mode":"code","code":"const key=EncryptionKey=\"abc\";"}'
 
-curl -X POST "localhost:8000/api/report?format=csv" \
-  -H 'Content-Type: application/json' \
+curl -X POST 'http://localhost:8000/api/report?format=csv' \
+  -H "X-ScriptSentry-Token: $TOKEN" -H 'Content-Type: application/json' \
   -d '{"mode":"code","code":"const q=location.search;innerHTML=q;"}'
 ```
 
@@ -135,6 +146,8 @@ Optional AI-style summary:
 ```bash
 python3 main.py https://example.com --ai openai --api-key YOUR_KEY --model gpt-4o-mini
 ```
+
+See [`AUDIT.md`](AUDIT.md) for the repository audit, security decisions, verification commands, and deliberate limitations.
 
 ## 🗂 Architecture
 

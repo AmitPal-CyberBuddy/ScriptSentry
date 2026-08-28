@@ -58,9 +58,9 @@ def _risk_score(data):
     score = 0
     findings = []
 
-    if data.get("secrets"):
+    if data.get("credible_secrets"):
         score += 3
-        findings.append("HIGH: Hardcoded secret/token material detected")
+        findings.append("HIGH: Hardcoded secret candidate requires verification")
     if data.get("keys") and data.get("ivs"):
         score += 4
         findings.append("CRITICAL: Hardcoded key/IV pair detected")
@@ -130,7 +130,11 @@ def _normalize_data(file_name, data):
         "real_crypto_detected": bool(data.get("real_crypto_detected")),
         "file_size": data.get("file_size", 0),
         "line_count": data.get("line_count", 0),
+        "source_map": data.get("source_map", {}),
+        "analysis_warnings": data.get("analysis_warnings", []),
+        "analyzer_errors": data.get("analyzer_errors", []),
         "secrets": data.get("secrets", []),
+        "credible_secrets": data.get("credible_secrets", data.get("secrets", [])),
         "keys": data.get("keys", []),
         "ivs": data.get("ivs", []),
         "crypto": data.get("crypto", []),
@@ -369,7 +373,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
         "meta": {
             "generated_at": (metadata or {}).get("generated_at", ""),
             "engine": "ScriptSentry Analyzer",
-            "engine_version": "2.0",
+            "engine_version": "2.1",
             "source": (metadata or {}).get("source", ""),
             "mode": (metadata or {}).get("mode", "code"),
             "scan_summary": scan_summary,
@@ -886,7 +890,7 @@ def generate_html_report(results, ai_summary=None):
             html.append(f"<li>{esc(line)}</li>")
         html.append("</ul></div>")
 
-    html.append("</div><div class=\"foot\">ScriptSentry Analyzer v2.0 · deterministic regex + AST signals · this is a triage report, not a proof of exploitation.</div>")
+    html.append("</div><div class=\"foot\">ScriptSentry Analyzer v2.1 · deterministic regex + AST signals · this is a triage report, not a proof of exploitation.</div>")
     html.append("</div></body></html>")
     return "\n".join(html)
 
@@ -985,7 +989,7 @@ def generate_sarif_report(results, ai_summary=None):
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
         "runs": [{
-            "tool": {"driver": {"name": "ScriptSentry", "version": "2.0",
+            "tool": {"driver": {"name": "ScriptSentry", "version": "2.1",
                                "informationUri": "https://github.com/AmitPal-CyberBuddy/ScriptSentry",
                                "rules": list(rules_map.values())}},
             "results": results_out,
@@ -1114,6 +1118,8 @@ def _file_diagnostic(file_name, data):
         "data_flow": _clean_list(data.get("data_flow_summary", []), 8),
         "auth": _clean_list(data.get("auth_summary", []), 8),
         "obfuscation": _clean_list(data.get("obfuscation_analysis", {}).get("evidence", []), 8),
+        "source_map": data.get("source_map", {}) or {},
+        "analysis_warnings": _clean_list(data.get("analysis_warnings", []), 8),
     }
 
 
@@ -1275,7 +1281,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         "meta": {
             "generated_at": metadata.get("generated_at", "") if metadata else "",
             "engine": "ScriptSentry Analyzer",
-            "engine_version": "2.0",
+            "engine_version": "2.1",
             "analysis_mode": metadata.get("mode", "code") if metadata else "code",
             "source": metadata.get("source", "") if metadata else "",
             "files": len(files),

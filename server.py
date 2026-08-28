@@ -4,22 +4,24 @@
 Run:
     python3 server.py
 
-Then open the printed preview URL. The server binds 0.0.0.0 so it is reachable
-from the Arena live preview environment.
+The secure default binds only to loopback.  Use ``--host 0.0.0.0`` only when a
+reverse proxy or a development preview explicitly requires network exposure.
 """
 import argparse
+import hmac
 import json
 import os
-import sys
+import secrets
 import threading
 from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from config import ALLOWED_ORIGINS, DEFAULT_PROFILE, SCAN_MAX_WORKERS, SCAN_PROFILES
+from config import DEFAULT_PROFILE, SCAN_MAX_WORKERS, SCAN_PROFILES
 from core.analyzer_service import analyze_content, analyze_url
 from core.jobs import jobs
 from core.runtime_evidence import playwright_available, runtime_evidence_enabled
+from core.url_policy import validate_public_url
 from core.reporter import (
     build_dashboard_payload,
     generate_csv_report,
@@ -30,12 +32,16 @@ from core.reporter import (
 
 WEB_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webui")
 MAX_BODY = 4 * 1024 * 1024  # 4 MB
+MAX_URL_LENGTH = 2048
+# A pairing token is deliberately process-scoped.  It is printed once at
+# startup and never returned by health or included in a report response.
+API_TOKEN = os.environ.get("SCRIPTSENTRY_API_TOKEN", "").strip() or secrets.token_urlsafe(32)
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
     """Serves the single-page dashboard and answers analysis requests."""
 
-    server_version = "ScriptSentryDashboard/2.0"
+    server_version = "ScriptSentryDashboard/2.1"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_ROOT, **kwargs)
@@ -43,43 +49,65 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f"[webui] {self.address_string()} {fmt % args}", flush=True)
 
+    def end_headers(self):
+        # These headers apply to static UI responses as well as API responses.
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), usb=()")
+        super().end_headers()
+
     def _send_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Private-Network", "true")
+        origin = self.headers.get("Origin", "")
+        if origin and self._is_allowed_origin(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
         self.wfile.write(body)
 
     def _send_error_json(self, message, status=400):
         self._send_json({"ok": False, "error": message}, status=status)
 
+    def _send_cors_headers(self):
+        origin = self.headers.get("Origin", "")
+        if origin and self._is_allowed_origin(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Private-Network", "true")
+
     @staticmethod
     def _is_allowed_origin(origin):
-        if not origin or origin in ("null", "file://"):
+        """Check an exact browser origin; never use a prefix allowlist."""
+        if not origin:
             return True
-        low = origin.lower()
-        if low.startswith("http://localhost:") or low == "http://localhost":
-            return True
-        if low.startswith("http://127.0.0.1:") or low == "http://127.0.0.1":
-            return True
-        if low.startswith("https://127.0.0.1:") or low.startswith("http://0.0.0.0:"):
+        if origin.lower() in ("null", "file://"):
             return True
         try:
-            host = urlparse(low).hostname or ""
+            parsed = urlparse(origin)
+            scheme = (parsed.scheme or "").lower()
+            host = (parsed.hostname or "").lower().rstrip(".")
         except Exception:
-            host = ""
-        if host == "github.io" or host.endswith(".github.io"):
+            return False
+        if scheme == "http" and host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
             return True
-        # Allow a small deployment override for custom hosted domains.
-        for extra in os.environ.get("SCRIPTSENTRY_ALLOWED_ORIGINS", "").split(","):
-            extra = extra.strip().lower()
-            if extra and (low == extra or low.startswith(extra + ":")):
-                return True
-        return False
+        if scheme == "https" and host in {"127.0.0.1", "::1"}:
+            return True
+        # GitHub Pages is a deployment surface, not an authentication boundary:
+        # it is allowed for CORS but still requires the pairing token below.
+        if scheme == "https" and host.endswith(".github.io") and host != "github.io":
+            return True
+        configured = {
+            value.strip().lower().rstrip("/")
+            for value in os.environ.get("SCRIPTSENTRY_ALLOWED_ORIGINS", "").split(",")
+            if value.strip()
+        }
+        return origin.lower().rstrip("/") in configured
 
     def _reject_untrusted_origin(self):
         origin = self.headers.get("Origin", "")
@@ -88,15 +116,33 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return True
         return False
 
+    def _require_api_auth(self):
+        presented = self.headers.get("X-ScriptSentry-Token", "")
+        if not presented or not hmac.compare_digest(str(presented), API_TOKEN):
+            self._send_error_json("Engine pairing token required", 401)
+            return False
+        return True
+
     def do_OPTIONS(self):
         if self._reject_untrusted_origin():
             return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        if origin and self._is_allowed_origin(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-ScriptSentry-Token")
+        self.send_header("Access-Control-Max-Age", "300")
         self.end_headers()
+
+    @staticmethod
+    def _bounded_int(value, default, lower, upper):
+        try:
+            return max(lower, min(int(value), upper))
+        except (TypeError, ValueError):
+            return default
 
     def _query_param(self, parsed, key, default=""):
         if not parsed.query:
@@ -114,13 +160,17 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 self._send_json({
                     "ok": True,
                     "engine": "ScriptSentry Analyzer",
-                    "version": "2.0",
+                    "version": "2.1",
                     "privacy": "local-only",
+                    "auth_required": True,
+                    "pairing": "Set X-ScriptSentry-Token to use analysis endpoints.",
                     "runtime_evidence": {
                         "enabled": runtime_evidence_enabled(),
                         "playwright": playwright_available(),
                     },
                 })
+                return
+            if not self._require_api_auth():
                 return
             if parsed.path == "/api/status":
                 job_id = self._query_param(parsed, "job_id", "")
@@ -150,6 +200,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def _read_json_body(self):
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type not in ("", "application/json"):
+            self._send_error_json("Content-Type must be application/json", 415)
+            return None
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -171,8 +225,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if self._reject_untrusted_origin():
             return
+        if parsed.path.startswith("/api/") and not self._require_api_auth():
+            return
         body = self._read_json_body()
         if body is None:
+            return
+        if parsed.path == "/api/cancel":
+            job_id = str(body.get("job_id", "")).strip()
+            job = jobs.get(job_id)
+            if job is None:
+                self._send_error_json("Unknown job_id", 404)
+                return
+            if job.status in ("done", "error", "canceled"):
+                self._send_json({"ok": True, "job": job.snapshot()})
+                return
+            jobs.cancel(job_id)
+            self._send_json({"ok": True, "job": job.snapshot()})
             return
         if parsed.path == "/api/report":
             self._handle_report(parsed, body)
@@ -196,6 +264,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     k, v = part.split("=", 1)
                     query[k] = v
         report_format = query.get("format", "html").lower()
+        if report_format not in {"html", "txt", "csv", "sarif"}:
+            self._send_error_json("format must be html, txt, csv, or sarif", 400)
+            return
         try:
             job_id = str(body.get("job_id", "")).strip()
             if job_id:
@@ -225,7 +296,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Disposition", "attachment; filename=scriptsentry-report.txt")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._send_cors_headers()
             self.send_header("Access-Control-Allow-Private-Network", "true")
             self.end_headers()
             self.wfile.write(data)
@@ -238,7 +309,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "text/csv; charset=utf-8")
             self.send_header("Content-Disposition", "attachment; filename=scriptsentry-report.csv")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._send_cors_headers()
             self.send_header("Access-Control-Allow-Private-Network", "true")
             self.end_headers()
             self.wfile.write(data)
@@ -251,7 +322,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "application/sarif+json; charset=utf-8")
             self.send_header("Content-Disposition", "attachment; filename=scriptsentry-report.sarif")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._send_cors_headers()
             self.send_header("Access-Control-Allow-Private-Network", "true")
             self.end_headers()
             self.wfile.write(data)
@@ -263,7 +334,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Disposition", "attachment; filename=scriptsentry-report.html")
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_cors_headers()
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
         self.wfile.write(data)
@@ -272,14 +343,18 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         mode = str(body.get("mode", "code")).strip().lower()
         if mode == "url":
             url = str(body.get("url", "")).strip()
-            if not url.startswith(("http://", "https://")):
+            if len(url) > MAX_URL_LENGTH or not url.startswith(("http://", "https://")):
                 raise ValueError("Enter a valid http(s) URL")
+            if not os.environ.get("SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS"):
+                valid, reason = validate_public_url(url)
+                if not valid:
+                    raise ValueError(reason)
             profile = str(body.get("profile", DEFAULT_PROFILE)).strip()
             profile_cfg = SCAN_PROFILES.get(profile, SCAN_PROFILES[DEFAULT_PROFILE])
-            max_depth = max(1, min(int(body.get("max_depth", profile_cfg["max_depth"])), 10))
-            timeout = max(2, min(int(body.get("timeout", profile_cfg["timeout"])), 60))
-            max_files = max(1, min(int(body.get("max_files", profile_cfg["max_files"])), 1000))
-            max_workers = max(1, min(int(body.get("max_workers", SCAN_MAX_WORKERS)), 32))
+            max_depth = self._bounded_int(body.get("max_depth", profile_cfg["max_depth"]), profile_cfg["max_depth"], 1, 10)
+            timeout = self._bounded_int(body.get("timeout", profile_cfg["timeout"]), profile_cfg["timeout"], 2, 60)
+            max_files = self._bounded_int(body.get("max_files", profile_cfg["max_files"]), profile_cfg["max_files"], 1, 1000)
+            max_workers = self._bounded_int(body.get("max_workers", SCAN_MAX_WORKERS), SCAN_MAX_WORKERS, 1, 32)
             return analyze_url(
                 url, max_depth=max_depth, timeout=timeout,
                 max_files=max_files, max_workers=max_workers,
@@ -290,35 +365,31 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         filename = str(body.get("filename", "inline.js")).strip() or "inline.js"
         return analyze_content(code, filename=filename)
 
-    def _handle_code_analysis(self, body):
-        code = body.get("code")
-        if not isinstance(code, str) or not code.strip():
-            self._send_error_json("Paste some JavaScript to analyze", 400)
-            return
-        filename = str(body.get("filename", "inline.js")).strip() or "inline.js"
-        try:
-            results = analyze_content(code, filename=filename)
-            payload = self._payload(results, metadata={"mode": "code", "source": filename})
-            self._send_json({"ok": True, "type": "code", "payload": payload})
-        except Exception as exc:
-            self._send_error_json(f"Analysis failed: {exc}", 500)
-
     def _handle_async_analysis(self, body, mode):
         if mode == "url":
             url = str(body.get("url", "")).strip()
-            if not url.startswith(("http://", "https://")):
+            if len(url) > MAX_URL_LENGTH or not url.startswith(("http://", "https://")):
                 self._send_error_json("Enter a valid http(s) URL", 400)
                 return
+            if not os.environ.get("SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS"):
+                valid, reason = validate_public_url(url)
+                if not valid:
+                    self._send_error_json(reason, 400)
+                    return
             profile = str(body.get("profile", DEFAULT_PROFILE)).strip()
             profile_cfg = SCAN_PROFILES.get(profile, SCAN_PROFILES[DEFAULT_PROFILE])
-            max_depth = max(1, min(int(body.get("max_depth", profile_cfg["max_depth"])), 10))
-            timeout = max(2, min(int(body.get("timeout", profile_cfg["timeout"])), 60))
-            max_files = max(1, min(int(body.get("max_files", profile_cfg["max_files"])), 1000))
-            max_workers = max(1, min(int(body.get("max_workers", SCAN_MAX_WORKERS)), 32))
-            job = jobs.create(
-                mode="url", source=url, profile=profile,
-                max_files=max_files, max_depth=max_depth, timeout=timeout,
-            )
+            max_depth = self._bounded_int(body.get("max_depth", profile_cfg["max_depth"]), profile_cfg["max_depth"], 1, 10)
+            timeout = self._bounded_int(body.get("timeout", profile_cfg["timeout"]), profile_cfg["timeout"], 2, 60)
+            max_files = self._bounded_int(body.get("max_files", profile_cfg["max_files"]), profile_cfg["max_files"], 1, 1000)
+            max_workers = self._bounded_int(body.get("max_workers", SCAN_MAX_WORKERS), SCAN_MAX_WORKERS, 1, 32)
+            try:
+                job = jobs.create(
+                    mode="url", source=url, profile=profile,
+                    max_files=max_files, max_depth=max_depth, timeout=timeout,
+                )
+            except RuntimeError as exc:
+                self._send_error_json(str(exc), 429)
+                return
             jobs.start(
                 job.id,
                 analyze_url,
@@ -328,38 +399,33 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 max_files=max_files,
                 max_workers=max_workers,
                 progress_callback=lambda **kw: job.update(**kw),
+                cancel_check=job.cancel_event.is_set,
             )
         else:
             code = body.get("code")
             if not isinstance(code, str) or not code.strip():
                 self._send_error_json("Paste some JavaScript to analyze", 400)
                 return
+            if len(code.encode("utf-8", errors="ignore")) > 3 * 1024 * 1024:
+                self._send_error_json("JavaScript input is limited to 3 MB", 413)
+                return
             filename = str(body.get("filename", "inline.js")).strip() or "inline.js"
-            job = jobs.create(mode="code", source=filename, max_files=1)
-            jobs.start(job.id, analyze_content, code, filename=filename)
+            filename = filename.replace("\\x00", "")[:240]
+            try:
+                job = jobs.create(mode="code", source=filename, max_files=1)
+            except RuntimeError as exc:
+                self._send_error_json(str(exc), 429)
+                return
+            jobs.start(
+                job.id,
+                analyze_content,
+                code,
+                filename=filename,
+                progress_callback=lambda **kw: job.update(**kw),
+                cancel_check=job.cancel_event.is_set,
+            )
 
         self._send_json({"ok": True, "job_id": job.id, "job": job.snapshot()})
-
-    def _handle_url_analysis(self, body):
-        url = str(body.get("url", "")).strip()
-        if not url.startswith(("http://", "https://")):
-            self._send_error_json("Enter a valid http(s) URL", 400)
-            return
-        profile = str(body.get("profile", DEFAULT_PROFILE)).strip()
-        profile_cfg = SCAN_PROFILES.get(profile, SCAN_PROFILES[DEFAULT_PROFILE])
-        max_depth = max(1, min(int(body.get("max_depth", profile_cfg["max_depth"])), 10))
-        timeout = max(2, min(int(body.get("timeout", profile_cfg["timeout"])), 60))
-        max_files = max(1, min(int(body.get("max_files", profile_cfg["max_files"])), 1000))
-        max_workers = max(1, min(int(body.get("max_workers", SCAN_MAX_WORKERS)), 32))
-        try:
-            results = analyze_url(url, max_depth=max_depth, timeout=timeout, max_files=max_files, max_workers=max_workers)
-            if not results:
-                self._send_json({"ok": True, "type": "url", "payload": self._payload({}, metadata={"mode": "url", "source": url})})
-                return
-            payload = self._payload(results, metadata={"mode": "url", "source": url})
-            self._send_json({"ok": True, "type": "url", "payload": payload})
-        except Exception as exc:
-            self._send_error_json(f"Remote analysis failed: {exc}", 500)
 
     @staticmethod
     def _payload(results, metadata=None):
@@ -371,19 +437,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         return build_dashboard_payload(results, metadata=meta)
 
 
-def make_server(host="0.0.0.0", port=8000):
+def make_server(host="127.0.0.1", port=8000):
     handler = DashboardHandler
     return ThreadingHTTPServer((host, port), handler)
 
 
 def main():
     parser = argparse.ArgumentParser(description="ScriptSentry Web dashboard")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
     args = parser.parse_args()
 
     server = make_server(args.host, args.port)
     print(f"ScriptSentry dashboard listening on http://{args.host}:{args.port}", flush=True)
+    print(f"Engine pairing token: {API_TOKEN}", flush=True)
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print("WARNING: non-loopback binding; protect the port with a firewall/reverse proxy.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

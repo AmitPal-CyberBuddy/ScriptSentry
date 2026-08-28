@@ -34,7 +34,8 @@ INSTRUMENTATION_JS = r"""
   const w = window;
   if (w.__SS_RUNTIME__) return;
   const r = w.__SS_RUNTIME__ = {
-    evals: [], timers: [], dom: [], storage: [], writes: [], errors: []
+    evals: [], timers: [], dom: [], storage: [], writes: [], errors: [],
+    browser_api: [], post_messages: [], cookie_access: []
   };
 
   const push = (arr, item) => {
@@ -110,8 +111,49 @@ INSTRUMENTATION_JS = r"""
     };
   } catch (e) {}
 
+  try {
+    const cookieDesc = Object.getOwnPropertyDescriptor(Document.prototype, "cookie");
+    if (cookieDesc && cookieDesc.get) {
+      Object.defineProperty(Document.prototype, "cookie", {
+        configurable: cookieDesc.configurable,
+        enumerable: cookieDesc.enumerable,
+        get: function () {
+          push(r.cookie_access, { operation: "read", url: location.href });
+          return cookieDesc.get.call(this);
+        },
+        set: function (value) {
+          push(r.cookie_access, { operation: "write", valueLength: String(value).length, url: location.href });
+          return cookieDesc.set ? cookieDesc.set.call(this, value) : undefined;
+        },
+      });
+    }
+  } catch (e) {}
+
+  try {
+    const originalPostMessage = w.postMessage;
+    w.postMessage = function (message, targetOrigin) {
+      push(r.post_messages, { direction: "out", targetOrigin: String(targetOrigin || ""), valueLength: String(message).length, url: location.href });
+      return originalPostMessage.apply(this, arguments);
+    };
+    const originalAddEventListener = w.addEventListener;
+    w.addEventListener = function (type, listener, options) {
+      if (String(type).toLowerCase() === "message") push(r.post_messages, { direction: "in", targetOrigin: "listener", url: location.href });
+      return originalAddEventListener.call(this, type, listener, options);
+    };
+  } catch (e) {}
+
   const trackStorage = (storage, name) => {
     try {
+      const originalGet = storage.getItem;
+      storage.getItem = function (key) {
+        push(r.storage, {
+          storage: name,
+          operation: "getItem",
+          key: String(key),
+          url: location.href,
+        });
+        return originalGet.call(storage, key);
+      };
       const originalSet = storage.setItem;
       storage.setItem = function (key, value) {
         push(r.storage, {
@@ -143,7 +185,7 @@ INSTRUMENTATION_JS = r"""
 
 EXTRACT_INSTRUMENTED_STATE_JS = r"""
 () => {
-  const r = window.__SS_RUNTIME__ || { evals: [], timers: [], dom: [], storage: [], writes: [] };
+  const r = window.__SS_RUNTIME__ || { evals: [], timers: [], dom: [], storage: [], writes: [], post_messages: [], cookie_access: [] };
   const safe = (obj) => {
     try {
       return Object.keys(obj || {});
@@ -165,6 +207,8 @@ EXTRACT_INSTRUMENTED_STATE_JS = r"""
     dom_sinks: r.dom || [],
     storage_writes: r.storage || [],
     storage_removals: r.writes || [],
+    post_messages: r.post_messages || [],
+    cookie_access: r.cookie_access || [],
   };
 }
 """
@@ -223,11 +267,24 @@ def _record_response(response, store, limit):
         pass
 
 
-def _record_script(response, store, limit):
+def _record_script(response, store, limit, max_bytes=2_000_000):
+    """Record dynamically loaded script URLs and small response bodies.
+
+    Bodies stay in memory only long enough for the local analyzer to process
+    them; callers remove them from the public runtime evidence payload.
+    """
     try:
         resource_type = getattr(getattr(response, "request", None), "resource_type", None)
-        if resource_type == "script" and len(store) < limit:
-            store.add(response.url)
+        if resource_type != "script" or response.url in store or len(store) >= limit:
+            return
+        try:
+            body = response.body()
+            if len(body) <= max_bytes:
+                store[response.url] = body.decode("utf-8", errors="replace")
+            else:
+                store[response.url] = None
+        except Exception:
+            store[response.url] = None
     except Exception:
         pass
 
@@ -302,7 +359,7 @@ def capture_runtime_evidence(
     websockets = []
     failed_requests = []
     frame_urls = set()
-    all_scripts = set()
+    all_scripts = {}
 
     try:
         with sync_playwright() as p:
@@ -404,7 +461,12 @@ def capture_runtime_evidence(
             "websockets": _limit(websockets, 40),
             "frames": _limit(state.get("frames", []), 40),
             "forms": _limit(state.get("forms", []), 40),
-            "scripts": sorted(set(_limit(state.get("scripts", []), 80) + _limit(all_scripts, 80)))[:80],
+            "scripts": sorted(set(_limit(state.get("scripts", []), 80) + list(_limit(all_scripts.keys(), 80))))[:80],
+            # This private hand-off is consumed by analyzer_service and removed
+            # before the result is sent to the UI/report.
+            "script_contents": {
+                url: body for url, body in list(all_scripts.items())[:80] if body
+            },
             "frame_urls": sorted(frame_urls)[:40],
             "local_storage_keys": _limit(state.get("local_storage_keys", []), 80),
             "session_storage_keys": _limit(state.get("session_storage_keys", []), 80),

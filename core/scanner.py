@@ -11,6 +11,25 @@ from core.crypto import looks_like_url_or_path
 from core.decoder import decode_candidate_strings, extract_hidden_values
 from core.framework_rules import analyze_framework
 from core.taint import analyze_taint
+from core.source_maps import source_map_reference
+
+
+def _credible_secret(candidate):
+    """Filter obvious fixtures/labels before raising a secret risk signal."""
+    text = str(candidate or "")
+    lower = text.lower()
+    if any(marker in lower for marker in ("example", "sample", "placeholder", "changeme", "dummy", "test123")):
+        return False
+    if "-----begin " in lower or re.search(r"eyj[\w-]+\.[\w-]+\.[\w-]+", text, re.I):
+        return True
+    match = re.search(r"[\"']([^\"']+)[\"']", text)
+    value = match.group(1) if match else text
+    if len(value) < 10 or value.lower() in {"password", "secret", "token", "abc123", "abc"}:
+        return False
+    # Real credentials generally have both character classes or high entropy;
+    # natural-language strings should not become high-severity findings.
+    classes = sum(bool(re.search(pattern, value)) for pattern in (r"[a-z]", r"[A-Z]", r"\d", r"[^A-Za-z0-9]"))
+    return len(value) >= 16 and classes >= 2
 
 
 def _run_additional_analyzers(content, results):
@@ -37,13 +56,15 @@ def _run_additional_analyzers(content, results):
                 results[result_key] = payload or []
             else:
                 results[result_key] = payload or []
-        except Exception:
+        except Exception as exc:
+            results.setdefault("analyzer_errors", []).append({"analyzer": module_name, "error": str(exc)[:240]})
             results[result_key] = [] if result_key != "obfuscation_analysis" else {}
 
 
 def scan_file(file_path, content=None):
     results = {
         "secrets": [],
+        "credible_secrets": [],
         "crypto": [],
         "endpoints": [],
         "headers": [],
@@ -51,6 +72,7 @@ def scan_file(file_path, content=None):
         "hardcoded_configs": [],
         "decoded_strings": [],
         "storage": [],
+        "sensitive_storage": False,
         "api_calls": [],
         "dataflow": [],
         "suspicious_calls": [],
@@ -74,6 +96,9 @@ def scan_file(file_path, content=None):
         "findings": [],
         "finding_statuses": {},
         "score": 0,
+        "source_map": {"present": False, "url": ""},
+        "analysis_warnings": [],
+        "analyzer_errors": [],
     }
 
     if content is None:
@@ -84,6 +109,10 @@ def scan_file(file_path, content=None):
             return results
 
     content = content or ""
+    source_map = source_map_reference(content)
+    if source_map:
+        results["source_map"] = {"present": True, "url": source_map, "sources": [], "available": False}
+        results["notable_features"].append("source_map")
     results["file_size"] = len(content)
     results["line_count"] = content.count("\n") + 1
     results["loc_id"] = os.path.basename(file_path) if file_path else "inline.js"
@@ -116,6 +145,7 @@ def scan_file(file_path, content=None):
             continue
         cleaned.append(text.strip())
     results["secrets"] = cleaned[:25]
+    results["credible_secrets"] = [item for item in results["secrets"] if _credible_secret(item)][:25]
 
     for s in secrets[:8]:
         try:
@@ -201,6 +231,10 @@ def scan_file(file_path, content=None):
                 text = match
             if text not in results["storage"]:
                 results["storage"].append(text)
+    results["sensitive_storage"] = bool(re.search(
+        r"(?:localStorage|sessionStorage)\s*\.\s*(?:getItem|setItem)\s*\(\s*['\"](?:token|auth|secret|password|session|credential|jwt)[^'\"]*['\"]",
+        content, re.I,
+    ) or re.search(r"document\.cookie\b", content, re.I))
 
     # =========================================
     # 🔄 DATA FLOW CLUES
@@ -281,8 +315,11 @@ def scan_file(file_path, content=None):
     # =========================================
     try:
         results["ast_analysis"] = analyze_ast(content, filename=results.get("loc_id", "inline.js"))
-    except Exception:
+    except Exception as exc:
         results["ast_analysis"] = {"available": False, "parse_error": "ast_analyzer_failed"}
+        results["analyzer_errors"].append({"analyzer": "ast", "error": str(exc)[:240]})
+    if results.get("ast_analysis", {}).get("parse_error"):
+        results["analysis_warnings"].append("AST parser could not fully parse this dialect; conservative regex fallbacks were used.")
 
     # =========================================
     # 📦 DEPENDENCY / ECOSYSTEM SCAN
@@ -370,7 +407,7 @@ def scan_file(file_path, content=None):
     # 📊 SCORING SYSTEM (EXTENDED)
     # =========================================
     score = 0
-    if results["secrets"]:
+    if results.get("credible_secrets"):
         score += 3
     if results["headers"]:
         score += 2
@@ -423,8 +460,8 @@ def scan_file(file_path, content=None):
     # ⚠️ NORMALIZED RISK SIGNALS
     # =========================================
     risk_signals = []
-    if results["secrets"]:
-        risk_signals.append({"id": "hardcoded_secret", "severity": "HIGH", "title": "Hardcoded secret material", "evidence": results["secrets"][:3]})
+    if results.get("credible_secrets"):
+        risk_signals.append({"id": "hardcoded_secret", "severity": "HIGH", "title": "Hardcoded secret candidate", "evidence": results["credible_secrets"][:3], "confidence": "high"})
     if results.get("keys") and results.get("ivs"):
         risk_signals.append({"id": "exposed_key_iv_pair", "severity": "CRITICAL", "title": "Static crypto key/IV pair exposed", "evidence": [results["keys"][:2], results["ivs"][:2]]})
     elif results.get("keys"):
@@ -440,14 +477,16 @@ def scan_file(file_path, content=None):
         })
     if results.get("storage"):
         storage_text = " ".join(map(str, results["storage"])).lower()
-        sensitive = any(t in storage_text for t in ("token", "auth", "secret", "password", "session"))
+        sensitive = bool(results.get("sensitive_storage")) or any(t in storage_text for t in ("token", "auth", "secret", "password", "session"))
         risk_signals.append({
             "id": "sensitive_storage", "severity": "HIGH" if sensitive else "MEDIUM",
             "title": "Client storage used" + (" for sensitive data" if sensitive else ""),
             "evidence": results["storage"][:3],
         })
     if results.get("dom_risks"):
-        risk_signals.append({"id": "dom_injection", "severity": "HIGH", "title": "DOM injection & XSS patterns", "evidence": results["dom_risks"][:3]})
+        # This is a capability observation.  A vulnerability requires a
+        # source-to-sink path (added below by the taint pass).
+        risk_signals.append({"id": "dom_injection", "severity": "MEDIUM", "title": "DOM/dynamic sink observed", "evidence": results["dom_risks"][:3], "confidence": "medium"})
     if results.get("suspicious_calls"):
         risk_signals.append({"id": "unsafe_runtime", "severity": "MEDIUM", "title": "Unsafe runtime execution", "evidence": results["suspicious_calls"][:3]})
     if results.get("endpoints") or results.get("api_calls"):
@@ -498,7 +537,7 @@ def scan_content(content, filename="inline.js"):
         content = content.decode("utf-8", errors="ignore")
     if not content or not content.strip():
         return {
-            "secrets": [], "crypto": [], "endpoints": [], "headers": [],
+            "secrets": [], "credible_secrets": [], "crypto": [], "endpoints": [], "headers": [],
             "secret_context": [], "hardcoded_configs": [], "decoded_strings": [],
             "storage": [], "api_calls": [], "dataflow": [], "suspicious_calls": [],
             "secret_analysis": [], "crypto_analysis": [], "api_inventory": [],

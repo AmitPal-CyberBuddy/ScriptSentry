@@ -368,8 +368,14 @@ def extract_attack_surface(content, filename="inline.js"):
     # Header / credential patterns across whole document (headers in fetch options etc.)
     # Require a quoted value (`token: "x"` / `token='x'`) so URL query strings like
     # `?token=abc` stay in parameter/auth signals instead of polluting the header list.
-    for m in re.finditer(r"(?:authorization|bearer|token|api[_-]?key|client[_-]?secret|access[_-]?token)\s*[:=]\s*[\"']", content, re.I):
-        headers.add(m.group(0).split(":")[0].split("=")[0].strip().lower())
+    for m in re.finditer(r"[\"']?(?:authorization|bearer|token|api[_-]?key|client[_-]?secret|access[_-]?token)[\"']?\s*[:=]\s*[\"']", content, re.I):
+        header_name = re.split(r"[:=]", m.group(0), maxsplit=1)[0].strip().lower()
+        headers.add(header_name)
+        auth_hints.append({
+            "type": "credential/header usage",
+            "evidence": content[max(0, m.start() - 40):m.start() + 120].strip(),
+            "line": content[:m.start()].count("\n") + 1,
+        })
 
     return {
         "endpoints": endpoints[:80],

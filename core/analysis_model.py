@@ -154,7 +154,12 @@ def deduplicate_findings(findings: Iterable[Dict[str, Any]]) -> List[Dict[str, A
 
 def _risk_signal_to_finding(sig: Dict[str, Any], filename: str) -> Dict[str, Any]:
     level = str(sig.get("severity", "MEDIUM")).upper()
-    confidence = _confidence_for_severity(level)
+    # A regex/risk signal is an observation, not proof.  Only runtime evidence
+    # or an explicit source-to-sink path may be confirmed automatically.
+    evidence_type = str(sig.get("evidence_type") or "static_pattern")
+    confidence = str(sig.get("confidence") or _confidence_for_severity(level)).lower()
+    if confidence not in CONFIDENCE_RANK:
+        confidence = _confidence_for_severity(level)
     evidence = sig.get("evidence", []) or []
     if isinstance(evidence, list):
         evidence_text = " ".join(str(x) for x in evidence[:2])[:240]
@@ -166,7 +171,11 @@ def _risk_signal_to_finding(sig: Dict[str, Any], filename: str) -> Dict[str, Any
             "type": sig.get("title", sig.get("id", "")),
             "severity": level,
             "confidence": confidence,
-            "status": _status_for_confidence(confidence),
+            "status": (
+                _status_for_confidence(confidence)
+                if evidence_type in ("runtime_browser", "source_to_sink", "behavioral_correlation")
+                else ("needs_review" if level in ("HIGH", "CRITICAL") else "potential")
+            ),
             "file": filename,
             "line": 0,
             "source": "",

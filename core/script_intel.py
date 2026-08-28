@@ -139,7 +139,7 @@ def sensitive_sources(data):
         sources.append("url_parameters")
     if data.get("attack_surface", {}).get("parameters") or data.get("dom_risks") and _contains_any(blob, ["form", "input", "value"]):
         sources.append("form_fields")
-    if data.get("secrets") or data.get("keys") or data.get("headers"):
+    if data.get("credible_secrets", data.get("secrets")) or data.get("keys") or data.get("headers"):
         sources.append("secrets_tokens")
     return list(dict.fromkeys(sources))
 
