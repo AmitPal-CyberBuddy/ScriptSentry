@@ -1,7 +1,11 @@
 import os
-import requests
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, unquote
+
+try:
+    import requests
+except ImportError:
+    requests = None
 
 from config import JS_DIR
 
@@ -31,6 +35,9 @@ def download_file(url):
 
     if os.path.exists(path) and os.path.getsize(path) > 50:
         return path
+
+    if requests is None:
+        return None
 
     for _ in range(2):
         try:

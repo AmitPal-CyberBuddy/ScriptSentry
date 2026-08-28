@@ -1,8 +1,14 @@
 import re
 from urllib.parse import urljoin
 
-import requests
-from bs4 import BeautifulSoup
+try:
+    import requests
+except ImportError:
+    requests = None
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None
 
 HEADERS = {
     "User-Agent": (
@@ -14,6 +20,8 @@ HEADERS = {
 
 
 def fetch_url(url):
+    if requests is None:
+        return ""
     try:
         response = requests.get(url, timeout=15, headers=HEADERS, allow_redirects=True)
         if response.status_code == 200:
@@ -28,24 +36,25 @@ def extract_js(url):
     if not html:
         return []
 
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, "html.parser") if BeautifulSoup is not None else None
     js_files = set()
 
-    for script in soup.find_all("script"):
-        src = script.get("src")
-        if src:
-            js_files.add(urljoin(url, src))
+    if soup is not None:
+        for script in soup.find_all("script"):
+            src = script.get("src")
+            if src:
+                js_files.add(urljoin(url, src))
 
-    for script in soup.find_all("script"):
-        if script.string:
-            content = script.string
-            for pattern in [
-                r'["\'](https?://[^"\']+\.js[^"\']*)["\']',
-                r'["\'](chunk-[A-Za-z0-9]+\.js)["\']',
-                r'["\']([A-Za-z0-9_\-]+\.js(?:\?[^"\']*)?)["\']'
-            ]:
-                for match in re.findall(pattern, content):
-                    js_files.add(urljoin(url, match))
+        for script in soup.find_all("script"):
+            if script.string:
+                content = script.string
+                for pattern in [
+                    r'["\'](https?://[^"\']+\.js[^"\']*)["\']',
+                    r'["\'](chunk-[A-Za-z0-9]+\.js)["\']',
+                    r'["\']([A-Za-z0-9_\-]+\.js(?:\?[^"\']*)?)["\']'
+                ]:
+                    for match in re.findall(pattern, content):
+                        js_files.add(urljoin(url, match))
 
     dynamic_patterns = [
         r'chunk-[A-Za-z0-9]+\.js',

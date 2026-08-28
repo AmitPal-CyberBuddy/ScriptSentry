@@ -4,7 +4,10 @@ import os
 import sys
 from urllib.parse import urljoin
 
-import requests
+try:
+    import requests
+except ImportError:
+    requests = None
 
 from config import DEFAULT_PROFILE, REPORT_FORMATS, SCAN_PROFILES
 from core.beautifier import beautify
@@ -12,7 +15,7 @@ from core.crypto import extract_crypto_material
 from core.discovery import extract_js
 from core.downloader import download_js
 from ai.llm_engine import build_ai_summary
-from core.reporter import generate_html_report, generate_report
+from core.reporter import build_dashboard_payload, build_report_model, generate_html_report, generate_report
 from core.scanner import scan_file
 
 RED = "\033[91m"
@@ -108,7 +111,8 @@ def deep_scan(file_path, depth=0, max_depth=5):
     if scan.get("real_crypto_detected"):
         print(f"{RED}[🔥 REAL CRYPTO DETECTED]{RESET}")
         for flow in scan.get("crypto_flows", [])[:5]:
-            print("   ", flow)
+            signal = flow.get("signal") if isinstance(flow, dict) else flow
+            print("   ", signal)
 
     print(f"{YELLOW}[📊] Confidence: {scan.get('confidence')}{RESET}")
 
@@ -132,12 +136,12 @@ def deep_scan(file_path, depth=0, max_depth=5):
 
     if scan.get("keys"):
         print(f"{GREEN}[🔐] Crypto Keys:{RESET}")
-        for k in list(set(scan["keys"]))[:5]:
+        for k in list(dict.fromkeys([k.get("value") if isinstance(k, dict) else k for k in scan["keys"]]))[:5]:
             print("   ", k)
 
     if scan.get("ivs"):
         print(f"{GREEN}[🧪] IVs:{RESET}")
-        for iv in list(set(scan["ivs"]))[:5]:
+        for iv in list(dict.fromkeys([i.get("value") if isinstance(i, dict) else i for i in scan["ivs"]]))[:5]:
             print("   ", iv)
 
     important_logic = [
@@ -203,8 +207,8 @@ def print_final_summary():
     env_keys = []
 
     for _, data in all_results.items():
-        keys += data.get("keys", [])
-        ivs += data.get("ivs", [])
+        keys += [k.get("value") if isinstance(k, dict) else k for k in data.get("keys", [])]
+        ivs += [i.get("value") if isinstance(i, dict) else i for i in data.get("ivs", [])]
         for ev in data.get("env_vars", []):
             if "EncryptionKey" in ev:
                 val = ev.split(":")[-1].strip().strip('"').strip("'")
@@ -248,6 +252,8 @@ def save_json(ai_summary=None):
                 "total_files": len(all_results)
             },
             "results": all_results,
+            "report_model": build_report_model(all_results, ai_summary=ai_summary),
+            "dashboard": build_dashboard_payload(all_results, ai_summary=ai_summary),
             "ai_summary": ai_summary or {}
         }
         with open(path, "w", encoding="utf-8") as file:
@@ -322,7 +328,9 @@ def run(urls, max_depth=5, timeout=15, profile="balanced", output_formats=None, 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze JavaScript assets for crypto, secrets, and endpoints.")
-    parser.add_argument("urls", nargs="+", help="One or more target URLs to analyze")
+    parser.add_argument("--serve", action="store_true", help="Launch the visual web dashboard")
+    parser.add_argument("--port", type=int, default=8000, help="Port used by --serve")
+    parser.add_argument("urls", nargs="*", help="One or more target URLs to analyze")
     parser.add_argument("--max-depth", type=int, default=5, help="Maximum recursion depth for chunk analysis")
     parser.add_argument("--timeout", type=int, default=15, help="Request timeout in seconds")
     parser.add_argument(
@@ -346,6 +354,18 @@ if __name__ == "__main__":
     parser.add_argument("--api-key", default=None, help="API key for AI provider")
     parser.add_argument("--model", default=None, help="Model name for AI provider")
     args = parser.parse_args()
+
+    if args.serve:
+        import server
+        srv = server.make_server(port=args.port)
+        print(f"ScriptSentry dashboard listening on http://0.0.0.0:{args.port}")
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            print("\nShutting down.")
+        finally:
+            srv.server_close()
+        sys.exit(0)
 
     if not args.urls:
         parser.print_help()

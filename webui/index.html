@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ScriptSentry — JavaScript Analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <canvas id="particles" aria-hidden="true"></canvas>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <div class="bg-glow bg-glow-3"></div>
+
+  <div class="wrap">
+    <header class="topbar fade-up">
+      <div class="brand">
+        <span class="mark">🛡️</span>
+        <span>
+          ScriptSentry
+          <div class="sub">JS Intelligence Studio</div>
+        </span>
+      </div>
+      <div class="status">
+        <span class="dot"></span>
+        Engine online · 12 detection modules
+      </div>
+    </header>
+
+    <section class="hero">
+      <h1>Watch every line.<br />Detect every risk.</h1>
+      <p>
+        A visual JavaScript security &amp; intelligence analyzer. Paste a snippet or scan a live URL,
+        then explore secrets, crypto keys, APIs, storage, DOM risks, obfuscation and data flows
+        through a motion-rich dashboard.
+      </p>
+      <div class="badges">
+        <span class="badge">⚡ Real-time analysis</span>
+        <span class="badge">🔐 Crypto &amp; key hunts</span>
+        <span class="badge">🌐 API surface mapping</span>
+        <span class="badge">🧠 Visual risk scoring</span>
+      </div>
+    </section>
+
+    <section class="console fade-up">
+      <div class="console-head">
+        <div class="console-title">🔎 Analysis Console</div>
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-pane="code" role="tab">Paste Code</button>
+          <button class="tab" data-pane="url" role="tab">Scan URL</button>
+        </div>
+      </div>
+
+      <div class="console-body">
+        <div class="pane active" id="pane-code">
+          <label class="field-label" for="code-input">JavaScript source</label>
+          <textarea id="code-input" spellcheck="false" placeholder="// Paste your JavaScript here..."></textarea>
+          <div class="row">
+            <button class="btn" id="analyze-code">⚡ Analyze Code</button>
+            <button class="btn ghost" id="load-sample">✨ Try a sample</button>
+            <input id="filename-input" type="text" value="inline.js" placeholder="filename.js" style="max-width:220px" />
+          </div>
+        </div>
+
+        <div class="pane" id="pane-url">
+          <label class="field-label" for="url-input">Target URL</label>
+          <input id="url-input" type="text" placeholder="https://example.com/app.js or https://example.com" />
+          <div class="config-row">
+            <div class="config-block">
+              <label class="field-label" for="profile">Profile</label>
+              <select id="profile">
+                <option value="fast">⚡ Fast</option>
+                <option value="balanced" selected>⚖️ Balanced</option>
+                <option value="strict">🔥 Strict</option>
+              </select>
+            </div>
+            <div class="config-block">
+              <label class="field-label" for="max-depth">Max depth</label>
+              <select id="max-depth">
+                <option value="3">3</option>
+                <option value="5" selected>5</option>
+                <option value="7">7</option>
+                <option value="10">10</option>
+              </select>
+            </div>
+            <div class="config-block">
+              <label class="field-label" for="max-files">Max files</label>
+              <select id="max-files">
+                <option value="25">25</option>
+                <option value="50" selected>50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <button class="btn" id="analyze-url">🚀 Analyze Target</button>
+          </div>
+        </div>
+
+        <div class="loading" id="loading">
+          <span class="spinner"></span>
+          <span id="loading-text">Analyzing…</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="results" id="results">
+      <div class="results-header">
+        <h2>📊 Analysis Dashboard</h2>
+        <div class="row" style="margin:0">
+          <div class="meta" id="result-meta"></div>
+          <button class="btn ghost" id="export-html">📄 Export HTML Report</button>
+          <button class="btn ghost" id="export-txt">📝 Export Text Report</button>
+        </div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <h3>Overall Risk</h3>
+          <div class="gauge-wrap">
+            <div class="gauge">
+              <svg viewBox="0 0 120 120">
+                <circle class="gauge-circle" cx="60" cy="60" r="50"></circle>
+                <circle class="gauge-val" id="gauge" cx="60" cy="60" r="50"></circle>
+              </svg>
+            </div>
+            <div class="gauge-copy">
+              <div class="risk" id="risk-label">LOW</div>
+              <div class="score" id="risk-score">Score 0</div>
+              <span class="risk-chip" id="risk-chip">0 findings</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Detection Snapshot</h3>
+          <div id="category-bars"></div>
+        </div>
+      </div>
+
+      <div class="grid grid-4" style="margin-top:18px" id="metrics"></div>
+
+      <div class="grid grid-3" style="margin-top:18px">
+        <div class="card chart-card">
+          <h3>Finding Mix</h3>
+          <svg class="chart" id="donut-chart" viewBox="0 0 220 220"></svg>
+          <div class="legend" id="donut-legend"></div>
+        </div>
+        <div class="card chart-card">
+          <h3>Detection Radar</h3>
+          <canvas class="chart" id="radar-chart"></canvas>
+        </div>
+        <div class="card">
+          <h3>Analysis Journey</h3>
+          <div class="timeline" id="timeline"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:18px">
+        <h3>🚦 Risk Signals</h3>
+        <div class="find-list" id="risk-signals"></div>
+      </div>
+
+      <div class="card" style="margin-top:18px">
+        <h3>🧰 Dependencies &amp; Transport</h3>
+        <div class="finding-grid" id="dep-panel"></div>
+      </div>
+
+      <div class="card" style="margin-top:18px">
+        <h3>File Findings</h3>
+        <div class="file-tabs" id="file-tabs"></div>
+        <div id="file-panel"></div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      ScriptSentry · JS Intelligence Studio · run <code>python3 server.py</code>
+    </footer>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
