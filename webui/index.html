@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ScriptSentry — JavaScript Analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="/config.js"></script>
+</head>
+<body>
+  <canvas id="particles" aria-hidden="true"></canvas>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <div class="bg-glow bg-glow-3"></div>
+
+  <div class="wrap">
+    <header class="topbar fade-up">
+      <div class="brand">
+        <span class="mark">🛡️</span>
+        <span>
+          ScriptSentry
+          <div class="sub">JS Intelligence Studio</div>
+        </span>
+      </div>
+      <div class="status" id="engine-status">
+        <span class="dot" id="engine-dot"></span>
+        <span id="engine-status-text">Checking local engine…</span>
+      </div>
+    </header>
+
+    <section class="hero">
+      <h1>Watch every line.<br />Detect every risk.</h1>
+      <p>
+        A visual JavaScript security &amp; intelligence analyzer. Paste a snippet or scan a live URL,
+        then explore secrets, crypto keys, APIs, storage, DOM risks, obfuscation and data flows
+        through a motion-rich dashboard.
+      </p>
+      <div class="badges">
+        <span class="badge">🔒 100% local analysis</span>
+        <span class="badge">🆓 Free &amp; open source</span>
+        <span class="badge">⚡ Real-time analysis</span>
+        <span class="badge">🔐 Crypto &amp; key hunts</span>
+        <span class="badge">🌐 API surface mapping</span>
+      </div>
+
+      <div class="privacy-banner fade-up">
+        <div class="privacy-ico">🔒</div>
+        <div>
+          <b>Private by design.</b> This hosted page is just the interface. Your JavaScript
+          never leaves your computer — it is analyzed on <code>localhost</code> by
+          <b>ScriptSentry&nbsp;server.py</b>. No code uploads, no clouds, no accounts.
+        </div>
+      </div>
+    </section>
+
+    <section class="console fade-up">
+      <div class="console-head">
+        <div class="console-title">🔎 Analysis Console</div>
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-pane="code" role="tab">Paste Code</button>
+          <button class="tab" data-pane="url" role="tab">Scan URL</button>
+        </div>
+      </div>
+
+      <div class="console-body">
+        <div class="pane active" id="pane-code">
+          <label class="field-label" for="code-input">JavaScript source</label>
+          <textarea id="code-input" spellcheck="false" placeholder="// Paste your JavaScript here..."></textarea>
+          <div class="row">
+            <button class="btn" id="analyze-code">⚡ Analyze Code</button>
+            <button class="btn ghost" id="load-sample">✨ Try a sample</button>
+            <input id="filename-input" type="text" value="inline.js" placeholder="filename.js" style="max-width:220px" />
+          </div>
+        </div>
+
+        <div class="pane" id="pane-url">
+          <label class="field-label" for="url-input">Target URL</label>
+          <input id="url-input" type="text" placeholder="https://example.com/app.js or https://example.com" />
+          <div class="config-row">
+            <div class="config-block">
+              <label class="field-label" for="profile">Profile</label>
+              <select id="profile">
+                <option value="fast">⚡ Fast</option>
+                <option value="balanced" selected>⚖️ Balanced</option>
+                <option value="strict">🔥 Strict</option>
+              </select>
+            </div>
+            <div class="config-block">
+              <label class="field-label" for="max-depth">Max depth</label>
+              <select id="max-depth">
+                <option value="3">3</option>
+                <option value="5" selected>5</option>
+                <option value="7">7</option>
+                <option value="10">10</option>
+              </select>
+            </div>
+            <div class="config-block">
+              <label class="field-label" for="max-files">Max files</label>
+              <select id="max-files">
+                <option value="25">25</option>
+                <option value="50" selected>50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+                <option value="500">500</option>
+                <option value="1000">1000</option>
+              </select>
+            </div>
+            <div class="config-block">
+              <label class="field-label" for="workers">Workers</label>
+              <select id="workers">
+                <option value="2">2</option>
+                <option value="4">4</option>
+                <option value="6" selected>6</option>
+                <option value="8">8</option>
+                <option value="12">12</option>
+                <option value="16">16</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <button class="btn" id="analyze-url">🚀 Analyze Target</button>
+          </div>
+        </div>
+
+        <div class="loading" id="loading">
+          <span class="spinner"></span>
+          <span class="progress-wrap">
+            <span id="loading-text">Analyzing…</span>
+            <span class="progress-track" aria-hidden="true"><i class="progress-fill" id="progress-fill"></i></span>
+            <span class="progress-stats" id="progress-stats"></span>
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <section class="results" id="results">
+      <div class="results-header">
+        <h2>📊 Analysis Dashboard</h2>
+        <div class="row" style="margin:0">
+          <div class="meta" id="result-meta"></div>
+          <button class="btn ghost" id="export-html">📄 HTML</button>
+          <button class="btn ghost" id="export-txt">📝 TXT</button>
+          <button class="btn ghost" id="export-csv">📊 CSV</button>
+          <button class="btn ghost" id="export-sarif">🧾 SARIF</button>
+        </div>
+      </div>
+
+      <div class="view-tabs fade-up" id="view-tabs">
+        <button class="view-tab active" data-view="overview">📊 Overview</button>
+        <button class="view-tab" data-view="scripts">📚 Scripts</button>
+        <button class="view-tab" data-view="assets">📁 Assets</button>
+        <button class="view-tab" data-view="attack">🎯 Attack Surface</button>
+        <button class="view-tab" data-view="findings">🚦 Findings</button>
+        <button class="view-tab" data-view="flows">🔁 Data Flows</button>
+        <button class="view-tab" data-view="secrets">🔐 Secrets</button>
+        <button class="view-tab" data-view="deps">🧰 Dependencies</button>
+        <button class="view-tab" data-view="runtime">🖥️ Runtime</button>
+      </div>
+
+      <div class="grid grid-2 view-group" data-view="overview">
+        <div class="card">
+          <h3>Overall Risk</h3>
+          <div class="gauge-wrap">
+            <div class="gauge">
+              <svg viewBox="0 0 120 120">
+                <circle class="gauge-circle" cx="60" cy="60" r="50"></circle>
+                <circle class="gauge-val" id="gauge" cx="60" cy="60" r="50"></circle>
+              </svg>
+            </div>
+            <div class="gauge-copy">
+              <div class="risk" id="risk-label">LOW</div>
+              <div class="score" id="risk-score">Score 0</div>
+              <span class="risk-chip" id="risk-chip">0 findings</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Detection Snapshot</h3>
+          <div id="category-bars"></div>
+        </div>
+      </div>
+
+      <div class="grid grid-4 view-group" style="margin-top:18px" data-view="overview" id="metrics"></div>
+
+      <div class="grid grid-3 view-group" style="margin-top:18px" data-view="overview">
+        <div class="card chart-card">
+          <h3>Finding Mix</h3>
+          <svg class="chart" id="donut-chart" viewBox="0 0 220 220"></svg>
+          <div class="legend" id="donut-legend"></div>
+        </div>
+        <div class="card chart-card">
+          <h3>Detection Radar</h3>
+          <canvas class="chart" id="radar-chart"></canvas>
+        </div>
+        <div class="card">
+          <h3>Analysis Journey</h3>
+          <div class="timeline" id="timeline"></div>
+        </div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="scripts">
+        <h3>📚 Script Inventory &amp; Behavior</h3>
+        <p class="modal-note" style="margin:0 0 8px">Every discovered script gets a behavior profile: first/third-party attribution, sensitive reads, DOM/network writes, browser APIs, loading method, and a 0–100 script risk score.</p>
+        <div id="script-panel"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="findings">
+        <h3>🚦 Risk Signals</h3>
+        <div class="find-list" id="risk-signals"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="findings">
+        <h3>🛠️ Unified Findings</h3>
+        <p class="modal-note" style="margin:0 0 8px">Click <b>status</b> to mark as Confirmed / False Positive / Informational / Needs Review (stored in your browser only).</p>
+        <div class="file-tabs" id="finding-filters"></div>
+        <div class="find-list" id="unified-findings"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="attack">
+        <h3>🎯 Attack Surface</h3>
+        <div class="finding-grid" id="attack-panel"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="flows">
+        <h3>🔁 Source → Sink Data Flows</h3>
+        <div class="find-list" id="flow-panel"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="secrets">
+        <h3>🔐 Secrets &amp; Sensitive Data</h3>
+        <div class="finding-grid" id="secrets-panel"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="deps">
+        <h3>🧰 Dependencies &amp; Transport</h3>
+        <div class="finding-grid" id="dep-panel"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="runtime">
+        <h3>🖥️ Runtime Evidence</h3>
+        <p class="modal-note" style="margin:0 0 8px">
+          Evidence is captured on your machine with a local headless browser. ScriptSentry keeps URLs, console
+          text, DOM sink values, storage <b>key names</b>, and cookie <b>names only</b> — never cookie values,
+          request bodies, or localStorage values.
+        </p>
+        <div id="runtime-panel"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="assets">
+        <h3>📁 JavaScript Assets</h3>
+        <div class="finding-grid" id="scan-summary"></div>
+        <div class="file-tabs" id="file-tabs"></div>
+        <div id="file-panel"></div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      ScriptSentry · JS Intelligence Studio · <strong>private &amp; free</strong> · run <code>python3 server.py</code>
+    </footer>
+  </div>
+
+  <div class="modal-overlay" id="privacy-modal" hidden>
+    <div class="modal" role="dialog" aria-labelledby="privacy-title">
+      <div class="modal-ico">🔒</div>
+      <h2 id="privacy-title">Run it locally — it's free &amp; private</h2>
+      <p>
+        You're viewing the <b>hosted interface</b>. For privacy, ScriptSentry never sends your
+        code to a cloud. Start the local engine, then this page will connect to it automatically.
+      </p>
+      <ol class="setup-steps">
+        <li><b>Get the project:</b> clone or download <code>ScriptSentry</code>.</li>
+        <li><b>Open a terminal</b> inside the project folder.</li>
+        <li><b>Install deps:</b> <code>pip install -r requirements.txt</code></li>
+        <li><b>Start the server:</b> <code>python3 server.py --port 8000</code></li>
+        <li><b>Keep this page open</b> and press <em>Retry connection</em> (connected via <code>127.0.0.1</code>).</li>
+      </ol>
+      <div class="code-box">
+        <pre id="setup-code">cd ScriptSentry
+pip install -r requirements.txt
+python3 server.py --port 8000</pre>
+        <button class="btn ghost" id="copy-setup">📋 Copy</button>
+      </div>
+      <p class="modal-note">
+        ⚠️ If you change the port, update <code>webui/config.js</code> to the same port.
+      </p>
+      <div class="modal-actions">
+        <button class="btn secondary" id="close-modal">Got it</button>
+        <button class="btn" id="retry-backend">🔄 Retry connection</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

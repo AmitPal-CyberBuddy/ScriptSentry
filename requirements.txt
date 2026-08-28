@@ -3,3 +3,5 @@ beautifulsoup4
 colorama
 tqdm
 jsbeautifier
+esprima
+playwright

@@ -1,3 +1,5 @@
+import os
+
 # ===============================
 # 📁 PATH CONFIG
 # ===============================
@@ -5,8 +7,48 @@ OUTPUT_DIR = "output"
 JS_DIR = f"{OUTPUT_DIR}/js_files"
 BEAUTIFY_DIR = f"{OUTPUT_DIR}/beautified"
 
+# Shared browser-ish User-Agent used by both the HTTP discovery layer and the
+# local headless browser (when Playwright runtime evidence is enabled).
+REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0 Safari/537.36"
+    )
+}
+
+# Runtime evidence capture (local headless browser).
+# The feature is optional: if Playwright or Chromium is not installed, the
+# engine silently falls back to static analysis and reports why.
+# Override with SCRIPTSENTRY_RUNTIME_EVIDENCE=0/1 in the server process.
+RUNTIME_EVIDENCE = {
+    "enabled": True,
+    "timeout_ms": 15_000,
+    "wait_after_load_ms": 1_500,
+    "max_requests": 300,
+    "max_console": 120,
+}
+
 DEFAULT_PROFILE = "balanced"
-REPORT_FORMATS = ["txt", "json", "html", "all"]
+REPORT_FORMATS = ["txt", "json", "html", "csv", "sarif", "all"]
+
+# Bounded worker pool used while scanning/downloaded assets are analyzed and
+# nested chunks are followed. Raise this on a fast machine for very large
+# bundle sets; lower it when the local engine is memory constrained.
+# Override with SCRIPTSENTRY_SCAN_WORKERS in the server process.
+SCAN_MAX_WORKERS = int(os.environ.get("SCRIPTSENTRY_SCAN_WORKERS", "6"))
+
+# Local engine trust boundary:
+# The static UI may be served from a localhost page OR a hosted GitHub Pages
+# page. Arbitrary third-party origins must not be able to drive the local engine.
+# Add custom origins through SCRIPTSENTRY_ALLOWED_ORIGINS (comma separated).
+ALLOWED_ORIGINS = [
+    "localhost",
+    "127.0.0.1",
+    "github.io",
+    "file://",
+    "null",
+]
 
 SCAN_PROFILES = {
     "balanced": {
@@ -133,6 +175,6 @@ CONFIDENCE = {
 # 📦 FILE RULES
 # ===============================
 FILE_RULES = {
-    "min_js_size": 50,       # ignore tiny responses
+    "min_js_size": 1,        # keep tiny modules; only drop empty responses
     "max_js_size": 2_000_000  # skip very large files (optional)
 }

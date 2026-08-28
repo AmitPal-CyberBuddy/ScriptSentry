@@ -1,10 +1,14 @@
 import argparse
+import hashlib
 import json
 import os
 import sys
 from urllib.parse import urljoin
 
-import requests
+try:
+    import requests
+except ImportError:
+    requests = None
 
 from config import DEFAULT_PROFILE, REPORT_FORMATS, SCAN_PROFILES
 from core.beautifier import beautify
@@ -12,7 +16,15 @@ from core.crypto import extract_crypto_material
 from core.discovery import extract_js
 from core.downloader import download_js
 from ai.llm_engine import build_ai_summary
-from core.reporter import generate_html_report, generate_report
+from core.reporter import (
+    build_dashboard_payload,
+    build_report_model,
+    generate_csv_report,
+    generate_html_report,
+    generate_report,
+    generate_sarif_report,
+)
+from core.runtime_evidence import attach_runtime_evidence, capture_runtime_evidence, runtime_evidence_enabled
 from core.scanner import scan_file
 
 RED = "\033[91m"
@@ -103,12 +115,14 @@ def deep_scan(file_path, depth=0, max_depth=5):
 
     crypto = extract_crypto_material(content)
     scan.update(crypto)
+    scan["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
     all_results[file_path] = scan
 
     if scan.get("real_crypto_detected"):
         print(f"{RED}[🔥 REAL CRYPTO DETECTED]{RESET}")
         for flow in scan.get("crypto_flows", [])[:5]:
-            print("   ", flow)
+            signal = flow.get("signal") if isinstance(flow, dict) else flow
+            print("   ", signal)
 
     print(f"{YELLOW}[📊] Confidence: {scan.get('confidence')}{RESET}")
 
@@ -132,12 +146,12 @@ def deep_scan(file_path, depth=0, max_depth=5):
 
     if scan.get("keys"):
         print(f"{GREEN}[🔐] Crypto Keys:{RESET}")
-        for k in list(set(scan["keys"]))[:5]:
+        for k in list(dict.fromkeys([k.get("value") if isinstance(k, dict) else k for k in scan["keys"]]))[:5]:
             print("   ", k)
 
     if scan.get("ivs"):
         print(f"{GREEN}[🧪] IVs:{RESET}")
-        for iv in list(set(scan["ivs"]))[:5]:
+        for iv in list(dict.fromkeys([i.get("value") if isinstance(i, dict) else i for i in scan["ivs"]]))[:5]:
             print("   ", iv)
 
     important_logic = [
@@ -202,9 +216,11 @@ def print_final_summary():
     aes_detected = False
     env_keys = []
 
-    for _, data in all_results.items():
-        keys += data.get("keys", [])
-        ivs += data.get("ivs", [])
+    for key, data in all_results.items():
+        if str(key).startswith("__"):
+            continue
+        keys += [k.get("value") if isinstance(k, dict) else k for k in data.get("keys", [])]
+        ivs += [i.get("value") if isinstance(i, dict) else i for i in data.get("ivs", [])]
         for ev in data.get("env_vars", []):
             if "EncryptionKey" in ev:
                 val = ev.split(":")[-1].strip().strip('"').strip("'")
@@ -242,12 +258,17 @@ def print_final_summary():
 def save_json(ai_summary=None):
     path = os.path.join(OUTPUT_DIR, "report.json")
     try:
+        runtime_results = {k: v for k, v in all_results.items() if not k.startswith("__")}
         payload = {
             "metadata": {
                 "profile": DEFAULT_PROFILE,
-                "total_files": len(all_results)
+                "total_files": len(runtime_results)
             },
-            "results": all_results,
+            "results": runtime_results,
+            "runtime_evidence": all_results.get("__runtime_evidence__"),
+            "runtime_findings": all_results.get("__runtime_findings__", []),
+            "report_model": build_report_model(all_results, ai_summary=ai_summary),
+            "dashboard": build_dashboard_payload(all_results, ai_summary=ai_summary),
             "ai_summary": ai_summary or {}
         }
         with open(path, "w", encoding="utf-8") as file:
@@ -277,6 +298,26 @@ def save_html_report(report_html):
         print(f"{RED}[!] HTML report save failed: {exc}{RESET}")
 
 
+def save_csv_report(report_csv):
+    path = os.path.join(OUTPUT_DIR, "report.csv")
+    try:
+        with open(path, "w", encoding="utf-8", newline="") as file:
+            file.write(report_csv)
+        print(f"{GREEN}[+] CSV report saved: {path}{RESET}")
+    except Exception as exc:
+        print(f"{RED}[!] CSV report save failed: {exc}{RESET}")
+
+
+def save_sarif_report(report_sarif):
+    path = os.path.join(OUTPUT_DIR, "report.sarif")
+    try:
+        with open(path, "w", encoding="utf-8") as file:
+            file.write(report_sarif)
+        print(f"{GREEN}[+] SARIF report saved: {path}{RESET}")
+    except Exception as exc:
+        print(f"{RED}[!] SARIF report save failed: {exc}{RESET}")
+
+
 def run(urls, max_depth=5, timeout=15, profile="balanced", output_formats=None, ai_provider="disabled", api_key=None, model=None):
     global BASE_URL, DEFAULT_PROFILE
     reset_state()
@@ -303,10 +344,21 @@ def run(urls, max_depth=5, timeout=15, profile="balanced", output_formats=None, 
         for file_path in beautified:
             deep_scan(file_path, max_depth=max_depth)
 
+    # Optional local browser pass after static discovery; if Playwright is not
+    # installed the scanner reports missing_dependency and continues statically.
+    if urls and runtime_evidence_enabled():
+        runtime = capture_runtime_evidence(
+            urls[0],
+            timeout_ms=max(2_000, int(float(timeout or 15) * 1000)),
+            max_requests=max(100, min(600, int(max_depth or 5) * 80)),
+        )
+        attach_runtime_evidence(all_results, runtime, target_url=urls[0])
+
     print_final_summary()
     ai_summary = None
     if ai_provider != "disabled":
-        ai_summary = build_ai_summary(all_results, provider=ai_provider, api_key=api_key, model=model)
+        no_runtime_files = {k: v for k, v in all_results.items() if not k.startswith("__")}
+        ai_summary = build_ai_summary(no_runtime_files, provider=ai_provider, api_key=api_key, model=model)
     report = generate_report(all_results, ai_summary=ai_summary)
 
     if "all" in output_formats or "txt" in output_formats:
@@ -315,6 +367,10 @@ def run(urls, max_depth=5, timeout=15, profile="balanced", output_formats=None, 
         save_json(ai_summary=ai_summary)
     if "all" in output_formats or "html" in output_formats:
         save_html_report(generate_html_report(all_results, ai_summary=ai_summary))
+    if "all" in output_formats or "csv" in output_formats:
+        save_csv_report(generate_csv_report(all_results, ai_summary=ai_summary))
+    if "all" in output_formats or "sarif" in output_formats:
+        save_sarif_report(generate_sarif_report(all_results, ai_summary=ai_summary))
 
     print(f"\n{BLUE}========== FINAL REPORT =========={RESET}\n")
     print(report)
@@ -322,7 +378,9 @@ def run(urls, max_depth=5, timeout=15, profile="balanced", output_formats=None, 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze JavaScript assets for crypto, secrets, and endpoints.")
-    parser.add_argument("urls", nargs="+", help="One or more target URLs to analyze")
+    parser.add_argument("--serve", action="store_true", help="Launch the visual web dashboard")
+    parser.add_argument("--port", type=int, default=8000, help="Port used by --serve")
+    parser.add_argument("urls", nargs="*", help="One or more target URLs to analyze")
     parser.add_argument("--max-depth", type=int, default=5, help="Maximum recursion depth for chunk analysis")
     parser.add_argument("--timeout", type=int, default=15, help="Request timeout in seconds")
     parser.add_argument(
@@ -346,6 +404,18 @@ if __name__ == "__main__":
     parser.add_argument("--api-key", default=None, help="API key for AI provider")
     parser.add_argument("--model", default=None, help="Model name for AI provider")
     args = parser.parse_args()
+
+    if args.serve:
+        import server
+        srv = server.make_server(port=args.port)
+        print(f"ScriptSentry dashboard listening on http://0.0.0.0:{args.port}")
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            print("\nShutting down.")
+        finally:
+            srv.server_close()
+        sys.exit(0)
 
     if not args.urls:
         parser.print_help()
