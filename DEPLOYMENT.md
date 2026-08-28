@@ -153,8 +153,16 @@ jobs:
       - uses: actions/configure-pages@v5
       - name: Prepare static site
         run: |
+          rm -rf _site
           mkdir -p _site
-          cp -r webui/* _site/
+          cp -a webui/. _site/
+          # Project Pages URLs require relative asset paths.
+          sed -i \
+            -e 's#href="/styles.css"#href="styles.css"#g' \
+            -e 's#src="/config.js"#src="config.js"#g' \
+            -e 's#src="/app.js"#src="app.js"#g' \
+            _site/index.html
+          touch _site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
