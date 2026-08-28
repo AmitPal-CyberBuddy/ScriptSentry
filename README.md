@@ -26,9 +26,10 @@ and how risky that behavior is, all in a modern, animated dashboard.
   presence and fetch status) is attached to the owning script without exposing source-map bodies.
   This improves provenance without turning the engine into an unrestricted source downloader.
 - **Script inventory & behavior intelligence** — first/third-party attribution, inline/external/
-  dynamic loading method, script hashes, sensitive reads (URL/cookies/storage/forms), DOM/network
-  writes, browser API map, external destinations, script risk score, and static/runtime
-  data-exfiltration correlation.
+  dynamic loading method, script hashes, loaded-by relationships, pages present, sensitive reads
+  (URL/cookies/storage/forms), DOM/network writes, browser API map, external destinations, script
+  risk score, and static/runtime data-exfiltration correlation. Chromium/CDP also provides
+  best-effort script-to-network initiator attribution.
 - **20+ detection modules**:
   - Secrets & credentials (JWT, API keys, auth headers, private keys)
   - Crypto routines, keys and IV/nonce extraction
@@ -173,6 +174,9 @@ See [`AUDIT.md`](AUDIT.md) for the repository audit, security decisions, verific
 │   reporter.py — report model, TXT/HTML/GUI   │
 │   runtime_evidence.py — optional Playwright  │
 │   runtime DOM/network/storage capture        │
+│   source_maps.py — bounded map metadata      │
+│   url_policy.py — SSRF/response boundaries   │
+│   jobs.py — bounded background job lifecycle │
 │   script_intel.py — script inventory,        │
 │   behavior profiles, risk scoring, exfil     │
 │                                              │

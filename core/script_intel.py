@@ -41,6 +41,10 @@ def _basename(url):
         return os.path.basename(str(url or ""))
 
 
+def _canonical(url):
+    return str(url or "").split("#", 1)[0].split("?", 1)[0].rstrip("/")
+
+
 def _read_hash(path):
     if not path:
         return ""
@@ -74,10 +78,10 @@ def _party(url, page_url):
 
 
 def _load_method(name, url, data):
-    if not name or url:
-        return "external"
     if str(name).startswith(("runtime://", "url://")):
         return "runtime_dynamic"
+    if not name or url:
+        return "external"
     if str(name) in ("inline.js", "inline"):
         return "inline"
     if "chunk-" in str(name):
@@ -264,7 +268,7 @@ def script_risk_score(data, page_url="", runtime_evidence=None, party=""):
     }
 
 
-def _intel_for_file(name, data, page_url="", runtime_evidence=None, runtime_url=""):
+def _intel_for_file(name, data, page_url="", runtime_evidence=None, runtime_url="", loaded_by=None, pages_present=None):
     url = str(data.get("url") or runtime_url or name)
     host = _host(url)
     if not _is_url(url) and page_url and not str(name).startswith("inline"):
@@ -279,6 +283,18 @@ def _intel_for_file(name, data, page_url="", runtime_evidence=None, runtime_url=
     risk = script_risk_score(data, page_url, runtime_evidence, party=party)
     hash_value = str(data.get("content_sha256") or _read_hash(name) or "")
     findings = data.get("findings", []) or []
+    runtime_requests = []
+    url_candidates = {_canonical(url), _canonical(name), _basename(url)}
+    for request in runtime_evidence.get("requests", []) or []:
+        if not isinstance(request, dict):
+            continue
+        initiators = request.get("initiated_by", []) or []
+        if any(_canonical(value) in url_candidates or _basename(value) in url_candidates for value in initiators):
+            runtime_requests.append({
+                "method": request.get("method", "GET"),
+                "url": str(request.get("url", ""))[:240],
+                "status": request.get("status"),
+            })
     return {
         "name": _basename(name) or str(name),
         "path": str(name),
@@ -286,6 +302,8 @@ def _intel_for_file(name, data, page_url="", runtime_evidence=None, runtime_url=
         "domain": host,
         "party": party,
         "load_method": load_method,
+        "loaded_by": list(dict.fromkeys(loaded_by or []))[:12],
+        "pages_present": list(dict.fromkeys(pages_present or ([page_url] if page_url else [])))[:12],
         "size": data.get("file_size", 0),
         "lines": data.get("line_count", 0),
         "hash": hash_value,
@@ -295,6 +313,7 @@ def _intel_for_file(name, data, page_url="", runtime_evidence=None, runtime_url=
         "finding_count": len(findings),
         "dataflow_count": len(data.get("dataflows", []) or []),
         "dependencies": [d.get("name") for d in (data.get("dependency_scan", []) or []) if isinstance(d, dict)][:12],
+        "runtime_requests": runtime_requests[:20],
         "scanned": bool(host or data.get("file_size")),
     }
 
@@ -305,6 +324,30 @@ def build_script_intel(results, runtime_evidence=None, page_url=""):
     page_url = page_url or runtime_evidence.get("url") or ""
     runtime_scripts = runtime_evidence.get("scripts", []) or []
     runtime_url_by_base = {_basename(url): url for url in runtime_scripts if _basename(url)}
+    scan_summary = (results or {}).get("__scan_summary__") or {}
+    script_edges = scan_summary.get("script_edges", []) or []
+    page_list = [page_url] if page_url else []
+    page_list.extend(runtime_evidence.get("frame_urls", []) or [])
+    page_list = list(dict.fromkeys(str(value) for value in page_list if value))[:12]
+
+    def canonical(value):
+        return str(value or "").split("#", 1)[0].split("?", 1)[0].rstrip("/")
+
+    def loaders_for(url, name):
+        target = canonical(url)
+        loaders = []
+        for edge in script_edges:
+            if not isinstance(edge, dict):
+                continue
+            if canonical(edge.get("to")) == target or _basename(edge.get("to")) == _basename(name):
+                if edge.get("from"):
+                    loaders.append(str(edge["from"]))
+        # Entry scripts are loaded by the scanned page; a runtime-only script
+        # may be loaded by a page/frame when CDP initiator data is unavailable.
+        if not loaders and page_url and (target or name):
+            loaders.append(page_url)
+        return list(dict.fromkeys(loaders))[:12]
+
     out = []
     seen = set()
 
@@ -312,7 +355,15 @@ def build_script_intel(results, runtime_evidence=None, page_url=""):
         if str(name).startswith("__"):
             continue
         runtime_url = runtime_url_by_base.get(_basename(name), "")
-        entry = _intel_for_file(name, data, page_url=page_url, runtime_evidence=runtime_evidence, runtime_url=runtime_url)
+        entry = _intel_for_file(
+            name,
+            data,
+            page_url=page_url,
+            runtime_evidence=runtime_evidence,
+            runtime_url=runtime_url,
+            loaded_by=loaders_for(entry_url := (data.get("url") or runtime_url or name), name),
+            pages_present=page_list,
+        )
         seen.add(entry["name"])
         out.append(entry)
 
@@ -329,6 +380,8 @@ def build_script_intel(results, runtime_evidence=None, page_url=""):
             "domain": _host(url),
             "party": _party(url, page_url),
             "load_method": "runtime_dynamic",
+            "loaded_by": [page_url] if page_url else [],
+            "pages_present": page_list,
             "size": 0,
             "lines": 0,
             "hash": "",

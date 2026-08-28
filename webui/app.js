@@ -535,6 +535,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
         const external = caps.external_destinations || [];
         const domains = Array.from(new Set(external.map((d) => d.domain).filter(Boolean))).slice(0, 6);
         const apis = (s.browser_apis || []).filter((a) => a.enabled);
+        const runtimeRequests = s.runtime_requests || [];
         return `<div class="finding-chip" style="animation-delay:${i * 0.05}s">
           <span class="chip-title" style="color:${partyColor[s.party] || "#22d3ee"}">
             ${escapeHtml(s.name)} · ${escapeHtml(s.party || "unknown")} · risk ${risk.score || 0}/100
@@ -545,6 +546,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
           ${writes.length ? `<div><b>Writes:</b> ${writes.map(escapeHtml).join(", ")}</div>` : ""}
           ${domains.length ? `<div><b>External destinations:</b> ${domains.map(escapeHtml).join(", ")}</div>` : ""}
           ${apis.length ? `<div><b>Browser APIs:</b> ${apis.map((a) => `${a.label} ${a.enabled ? "✓" : "✗"}`).join(" · ")}</div>` : ""}
+          ${runtimeRequests.length ? `<div><b>Runtime network initiated:</b> ${runtimeRequests.slice(0, 6).map((r) => `${r.method || "GET"} ${r.url || ""}`).map(escapeHtml).join(" · ")}</div>` : ""}
         </div>`;
       })
       .join("");

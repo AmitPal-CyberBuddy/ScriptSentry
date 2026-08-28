@@ -43,6 +43,14 @@ A dangerous API or DOM call without a source, reachability context, or impact is
 - Live local server smoke: static UI headers/assets, health, unauthenticated rejection, disallowed-origin rejection, authenticated code job, polling, result payload, and SARIF export — passed.
 - Existing analysis tests cover AST/profile, endpoint/attack-surface extraction, source-to-sink taint, sanitizer handling, framework/dependency signals, script inventory, runtime finding normalization, dashboard sections, and report exports.
 
+## Follow-up review actions
+
+The external review correctly emphasized false-positive discipline, first-class behavior profiles, third-party intelligence, and script-to-network attribution. The current branch already had the modular `webui`/`server`/`core`/`analyzers` split, evidence-aware findings, and behavior inventory, so a disruptive directory rename was not necessary. This follow-up adds the useful missing pieces:
+
+- `tests/corpus/` now contains representative categorized JavaScript fixtures and contract tests, including the reachable-versus-sanitized DOM case and fixture-secret filtering.
+- Script inventory entries now retain `loaded_by`, `pages_present`, and runtime requests attributed to a script where Chromium/CDP exposes an initiator stack.
+- Runtime network records now preserve bounded `initiated_by` script URLs, while messaging and storage-read evidence is exposed consistently to the dashboard.
+
 ## Deliberate limitations
 
 - Playwright is optional and Chromium is not installed in the current execution environment, so a real browser execution pass was not available during this audit. The disabled/missing-dependency path is tested; installing Chromium enables the runtime capture path described above.

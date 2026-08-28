@@ -448,6 +448,10 @@ def analyze_url(
         )
 
     state["script_urls"].extend(discovered[:max_files])
+    state["script_edges"].extend(
+        {"from": url, "to": link, "kind": "html_script", "depth": 0}
+        for link in discovered[:max_files]
+    )
     _notify(
         progress_callback,
         phase="download",

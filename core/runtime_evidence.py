@@ -34,7 +34,7 @@ INSTRUMENTATION_JS = r"""
   const w = window;
   if (w.__SS_RUNTIME__) return;
   const r = w.__SS_RUNTIME__ = {
-    evals: [], timers: [], dom: [], storage: [], writes: [], errors: [],
+    evals: [], timers: [], dom: [], storage_reads: [], storage_writes: [], writes: [], errors: [],
     browser_api: [], post_messages: [], cookie_access: []
   };
 
@@ -130,8 +130,9 @@ INSTRUMENTATION_JS = r"""
   } catch (e) {}
 
   try {
-    const originalPostMessage = w.postMessage;
-    w.postMessage = function (message, targetOrigin) {
+    const postMessageProto = Window.prototype;
+    const originalPostMessage = postMessageProto.postMessage;
+    postMessageProto.postMessage = function (message, targetOrigin) {
       push(r.post_messages, { direction: "out", targetOrigin: String(targetOrigin || ""), valueLength: String(message).length, url: location.href });
       return originalPostMessage.apply(this, arguments);
     };
@@ -146,7 +147,7 @@ INSTRUMENTATION_JS = r"""
     try {
       const originalGet = storage.getItem;
       storage.getItem = function (key) {
-        push(r.storage, {
+        push(r.storage_reads, {
           storage: name,
           operation: "getItem",
           key: String(key),
@@ -156,8 +157,9 @@ INSTRUMENTATION_JS = r"""
       };
       const originalSet = storage.setItem;
       storage.setItem = function (key, value) {
-        push(r.storage, {
+        push(r.storage_writes, {
           storage: name,
+          operation: "setItem",
           key: String(key),
           valueLength: String(value).length,
           url: location.href,
@@ -185,7 +187,7 @@ INSTRUMENTATION_JS = r"""
 
 EXTRACT_INSTRUMENTED_STATE_JS = r"""
 () => {
-  const r = window.__SS_RUNTIME__ || { evals: [], timers: [], dom: [], storage: [], writes: [], post_messages: [], cookie_access: [] };
+  const r = window.__SS_RUNTIME__ || { evals: [], timers: [], dom: [], storage_reads: [], storage_writes: [], writes: [], post_messages: [], cookie_access: [] };
   const safe = (obj) => {
     try {
       return Object.keys(obj || {});
@@ -205,7 +207,8 @@ EXTRACT_INSTRUMENTED_STATE_JS = r"""
     eval_calls: r.evals || [],
     string_timers: r.timers || [],
     dom_sinks: r.dom || [],
-    storage_writes: r.storage || [],
+    storage_reads: r.storage_reads || [],
+    storage_writes: r.storage_writes || [],
     storage_removals: r.writes || [],
     post_messages: r.post_messages || [],
     cookie_access: r.cookie_access || [],
@@ -289,14 +292,33 @@ def _record_script(response, store, limit, max_bytes=2_000_000):
         pass
 
 
-def _merge_requests_and_responses(requests, responses):
-    """Merge request/response snapshots into one compact ordered list."""
+def _merge_requests_and_responses(requests, responses, attributions=None):
+    """Merge request/response snapshots and best-effort initiator data."""
+    attributions = attributions or {}
     by_url = {}
     for request in requests:
         by_url[(request.get("method"), request.get("url"))] = request
     for (method, url), response in responses.items():
         by_url[(method, url)] = {**by_url.get((method, url), {}), **response}
+    for key, sources in attributions.items():
+        if key in by_url and sources:
+            by_url[key]["initiated_by"] = list(dict.fromkeys(sources))[:8]
     return list(by_url.values())[:300]
+
+
+def _cdp_initiator_urls(event):
+    """Extract script URLs from Chromium's best-effort initiator stack."""
+    initiator = event.get("initiator") or {}
+    values = []
+    if initiator.get("url"):
+        values.append(str(initiator["url"]))
+    stack = initiator.get("stack") or {}
+    while stack:
+        for frame in stack.get("callFrames", []) or []:
+            if frame.get("url"):
+                values.append(str(frame["url"]))
+        stack = stack.get("parent") or stack.get("parentStack") or {}
+    return list(dict.fromkeys(values))[:8]
 
 
 def capture_runtime_evidence(
@@ -354,6 +376,7 @@ def capture_runtime_evidence(
     context = None
     requests = []
     responses = {}
+    request_attributions = {}
     console_entries = []
     page_errors = []
     websockets = []
@@ -388,6 +411,25 @@ def capture_runtime_evidence(
             )
             page = context.new_page()
             page.add_init_script(INSTRUMENTATION_JS)
+
+            # Chromium exposes the initiating script stack through CDP. This
+            # is best-effort: Firefox/WebKit and older Chromium builds simply
+            # use the regular Playwright request metadata.
+            cdp_session = None
+            try:
+                cdp_session = context.new_cdp_session(page)
+                cdp_session.send("Network.enable")
+
+                def record_cdp_request(event):
+                    request = event.get("request") or {}
+                    key = (request.get("method", "GET"), request.get("url", ""))
+                    sources = _cdp_initiator_urls(event)
+                    if key[1] and sources:
+                        request_attributions[key] = sources
+
+                cdp_session.on("Network.requestWillBeSent", record_cdp_request)
+            except Exception:
+                cdp_session = None
 
             page.on("request", lambda req: _record_request(req, requests, max_requests))
             page.on("response", lambda res: _record_response(res, responses, max_requests))
@@ -440,7 +482,7 @@ def capture_runtime_evidence(
             browser = None
             context = None
 
-        request_list = _merge_requests_and_responses(requests, responses)
+        request_list = _merge_requests_and_responses(requests, responses, request_attributions)
         return {
             "enabled": True,
             "available": True,
@@ -487,6 +529,13 @@ def capture_runtime_evidence(
             "dom_sinks": _limit(state.get("dom_sinks", []), 120),
             "storage_writes": _limit(state.get("storage_writes", []), 120),
             "storage_removals": _limit(state.get("storage_removals", []), 80),
+            "storage_reads": _limit(state.get("storage_reads", []), 120),
+            "post_messages": _limit(state.get("post_messages", []), 120),
+            "message_listeners": _limit(
+                [item for item in (state.get("post_messages", []) or []) if isinstance(item, dict) and item.get("direction") == "in"],
+                80,
+            ),
+            "cookie_access": _limit(state.get("cookie_access", []), 120),
         }
     except Exception as exc:
         if browser is not None:

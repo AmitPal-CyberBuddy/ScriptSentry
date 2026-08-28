@@ -95,6 +95,35 @@ class ScriptIntelTest(unittest.TestCase):
         self.assertTrue(any(a["key"] == "post_message" and a["enabled"] for a in by_name["vendor.js"]["browser_apis"]))
         self.assertIn("legacy-tracker.js", by_name)
 
+    def test_inventory_preserves_loading_relationships_and_runtime_attribution(self):
+        results = {
+            "https://cdn.vendor.net/vendor.js": {
+                **self.vendor_data,
+                "url": "https://cdn.vendor.net/vendor.js",
+            },
+            "__scan_summary__": {
+                "script_edges": [
+                    {"from": self.target, "to": "https://cdn.vendor.net/vendor.js", "kind": "html_script"}
+                ]
+            },
+        }
+        runtime = {
+            "url": self.target,
+            "captured": True,
+            "scripts": [],
+            "frame_urls": [],
+            "requests": [{
+                "method": "POST",
+                "url": "https://analytics.example.net/collect",
+                "initiated_by": ["https://cdn.vendor.net/vendor.js"],
+                "status": 204,
+            }],
+        }
+        entry = build_script_intel(results, runtime, self.target)[0]
+        self.assertEqual(entry["loaded_by"], [self.target])
+        self.assertEqual(entry["pages_present"], [self.target])
+        self.assertEqual(entry["runtime_requests"][0]["method"], "POST")
+
     def test_data_exfiltration_candidates_static(self):
         results = {"https://cdn.vendor.net/vendor.js": {**self.vendor_data, "url": "https://cdn.vendor.net/vendor.js"}}
         candidates = data_exfiltration_candidates(results, page_url=self.target)
