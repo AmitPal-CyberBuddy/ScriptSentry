@@ -58,17 +58,41 @@
     backendChecked = false;
   }
 
-  /* Backend liveness + privacy gate */
+  /* Backend liveness + privacy gate
+   *
+   * The status is rendered in two places (the header pill and the setup
+   * dialog).  The dot is a real animated element (pulsing core + expanding
+   * ring) so an offline engine is obvious at a glance, and the state is also
+   * carried by a class for colour/aria, never by a static emoji.
+   */
+  const ENGINE_STATE_CLASS = {
+    offline: "is-offline",
+    checking: "is-checking",
+    online: "is-online",
+  };
+
   function setEngineStatus(state, text) {
-    const dot = $("#engine-dot");
-    const label = $("#engine-status-text");
-    if (!dot || !label) return;
-    dot.className = "dot" + (state === "offline" ? " offline" : state === "checking" ? " checking" : "");
-    label.textContent = text || "Local engine offline — run server.py";
+    const stateClass = ENGINE_STATE_CLASS[state] || "is-online";
+    const label = text || "Local engine offline — run server.py";
+    [
+      ["#engine-dot", "#engine-status-text"],
+      ["#engine-dot-modal", "#engine-status-text-modal"],
+    ].forEach(([dotSel, labelSel]) => {
+      const dot = $(dotSel);
+      const textNode = $(labelSel);
+      if (dot) dot.className = `pulse-dot ${stateClass}`;
+      if (textNode) textNode.textContent = label;
+    });
+    const pill = $("#engine-status");
+    if (pill) {
+      pill.className = `engine-pill ${stateClass}`;
+      pill.setAttribute("aria-label", `Local engine status: ${label}. Click to open the setup guide.`);
+    }
+    const aside = $("#engine-status-aside");
+    if (aside) aside.className = `aside-status ${stateClass}`;
   }
 
   async function checkBackend() {
-    const dot = $("#engine-dot");
     setEngineStatus("checking", "Checking local engine…");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2500);
@@ -79,19 +103,19 @@
         if (health.auth_required && !apiToken()) {
           backendConnected = false;
           backendChecked = true;
-          setEngineStatus("checking", "🟡 Engine online · pairing token required");
+          setEngineStatus("checking", "Engine online · pairing token required");
           return false;
         }
         backendConnected = true;
         backendChecked = true;
-        setEngineStatus("", "🟢 Local engine connected · private analysis ready");
+        setEngineStatus("online", "Local engine connected · private analysis ready");
         return true;
       }
       throw new Error("health not ok");
     } catch {
       backendConnected = false;
       backendChecked = true;
-      setEngineStatus("offline", "🔴 Local engine offline — run server.py");
+      setEngineStatus("offline", "Local engine offline — run server.py");
       return false;
     } finally {
       clearTimeout(timer);
@@ -107,7 +131,14 @@
 
   function openPrivacyModal() {
     const modal = $("#privacy-modal");
-    if (modal) modal.hidden = false;
+    if (!modal) return;
+    modal.hidden = false;
+    document.body.classList.add("modal-open");
+    // Focus the least destructive control that is always useful here.
+    const target = apiToken() ? $("#retry-backend") : $("#engine-token");
+    if (target && typeof target.focus === "function") {
+      setTimeout(() => target.focus({ preventScroll: true }), 40);
+    }
   }
 
   function showConnectionError(error) {
@@ -157,8 +188,99 @@
   function closePrivacyModal() {
     const modal = $("#privacy-modal");
     if (modal) modal.hidden = true;
+    document.body.classList.remove("modal-open");
     const node = $("#connection-error");
     if (node) node.hidden = true;
+  }
+
+  /* Force-download the one-file launcher.
+   *
+   * A plain `<a href="https://raw.githubusercontent.com/…" download>` does NOT
+   * download: browsers ignore the `download` attribute for cross-origin
+   * targets, so the file opens in a tab instead.  Fetching the text and saving
+   * it through a same-origin blob URL is what actually produces a download.
+   */
+  function saveBlob(blob, filename) {
+    const href = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.download = filename;
+    anchor.rel = "noopener";
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    // Give the browser a moment to start the download before releasing it.
+    setTimeout(() => URL.revokeObjectURL(href), 30000);
+  }
+
+  async function downloadLauncher(btn) {
+    if (!btn || btn.disabled) return;
+    const url = String(btn.getAttribute("data-download") || "").trim();
+    const filename = String(btn.getAttribute("data-filename") || "scriptsentry.py").trim();
+    const hint = btn.parentElement ? btn.parentElement.querySelector(".download-hint") : null;
+    const original = btn.textContent;
+    if (!url) return;
+
+    btn.disabled = true;
+    btn.textContent = "⏳ Downloading…";
+    if (hint) hint.textContent = "";
+
+    try {
+      const res = await fetch(url, { mode: "cors", cache: "no-store", credentials: "omit" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      if (!text.trim()) throw new Error("empty file");
+      saveBlob(new Blob([text], { type: "text/x-python;charset=utf-8" }), filename);
+      if (hint) hint.textContent = `✅ Downloaded ${filename}`;
+      btn.textContent = "✅ Downloaded";
+    } catch {
+      // Last resort: open it so the user can still save it manually.
+      if (hint) hint.textContent = "⚠️ Couldn't save automatically — opened in a new tab.";
+      window.open(url, "_blank", "noopener,noreferrer");
+    } finally {
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.disabled = false;
+      }, 1800);
+    }
+  }
+
+  /* Shared page chrome: setup modal, engine pill, launcher downloads. */
+  function initChrome() {
+    $$(".js-download-launcher").forEach((btn) => {
+      btn.addEventListener("click", () => downloadLauncher(btn));
+    });
+
+    const pill = $("#engine-status");
+    if (pill) pill.addEventListener("click", openPrivacyModal);
+
+    const heroSetup = $("#hero-setup");
+    if (heroSetup) heroSetup.addEventListener("click", openPrivacyModal);
+
+    const closeX = $("#close-modal-x");
+    if (closeX) closeX.addEventListener("click", closePrivacyModal);
+
+    // Clicking the dimmed backdrop also closes the dialog.
+    const modal = $("#privacy-modal");
+    if (modal) {
+      modal.addEventListener("mousedown", (event) => {
+        if (event.target === modal) closePrivacyModal();
+      });
+    }
+
+    // Smooth in-page scrolling for the header / footer navigation.
+    $$('a[href^="#"]').forEach((link) => {
+      link.addEventListener("click", (event) => {
+        const id = link.getAttribute("href").slice(1);
+        if (!id) return;
+        const target = document.getElementById(id);
+        if (!target) return;
+        event.preventDefault();
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+        if (history.replaceState) history.replaceState(null, "", `#${id}`);
+      });
+    });
   }
 
   async function retryBackend() {
@@ -1473,6 +1595,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
   function init() {
     initParticles();
+    initChrome();
     initTabs();
     initViews();
     initUpload();

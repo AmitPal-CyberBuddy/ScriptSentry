@@ -4,14 +4,16 @@
 
 This is the **free, privacy-first** setup:
 
-- GitHub Pages hosts the UI (`webui/index.html`, `app.js`, `styles.css`, `config.js`).
+- GitHub Pages hosts the UI (`webui/index.html`, `app.js`, `styles.css`, `config.js`,
+  plus the `webui/assets/` brand pack — favicons, app icons, web manifest and the
+  Open Graph card).
 - The analyzer runs **only on the visitor's machine** via `python3 server.py`.
 - No JavaScript ever uploads to a cloud. The page is just chrome; `server.py` does the work locally.
 
 ### How it works
 1. A visitor opens the hosted page.
-2. If `server.py` is not running, the UI shows an engine-status badge:
-   `🔴 Local engine offline — run server.py`.
+2. If `server.py` is not running, the header shows a red **animated** engine pill:
+   `Local engine offline — run server.py`. Clicking it opens the setup guide.
 3. When they press Analyze / Scan / Export, a **privacy modal** opens with a short setup guide.
 4. They run `python3 server.py --port 8000` locally.
 5. The hosted page connects to `http://127.0.0.1:8000` and the tool runs from the hosted UI.

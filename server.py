@@ -218,6 +218,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 return
             self._send_error_json("Not found", 404)
             return
+        # Browsers probe /favicon.ico regardless of the <link rel="icon"> tag;
+        # point it at the real brand asset instead of logging a 404.
+        if parsed.path in ("/favicon.ico", "/favicon.png"):
+            self.send_response(302)
+            self.send_header("Location", "/assets/favicon.svg")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if parsed.path == "/":
             self.path = "/index.html"
         return super().do_GET()

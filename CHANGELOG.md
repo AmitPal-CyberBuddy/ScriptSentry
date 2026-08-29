@@ -78,6 +78,36 @@ release yet.
 - Added an **authorized-testing-only** notice to the page, the setup modal and
   the README.
 
+### Brand, landing page & front-end fixes
+- **Proper identity**: real SVG logo (shield + `</>` mark) rendered inline in the
+  header and footer, plus `webui/assets/favicon.svg`, `favicon-32.png`,
+  `icon-192.png`, `icon-512.png`, `apple-touch-icon.png`, a 1200×630
+  `og-card.png` and a `site.webmanifest`. The page now ships full favicon,
+  Open Graph and Twitter card metadata instead of a bare title.
+- **Landing page**: the dashboard is now a single scrollable site with a sticky
+  header (nav + **⚡ Go to tool** button), hero with dual CTAs, "What it finds",
+  "How it works", "Why it's trustworthy", "Run your own engine" and
+  "Connect with me" sections, and a multi-column footer with legal notice.
+- **Fixed the launcher download.** The setup dialog used
+  `<a href="raw.githubusercontent.com/…" download>`, which browsers ignore for
+  cross-origin targets — the file opened in a tab instead of downloading. The
+  launcher is now fetched and saved through a same-origin blob URL, with a
+  new-tab fallback and an inline status hint.
+- **Engine status is now an animated indicator.** The header pill uses a
+  pulsing core + expanding ring (green / amber / red) instead of a static 🟢/🔴
+  emoji, is clickable to open the setup guide, and is mirrored inside the
+  setup dialog.
+- **Setup dialog**: wider two-column layout on large screens (900 px), a proper
+  **× close button** in the top-right, backdrop-click and Escape to dismiss,
+  scroll lock, focus handling, and a dedicated "Pair the engine" column with
+  the live engine state.
+- **Target URL input was unstyled** (only `textarea` and `input[type=text]`
+  were). All text/url/email/password inputs now share the themed field style,
+  with a 🌐 prefixed URL field, a 🔑 prefixed token field, focus/hover states,
+  placeholder colouring and a dark-mode autofill fix.
+- `server.py` redirects the browser's automatic `/favicon.ico` probe to the real
+  SVG asset instead of returning 404.
+
 ### Maintenance
 - Engine version centralized in `core/version.py`; added `release.json` and
   this changelog. TXT report no longer iterates string evidence

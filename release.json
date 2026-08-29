@@ -21,7 +21,13 @@
     "One-file launcher (scriptsentry.py): download a single file and run it; on first run it bootstraps the engine from GitHub, installs dependencies and starts the server.",
     "Dashboard setup modal offers a download button for the launcher vs. git clone, plus inline input validation (no more browser alert popups) and an authorized-testing notice.",
     "Local file upload: drag & drop or browse one or more .js/.mjs/.ts files to analyze together with per-file attribution (read in the browser, analyzed only by the local engine); extension and size limits enforced.",
-    "Scan options (profile, depth, file cap, workers) now have inline ? tooltips explaining each control."
+    "Scan options (profile, depth, file cap, workers) now have inline ? tooltips explaining each control.",
+    "Real brand identity: inline SVG logo, SVG/PNG favicons, app icons, web manifest, and a 1200x630 Open Graph card.",
+    "Proper landing page: sticky header with a 'Go to tool' button, hero CTAs, What it finds / How it works / Trust / Setup sections, a 'Connect with me' section and a multi-column footer.",
+    "Fixed the launcher download button: cross-origin `download` was ignored by browsers, so the file opened instead of downloading; it now saves via a same-origin blob URL (with a new-tab fallback).",
+    "Engine status is an animated pulsing indicator (green/amber/red) instead of a static emoji, and clicking it opens the setup guide.",
+    "Setup dialog is wider on large screens (two-column, 900px) and has an X close button, backdrop/Escape dismissal, scroll lock and focus handling.",
+    "Target URL and pairing-token inputs are now properly styled (they previously fell through the CSS and rendered unstyled)."
   ],
   "compatibility": {
     "python": ">=3.8",
