@@ -109,9 +109,11 @@ python -m playwright install chromium
 python3 server.py
 ```
 
-Open the URL the server prints (default `http://127.0.0.1:8000`). On startup the
-server prints a one-time **engine pairing token** — paste it into the page's
-privacy modal when prompted. The token stays in that browser tab only and is
+Open the URL the server prints (default `http://127.0.0.1:8000`). Locally, `/`
+serves the **analysis console** (`tool.html`) directly; the overview/landing page
+lives at `/index.html`. On startup the server prints a one-time **engine pairing
+token** — paste it into the page's setup dialog when prompted (the header's
+animated engine pill opens it). The token stays in that browser tab only and is
 sent as an `X-ScriptSentry-Token` header.
 
 You can analyze JavaScript three ways:
@@ -187,7 +189,10 @@ You can host the dashboard front-end (for example on **GitHub Pages**) while the
 analysis engine stays entirely on your own machine:
 
 1. Publish the `webui/` folder (a ready-made workflow is in
-   `deployment/deploy-pages.yml`).
+   `deployment/deploy-pages.yml`). It is two static pages — `index.html`
+   (overview, what it finds, how it works, setup, connect) and `tool.html`
+   (the console) — plus `assets/` (favicons, app icons, web manifest, social
+   card). GitHub Pages serves `index.html` at `/`.
 2. On your machine run `pip install -r requirements.txt && python3 server.py`.
 3. Open the hosted page and enter the pairing token. It talks directly to your
    local `127.0.0.1` engine — **no code ever leaves your computer**.

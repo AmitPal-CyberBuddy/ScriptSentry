@@ -226,8 +226,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        # The dashboard is two pages: `index.html` (landing/overview) and
+        # `tool.html` (the analysis console).  GitHub Pages serves the landing
+        # page at `/`, but a local engine is almost always launched to *use* the
+        # tool, so loopback visitors land straight on the console.
         if parsed.path == "/":
-            self.path = "/index.html"
+            self.path = "/tool.html"
         return super().do_GET()
 
     def _read_json_body(self):

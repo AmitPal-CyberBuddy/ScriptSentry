@@ -16,6 +16,15 @@
  * Set SCRIPTSENTRY_API before this file if the engine is hosted elsewhere.
  */
 (function () {
+  // Mark the document as script-enabled *before* the body renders so the
+  // scroll-reveal stylesheet can hide elements without ever hiding them from
+  // a visitor whose JavaScript failed to load.
+  try {
+    document.documentElement.classList.add("js-reveal");
+  } catch (err) {
+    /* nothing to do — the page stays fully visible */
+  }
+
   var host = window.location.hostname || "";
   var isLocalHost = /^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/.test(host);
 

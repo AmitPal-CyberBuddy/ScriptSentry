@@ -2514,3 +2514,117 @@ main.wrap {
     font-size: 12.5px;
   }
 }
+
+/* ============================================================
+   Two-page layout: scroll reveal, progress bar, console page
+   ============================================================ */
+
+/* ---------------- Scroll reveal ---------------- */
+
+/* Only hidden when JS is running (see config.js), so a failed script can
+   never leave the page blank. */
+.js-reveal [data-reveal] {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity 0.75s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.75s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--reveal-delay, 0ms);
+  will-change: opacity, transform;
+}
+
+.js-reveal [data-reveal].is-visible {
+  opacity: 1;
+  transform: none;
+  will-change: auto;
+}
+
+/* The hero should be readable immediately, not gated behind a transition. */
+.hero [data-reveal],
+.tool-hero [data-reveal] {
+  opacity: 1;
+  transform: none;
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .js-reveal [data-reveal] {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+}
+
+/* ---------------- Scroll progress bar ---------------- */
+
+.scroll-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  background: linear-gradient(90deg, #22d3ee, #38bdf8 55%, #a78bfa);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.6);
+  pointer-events: none;
+}
+
+/* ---------------- Active nav link ---------------- */
+
+.site-nav a.is-active {
+  color: #dbe7ff;
+}
+
+.site-nav a.is-active::after {
+  right: 0;
+}
+
+/* ---------------- Console page hero ---------------- */
+
+.tool-hero {
+  max-width: 760px;
+  margin: 26px auto 34px;
+  text-align: center;
+}
+
+.tool-hero h1 {
+  margin: 0 0 14px;
+  font-size: clamp(30px, 5vw, 52px);
+  line-height: 1.08;
+  letter-spacing: -0.035em;
+  font-weight: 900;
+  background: linear-gradient(90deg, #e6eefc 0%, #7dd3fc 45%, #c4b5fd 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.tool-hero p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+.tool-hero p b {
+  color: #dbe7ff;
+}
+
+.tool-hero .hero-cta {
+  margin-top: 24px;
+}
+
+.tool-hero .btn {
+  text-decoration: none;
+}
+
+.tool-section {
+  margin-top: 18px;
+}
+
+.console-title {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}

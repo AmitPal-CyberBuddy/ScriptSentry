@@ -79,6 +79,25 @@ release yet.
   the README.
 
 ### Brand, landing page & front-end fixes
+- **Two pages instead of one**: `index.html` is now the overview/landing page
+  (hero, what it finds, how it works, trust, setup, connect) and `tool.html`
+  hosts the analysis console. Both share `app.js`, `styles.css` and `config.js`;
+  the script detects which page it is on and only wires the analyzer when the
+  console markup is present. `server.py` serves `/` → `tool.html` so a locally
+  started engine opens the console, while GitHub Pages serves `index.html`.
+- **Scroll animations**: sections, cards, steps and footer columns reveal as
+  they enter the viewport (`IntersectionObserver`, staggered, unobserve after
+  the first reveal), plus a scroll-progress bar under the sticky header and
+  active-section highlighting in the nav. All of it is disabled under
+  `prefers-reduced-motion`, and the hidden state is scoped to a `js-reveal`
+  class set in `config.js` so a failed script can never blank the page.
+- **Proper headings**: one `h1` per page ("Watch every line…" on the overview,
+  "JavaScript analysis console" on the console page), `h2` per section, `h3` per
+  card, plus a skip-to-content link and `aria-current` on the active nav link.
+- **Connect section is about ScriptSentry, not CyberBuddy.** It now reads
+  "Building ScriptSentry for analysts, with analysts" with a ScriptSentry
+  roadmap item (build-over-build diffing and a CI gate) instead of the
+  CyberBuddy / HAR Analyzer copy.
 - **Proper identity**: real SVG logo (shield + `</>` mark) rendered inline in the
   header and footer, plus `webui/assets/favicon.svg`, `favicon-32.png`,
   `icon-192.png`, `icon-512.png`, `apple-touch-icon.png`, a 1200×630

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ScriptSentry — Privacy-first JavaScript security &amp; behavior intelligence</title>
-  <meta name="description" content="ScriptSentry is a free, privacy-first JavaScript security analyzer. Paste code, upload files or scan a URL and explore secrets, DOM XSS flows, attack surface, obfuscation and third-party behavior — 100% locally, in your browser and on your own machine." />
+  <meta name="description" content="ScriptSentry is a free, privacy-first JavaScript security analyzer. Paste code, upload files or scan a URL and explore secrets, DOM XSS flows, attack surface, obfuscation and third-party behavior — 100% locally, on your own machine." />
   <meta name="color-scheme" content="dark" />
   <meta name="theme-color" content="#060a13" />
   <meta name="author" content="Amit Pal" />
@@ -22,12 +22,12 @@
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="ScriptSentry" />
   <meta property="og:title" content="ScriptSentry — Watch every line. Detect every risk." />
-  <meta property="og:description" content="A free, privacy-first JavaScript security &amp; script-behavior intelligence tool. Everything runs locally — your code never leaves your machine." />
+  <meta property="og:description" content="Free, privacy-first JavaScript security &amp; script-behavior intelligence. Runs locally — your code never leaves your machine." />
   <meta property="og:image" content="assets/og-card.png" />
   <meta property="og:image:alt" content="ScriptSentry — privacy-first JavaScript security analyzer" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="ScriptSentry — Watch every line. Detect every risk." />
-  <meta name="twitter:description" content="Free, privacy-first JavaScript security &amp; script-behavior intelligence. Runs locally, no cloud, no accounts." />
+  <meta name="twitter:description" content="Free, privacy-first JavaScript security &amp; script-behavior intelligence. Runs locally — your code never leaves your machine." />
   <meta name="twitter:image" content="assets/og-card.png" />
 
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' blob: data: http://127.0.0.1:* http://localhost:* https:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none';" />
@@ -39,8 +39,7 @@
   <div class="bg-glow bg-glow-1"></div>
   <div class="bg-glow bg-glow-2"></div>
   <div class="bg-glow bg-glow-3"></div>
-
-  <a class="skip-link" href="#tool">Skip to the analyzer</a>
+  <a class="skip-link" href="#main">Skip to content</a>
 
   <!-- ============================ Header ============================ -->
   <header class="site-header" id="site-header">
@@ -83,12 +82,13 @@
           <span class="pulse-dot" id="engine-dot" aria-hidden="true"></span>
           <span class="engine-text" id="engine-status-text">Checking local engine…</span>
         </button>
-        <a class="btn btn-sm go-to-tool" href="#tool">⚡ Go to tool</a>
+        <a class="btn btn-sm go-to-tool" href="tool.html">⚡ Go to tool</a>
       </div>
     </div>
+    <div class="scroll-progress" id="scroll-progress" aria-hidden="true"></div>
   </header>
 
-  <main class="wrap">
+  <main class="wrap" id="main">
     <!-- ============================ Hero ============================ -->
     <section class="hero" id="top">
       <span class="eyebrow">🛡️ Free · Open source · Runs on your machine</span>
@@ -100,7 +100,7 @@
         dashboard.
       </p>
       <div class="hero-cta">
-        <a class="btn btn-lg" href="#tool">⚡ Open the analyzer</a>
+        <a class="btn btn-lg" href="tool.html">⚡ Open the analyzer</a>
         <button class="btn btn-lg ghost" id="hero-setup" type="button">🛠️ Setup guide</button>
       </div>
       <div class="badges">
@@ -312,289 +312,35 @@ python3 server.py --port 8000</pre>
       </div>
     </section>
 
-    <!-- ============================ The tool ============================ -->
-    <section class="section tool-section" id="tool">
-      <div class="section-head">
-        <span class="section-kicker">05 — The tool</span>
-        <h2>Analysis console</h2>
-        <p>Paste code, upload files or scan a target URL. Everything below is analyzed by your own local engine.</p>
-      </div>
-
-      <section class="console fade-up">
-        <div class="console-head">
-          <div class="console-title">🔎 Analysis Console</div>
-          <div class="tabs" role="tablist">
-            <button class="tab active" data-pane="code" role="tab">Paste Code</button>
-            <button class="tab" data-pane="url" role="tab">Scan URL</button>
-          </div>
-        </div>
-
-        <div class="console-body">
-          <div class="pane active" id="pane-code">
-            <div class="inline-tabs" role="tablist">
-              <button class="inline-tab active" data-input="paste" role="tab">📋 Paste code</button>
-              <button class="inline-tab" data-input="upload" role="tab">📁 Upload files</button>
-            </div>
-
-            <div data-input-pane="paste">
-              <label class="field-label" for="code-input">JavaScript source</label>
-              <textarea id="code-input" spellcheck="false" placeholder="// Paste your JavaScript here..."></textarea>
-              <p class="field-error" id="code-error" role="alert" hidden></p>
-              <div class="row">
-                <button class="btn" id="analyze-code">⚡ Analyze Code</button>
-                <button class="btn ghost" id="load-sample">✨ Try a sample</button>
-                <div class="inline-field">
-                  <label class="field-label" for="filename-input">Filename</label>
-                  <input id="filename-input" type="text" value="inline.js" placeholder="filename.js" spellcheck="false" />
-                </div>
-              </div>
-            </div>
-
-            <div data-input-pane="upload" hidden>
-              <label class="field-label">JavaScript files</label>
-              <label class="dropzone" id="dropzone" for="file-input">
-                <input id="file-input" type="file" multiple
-                       accept=".js,.mjs,.cjs,.jsx,.ts,.map,.txt,text/javascript,application/javascript" hidden />
-                <div class="dropzone-ico">📄</div>
-                <div><b>Click to browse</b> or drag &amp; drop <code>.js</code> / <code>.mjs</code> files</div>
-                <div class="dropzone-sub">Files are read in your browser and analyzed by the local engine only — nothing is uploaded to a cloud.</div>
-              </label>
-              <div id="file-list" class="file-list"></div>
-              <p class="field-error" id="file-error" role="alert" hidden></p>
-              <div class="row">
-                <button class="btn" id="analyze-files">⚡ Analyze Files</button>
-                <button class="btn ghost" id="clear-files">✖ Clear</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="pane" id="pane-url">
-            <label class="field-label" for="url-input">Target URL</label>
-            <div class="url-field">
-              <span class="url-field-icon" aria-hidden="true">🌐</span>
-              <input id="url-input" class="url-input" type="url" inputmode="url" autocapitalize="off" spellcheck="false"
-                     autocomplete="off" placeholder="https://example.com/app.js  or  https://example.com" />
-            </div>
-            <p class="field-error" id="url-error" role="alert" hidden></p>
-            <p class="field-hint">Only public <code>http(s)</code> URLs are scanned — locally, by your own engine. Private/loopback addresses and credentials in the URL are rejected.</p>
-            <div class="config-row">
-              <div class="config-block">
-                <label class="field-label" for="profile">Profile <span class="help" tabindex="0" data-tip="Scan intensity. Fast: shallow &amp; quick. Balanced: good default. Strict: deeper recursion, longer timeouts, more files.">?</span></label>
-                <select id="profile">
-                  <option value="fast">⚡ Fast</option>
-                  <option value="balanced" selected>⚖️ Balanced</option>
-                  <option value="strict">🔥 Strict</option>
-                </select>
-              </div>
-              <div class="config-block">
-                <label class="field-label" for="max-depth">Max depth <span class="help" tabindex="0" data-tip="How many levels of scripts loading scripts are followed (imports/chunks). 3 = entry scripts only, 5–7 = full bundle graphs.">?</span></label>
-                <select id="max-depth">
-                  <option value="3">3</option>
-                  <option value="5" selected>5</option>
-                  <option value="7">7</option>
-                  <option value="10">10</option>
-                </select>
-              </div>
-              <div class="config-block">
-                <label class="field-label" for="max-files">Max files <span class="help" tabindex="0" data-tip="Cap on how many JavaScript files are analyzed. Prevents huge sites from running too long. Skipped files are reported in the Assets view.">?</span></label>
-                <select id="max-files">
-                  <option value="25">25</option>
-                  <option value="50" selected>50</option>
-                  <option value="100">100</option>
-                  <option value="200">200</option>
-                  <option value="500">500</option>
-                  <option value="1000">1000</option>
-                </select>
-              </div>
-              <div class="config-block">
-                <label class="field-label" for="workers">Workers <span class="help" tabindex="0" data-tip="Parallel analyzer threads. Higher = faster on a powerful machine; lower it if you're low on RAM.">?</span></label>
-                <select id="workers">
-                  <option value="2">2</option>
-                  <option value="4">4</option>
-                  <option value="6" selected>6</option>
-                  <option value="8">8</option>
-                  <option value="12">12</option>
-                  <option value="16">16</option>
-                </select>
-              </div>
-            </div>
-            <div class="row">
-              <button class="btn" id="analyze-url">🚀 Analyze Target</button>
-            </div>
-          </div>
-
-          <div class="loading" id="loading">
-            <span class="spinner"></span>
-            <span class="progress-wrap">
-              <span id="loading-text">Analyzing…</span>
-              <span class="progress-track" aria-hidden="true"><i class="progress-fill" id="progress-fill"></i></span>
-              <span class="progress-stats" id="progress-stats"></span>
-            </span>
-            <button class="btn ghost cancel-btn" id="cancel-scan" type="button">Cancel</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="results" id="results">
-        <div class="results-header">
-          <h2>📊 Analysis Dashboard</h2>
-          <div class="row" style="margin:0">
-            <div class="meta" id="result-meta"></div>
-            <button class="btn ghost" id="export-html">📄 HTML</button>
-            <button class="btn ghost" id="export-txt">📝 TXT</button>
-            <button class="btn ghost" id="export-csv">📊 CSV</button>
-            <button class="btn ghost" id="export-sarif">🧾 SARIF</button>
-          </div>
-        </div>
-
-        <div class="view-tabs fade-up" id="view-tabs">
-          <button class="view-tab active" data-view="overview">📊 Overview</button>
-          <button class="view-tab" data-view="findings">🚦 Findings</button>
-          <button class="view-tab" data-view="scripts">📚 Scripts</button>
-          <button class="view-tab" data-view="intelligence">🧠 Intelligence</button>
-          <button class="view-tab" data-view="runtime">🖥️ Runtime</button>
-        </div>
-
-        <div class="grid grid-2 view-group" data-view="overview">
-          <div class="card">
-            <h3>Overall Risk</h3>
-            <div class="gauge-wrap">
-              <div class="gauge">
-                <svg viewBox="0 0 120 120">
-                  <circle class="gauge-circle" cx="60" cy="60" r="50"></circle>
-                  <circle class="gauge-val" id="gauge" cx="60" cy="60" r="50"></circle>
-                </svg>
-              </div>
-              <div class="gauge-copy">
-                <div class="risk" id="risk-label">LOW</div>
-                <div class="score" id="risk-score">Score 0</div>
-                <span class="risk-chip" id="risk-chip">0 findings</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="card">
-            <h3>🎯 What to investigate first</h3>
-            <p class="modal-note" style="margin:0 0 8px">Actionable findings ranked by evidence strength and impact — not decoration.</p>
-            <div class="find-list" id="priority-list"></div>
-          </div>
-        </div>
-
-        <div class="grid grid-2 view-group" style="margin-top:18px" data-view="overview">
-          <div class="card">
-            <h3>Why this score?</h3>
-            <p class="modal-note" style="margin:0 0 8px">Every point is explained by evidence. Demonstrated/high-confidence flows weigh far more than regex observations.</p>
-            <div id="risk-breakdown"></div>
-          </div>
-          <div class="card">
-            <h3>Detection Snapshot</h3>
-            <div id="category-bars"></div>
-          </div>
-        </div>
-
-        <div class="grid grid-4 view-group" style="margin-top:18px" data-view="overview" id="metrics"></div>
-
-        <div class="grid grid-3 view-group" style="margin-top:18px" data-view="overview">
-          <div class="card chart-card">
-            <h3>Finding Mix</h3>
-            <svg class="chart" id="donut-chart" viewBox="0 0 220 220"></svg>
-            <div class="legend" id="donut-legend"></div>
-          </div>
-          <div class="card chart-card">
-            <h3>Detection Radar</h3>
-            <canvas class="chart" id="radar-chart"></canvas>
-          </div>
-          <div class="card">
-            <h3>Analysis Journey</h3>
-            <div class="timeline" id="timeline"></div>
-          </div>
-        </div>
-
-        <div class="card view-group" style="margin-top:18px" data-view="scripts">
-          <h3>📚 Script Inventory &amp; Behavior</h3>
-          <p class="modal-note" style="margin:0 0 8px">Every discovered script gets a behavior profile: first/third-party attribution, sensitive reads, DOM/network writes, browser APIs, loading method, and a 0–100 script risk score.</p>
-          <div id="script-panel"></div>
-        </div>
-
-        <div class="card view-group" style="margin-top:18px" data-view="scripts">
-          <h3>📁 JavaScript Assets</h3>
-          <div class="finding-grid" id="scan-summary"></div>
-          <div class="file-tabs" id="file-tabs"></div>
-          <div id="file-panel"></div>
-        </div>
-
-        <div class="card view-group" style="margin-top:18px" data-view="findings">
-          <h3>🛠️ Actionable Findings</h3>
-          <p class="modal-note" style="margin:0 0 8px">Issues that require investigation or remediation. <b>Confirmed</b> is reserved for demonstrated/deterministic proof; static source→sink flows are high-confidence and open for triage. Click <b>status</b> to triage (stored in your browser only).</p>
-          <div class="file-tabs" id="finding-filters"></div>
-          <div class="find-list" id="unified-findings"></div>
-        </div>
-
-        <div class="card view-group" style="margin-top:18px" data-view="findings">
-          <h3>👁️ Security Observations</h3>
-          <p class="modal-note" style="margin:0 0 8px">Interesting behavior and capability signals that are <b>not</b> proven vulnerabilities — API surface, obfuscation, inventory, and patterns without an established source→sink path.</p>
-          <div class="find-list" id="risk-signals"></div>
-        </div>
-
-        <div class="card view-group" style="margin-top:18px" data-view="intelligence">
-          <h3>🔁 Source → Sink Data Flows</h3>
-          <div class="find-list" id="flow-panel"></div>
-        </div>
-
-        <div class="card view-group" style="margin-top:18px" data-view="intelligence">
-          <h3>🎯 Attack Surface</h3>
-          <div class="finding-grid" id="attack-panel"></div>
-        </div>
-
-        <div class="card view-group" style="margin-top:18px" data-view="intelligence">
-          <h3>🔐 Secrets &amp; Sensitive Data</h3>
-          <div class="finding-grid" id="secrets-panel"></div>
-        </div>
-
-        <div class="card view-group" style="margin-top:18px" data-view="intelligence">
-          <h3>🧰 Dependencies &amp; Transport</h3>
-          <div class="finding-grid" id="dep-panel"></div>
-        </div>
-
-        <div class="card view-group" style="margin-top:18px" data-view="runtime">
-          <h3>🖥️ Runtime Evidence</h3>
-          <p class="modal-note" style="margin:0 0 8px">
-            Evidence is captured on your machine with a local headless browser. ScriptSentry keeps URLs, console
-            text, DOM sink values, storage <b>key names</b>, and cookie <b>names only</b> — never cookie values,
-            request bodies, or localStorage values.
-          </p>
-          <div id="runtime-panel"></div>
-        </div>
-      </section>
-    </section>
-
     <!-- ============================ Connect ============================ -->
     <section class="section" id="connect">
       <div class="section-head">
-        <span class="section-kicker">06 — Connect</span>
+        <span class="section-kicker">05 — Connect</span>
         <h2>Connect with me</h2>
         <p>
-          ScriptSentry is built alongside other analyst tools. Feedback, false-positive samples
-          and wild JavaScript are always welcome.
+          ScriptSentry is built for analysts, with analysts. When a result looks wrong — or when
+          you have a bundle that deserves a second pair of eyes — I want to see it.
         </p>
       </div>
 
       <div class="connect-card">
         <div class="connect-avatar" aria-hidden="true">🛡️</div>
         <div class="connect-body">
-          <h2>Building CyberBuddy for analysts, with analysts</h2>
+          <h3>Building ScriptSentry for analysts, with analysts</h3>
           <p class="connect-lead">
-            <b>Next on the bench: HAR Security Analyzer.</b> A fully local analyzer for captured
-            web and API traffic, decoded in your browser. Ideas, feedback and contributions are
-            welcome while it is being designed.
+            <b>Next on the bench: build-over-build diffing.</b> Snapshot a bundle today, snapshot
+            it again after the next release, and see only what changed — new secrets, new sinks,
+            new third parties — with a CI gate that fails on newly confirmed findings. Ideas,
+            feedback and contributions are welcome while it is being designed.
           </p>
           <div class="connect-actions">
             <a class="btn" href="mailto:amitpal.secure@gmail.com?subject=ScriptSentry%20feedback">✉️ Reach out · amitpal.secure@gmail.com</a>
             <a class="btn ghost" href="https://www.linkedin.com/in/amitpal-wb/" target="_blank" rel="noopener noreferrer">💼 LinkedIn</a>
           </div>
           <p class="connect-note">
-            ScriptSentry is free and open source. Bug reports, false-positive samples and feature
-            ideas are always welcome — real-world JavaScript is the best test suite there is.
+            Bug reports, false-positive samples and real-world JavaScript are always welcome —
+            production bundles are the best test suite there is. ScriptSentry is built by
+            <b>Amit Pal</b>, as part of a bench of local-first tools for security analysts.
           </p>
         </div>
       </div>
@@ -637,7 +383,7 @@ python3 server.py --port 8000</pre>
 
       <nav class="footer-col" aria-label="Product">
         <h3>Product</h3>
-        <a href="#tool">⚡ Open the analyzer</a>
+        <a href="tool.html">⚡ Open the analyzer</a>
         <a href="#features">🔎 What it finds</a>
         <a href="#how">🧭 How it works</a>
         <a href="#setup">🛠️ Run your own engine</a>
@@ -656,7 +402,7 @@ python3 server.py --port 8000</pre>
         <a href="mailto:amitpal.secure@gmail.com">✉️ amitpal.secure@gmail.com</a>
         <a href="https://www.linkedin.com/in/amitpal-wb/" target="_blank" rel="noopener noreferrer">💼 LinkedIn</a>
         <a href="#connect">🤝 Feedback &amp; ideas</a>
-        <a href="#connect">🧪 Next: HAR Analyzer</a>
+        <a href="#connect">🧪 Next: bundle diffing</a>
       </nav>
     </div>
 

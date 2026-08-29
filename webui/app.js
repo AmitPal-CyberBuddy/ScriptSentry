@@ -246,6 +246,110 @@
     }
   }
 
+  /* ---------------- Scroll experience ---------------- */
+
+  const REVEAL_SELECTOR = [
+    ".section-head",
+    ".feature-card",
+    ".step-card",
+    ".notice-card",
+    ".trust-row",
+    ".setup-card",
+    ".connect-card",
+    ".console",
+    ".tool-hero",
+    ".footer-brand",
+    ".footer-col",
+  ].join(", ");
+
+  // Reveal blocks as they scroll into view (once, then stop observing).
+  function initReveal() {
+    const nodes = $$(REVEAL_SELECTOR);
+    if (!nodes.length) return;
+
+    if (!("IntersectionObserver" in window) ||
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      nodes.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+
+    nodes.forEach((el) => {
+      // Stagger siblings so a grid of cards cascades instead of popping.
+      const siblings = Array.from(el.parentElement ? el.parentElement.children : []);
+      const index = Math.max(0, siblings.indexOf(el));
+      el.style.setProperty("--reveal-delay", `${Math.min(index, 7) * 70}ms`);
+    });
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add("is-visible");
+          observer.unobserve(entry.target);
+        });
+      },
+      { rootMargin: "0px 0px -8% 0px", threshold: 0.08 },
+    );
+
+    nodes.forEach((el) => {
+      // Anything already on screen at load reveals immediately.
+      const box = el.getBoundingClientRect();
+      if (box.top < window.innerHeight * 0.9) el.classList.add("is-visible");
+      else observer.observe(el);
+    });
+  }
+
+  // Thin progress bar under the sticky header.
+  function initScrollProgress() {
+    const bar = $("#scroll-progress");
+    if (!bar) return;
+    let queued = false;
+    const update = () => {
+      queued = false;
+      const doc = document.documentElement;
+      const max = doc.scrollHeight - window.innerHeight;
+      const ratio = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
+      bar.style.transform = `scaleX(${ratio})`;
+    };
+    window.addEventListener("scroll", () => {
+      if (queued) return;
+      queued = true;
+      window.requestAnimationFrame(update);
+    }, { passive: true });
+    window.addEventListener("resize", update, { passive: true });
+    update();
+  }
+
+  // Highlight the nav link for whichever section is on screen.
+  function initNavSpy() {
+    const links = $$('.site-nav a[href^="#"]');
+    if (!links.length || !("IntersectionObserver" in window)) return;
+    const byId = new Map();
+    links.forEach((link) => {
+      const target = document.getElementById(link.getAttribute("href").slice(1));
+      if (target) byId.set(target, link);
+    });
+    if (!byId.size) return;
+
+    const setActive = (link) => {
+      links.forEach((l) => {
+        const on = l === link;
+        l.classList.toggle("is-active", on);
+        if (on) l.setAttribute("aria-current", "true");
+        else l.removeAttribute("aria-current");
+      });
+    };
+
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((e) => e.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (visible && byId.has(visible.target)) setActive(byId.get(visible.target));
+    }, { rootMargin: "-25% 0px -60% 0px", threshold: [0.01, 0.25, 0.6] });
+
+    byId.forEach((_, section) => observer.observe(section));
+  }
+
   /* Shared page chrome: setup modal, engine pill, launcher downloads. */
   function initChrome() {
     $$(".js-download-launcher").forEach((btn) => {
@@ -281,6 +385,10 @@
         if (history.replaceState) history.replaceState(null, "", `#${id}`);
       });
     });
+
+    initReveal();
+    initScrollProgress();
+    initNavSpy();
   }
 
   async function retryBackend() {
@@ -1593,9 +1701,22 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
   /* ---------------- Boot ---------------- */
 
+  /* The dashboard is now two pages sharing one script: `index.html` is the
+   * landing page, `tool.html` hosts the console.  Chrome (engine status, setup
+   * dialog, scroll effects) runs on both; the analyzer wiring only runs where
+   * the console markup actually exists. */
+  function isToolPage() {
+    return !!$("#code-input");
+  }
+
   function init() {
     initParticles();
     initChrome();
+    if (isToolPage()) initTool();
+    checkBackend();
+  }
+
+  function initTool() {
     initTabs();
     initViews();
     initUpload();
@@ -1660,15 +1781,19 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
         });
       });
     });
+    // Ctrl/Cmd+Enter runs the analysis for whichever pane is active.
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") closePrivacyModal();
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         if ($("#pane-code").classList.contains("active")) analyzeCode();
         else analyzeUrl();
       }
     });
-    checkBackend();
   }
+
+  // Escape closes the setup dialog on every page.
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closePrivacyModal();
+  });
 
   document.addEventListener("DOMContentLoaded", init);
 })();
