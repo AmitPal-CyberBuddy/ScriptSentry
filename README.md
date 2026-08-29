@@ -1,212 +1,225 @@
-# ScriptSentry
+# 🛡️ ScriptSentry
+
+> 🚧 **Under active development — not yet published.** This is a pre-release
+> build (version `2.2.0-dev`). Expect breaking changes, and treat findings and
+> scores as work-in-progress rather than production-grade results. This notice
+> will be removed once ScriptSentry ships its first stable release.
 
 **Watch every line. Detect every risk.**
 
-ScriptSentry is a visual JavaScript security and script-behavior intelligence platform. It finds hardcoded
-secrets, crypto material, endpoints, API calls, storage usage, DOM/XSS patterns, obfuscation,
-technology stacks and data flows — then explains *which script* does what, where its data can go,
-and how risky that behavior is, all in a modern, animated dashboard.
+ScriptSentry is a **privacy-first JavaScript security & script-behavior
+intelligence tool**. Point it at a URL or paste any JavaScript, and it tells
+you not just *what dangerous strings appear* but what the scripts actually
+**do**: what data they read, where that data can go, which third parties are
+involved, and how risky that behavior is — presented in a clear, visual
+dashboard.
 
-## ✨ Features
+Everything runs **locally on your machine**. Your code is never uploaded to a
+cloud; there are no accounts and no API keys required for core analysis.
 
-- **Visual Web Dashboard** with animated risk gauge, count-up metrics, radar + donut charts and
-  a motion-rich analysis journey.
-- **Paste-code analysis** — drop any JS snippet and get instant structured results.
-- **Live URL scanning** — discover, download, beautify and recursively analyze *every* JavaScript
-  asset the page references: inline modules, `<script>`, `<link modulepreload>/preload`, static
-  `import`/`require`, dynamic `import()`, Webpack/Vite/Next `chunk-*` files, `/static/js` and
-  `assets/**`. URL-unique filenames keep same-named bundles from different folders from colliding,
-  and the recursive walk resolves each nested chunk against its own URL instead of the page URL.
-- **Optional local runtime evidence** — Playwright-driven headless-browser pass that captures dynamic
-  chunks, console errors, DOM sink writes, network/WebSocket activity, storage reads/writes, cookie
-  access and `postMessage` activity visible only when the page actually executes. Bounded response
-  bodies are rescanned locally as runtime-loaded scripts; source code is removed from serialized
-  evidence. Cookies: names only; request bodies/localStorage values are never stored.
-- **Source-map awareness** — bounded external/inline map metadata (sources, sourceRoot, mappings
-  presence and fetch status) is attached to the owning script without exposing source-map bodies.
-  This improves provenance without turning the engine into an unrestricted source downloader.
-- **Script inventory & behavior intelligence** — first/third-party attribution, inline/external/
-  dynamic loading method, script hashes, loaded-by relationships, pages present, sensitive reads
-  (URL/cookies/storage/forms), DOM/network writes, browser API map, external destinations, script
-  risk score, and static/runtime data-exfiltration correlation. Chromium/CDP also provides
-  best-effort script-to-network initiator attribution.
-- **20+ detection modules**:
-  - Secrets & credentials (JWT, API keys, auth headers, private keys)
-  - Crypto routines, keys and IV/nonce extraction
-  - API inventory, endpoints, HTTP methods, fetch/axios/XHR/WebSocket/SSE
-  - Client storage, DOM/XSS indicators, unsafe runtime calls
-  - Hardcoded configs, decoded/obfuscated strings
-  - Technology stack, dependency ecosystem, notable features, data-flow summary
-  - **AST profile** — imports/exports, functions, classes, call graph, complexity
-  - **Source→sink taint analysis** — URL/query/hash, postMessage, storage, cookies, form
-    values → innerHTML / eval / redirect / prototype pollution, with sanitizer awareness,
-    function-argument propagation and object-property tracking
-  - **Context-aware attack surface** — fetch/axios/XHR, WebSocket/SSE, GraphQL, query params,
-    headers, JSON body fields, auth and internal-endpoint hints
-  - **Framework-aware rules** — React `dangerouslySetInnerHTML`, Angular `bypassSecurityTrust*`,
-    Vue `v-html`, jQuery DOM sinks
-- **Live progress + ETA** — URL scans run as a background job. The dashboard polls
-  `/api/status` and shows discovery/download/recursive-scan/runtime phases, files scanned,
-  bytes scanned, percent, elapsed time and estimated time remaining before rendering
-  `/api/result`. If a configured per-file or file-count limit is hit, the Assets view
-  reports exactly how many files were skipped and why instead of silently dropping them.
-- **Bounded-parallel scanning** — once bundles are downloaded, analysis and nested-chunk
-  following run through a capped worker pool (default 6; adjustable in the UI, via
-  `SCRIPTSENTRY_SCAN_WORKERS`, or `max_workers` in the API body) so large real-world
-  sites finish quickly instead of being processed one file at a time.
-- **Report suite**:
-  - Animated web export (HTML), plain text, CSV and SARIF from the dashboard
-  - CLI TXT / JSON / HTML / CSV / SARIF reports
-  - Structured risk signals, unified triage findings, remediation plan, attack surface summary
-- **Deterministic rule + AST engine** — no external LLM required, with an optional AI-style summary.
+> ⚖️ **Authorized testing only.** Only scan applications and systems you own or
+> have explicit written permission to test. You are responsible for complying
+> with all applicable laws and the target's terms of service. ScriptSentry
+> produces triage signals, not proof of exploitation — verify every finding and
+> never use the tool to access systems without authorization.
 
-## 🚀 Quick Start
+---
+
+## What it finds
+
+- 🔐 **Secrets & credentials** — JWTs, API keys, auth headers, crypto keys/IVs
+- 🕳️ **Real DOM-XSS & open-redirect flows** — source→sink taint analysis
+  (`location`/`postMessage`/storage/cookies/forms → `innerHTML`/`eval`/redirect)
+- 🚚 **Data exfiltration** — sensitive reads correlated with external/third-party
+  destinations
+- 🌐 **Attack surface** — endpoints, HTTP methods, WebSockets, SSE, GraphQL,
+  params, headers, body fields, internal/hidden routes
+- 📦 **Dependencies & tech stack** — frameworks and libraries, including
+  framework-specific risky APIs (React `dangerouslySetInnerHTML`, Angular
+  `bypassSecurityTrust*`, Vue `v-html`, jQuery sinks)
+- 💾 **Client storage & crypto use** — localStorage/sessionStorage/cookies,
+  client-side crypto routines
+- 🧩 **Obfuscation** — encoded/hidden strings and suspicious runtime calls
+- 🖥️ **Runtime evidence** *(optional)* — a local headless browser that watches
+  the live page: network traffic, DOM sinks, `eval`, storage, cookies, and
+  scripts loaded only after execution
+
+## Why it's trustworthy
+
+ScriptSentry is built to **avoid crying wolf**. It separates three things many
+scanners mix together:
+
+| Question | Answer |
+|----------|--------|
+| **How bad would it be *if real*?** | Severity — Info → Critical |
+| **How certain is the *evidence*?** | Confidence — low → high → confirmed |
+| **What's the analyst state?** | Open · Needs review · Confirmed · False positive · Informational |
+
+A regex hit is **not** treated as proof. A static source→sink path is reported
+as high confidence but stays **Open** — encoding, framework sanitizers, or
+unreachable code may still neutralize it. **Confirmed** is reserved for
+demonstrated/deterministic proof (for example, `eval` actually executing in the
+captured page) or your own manual verification.
+
+The dashboard therefore splits results into:
+
+- **🚦 Actionable Findings** — things that warrant investigation or remediation.
+- **👁️ Security Observations** — interesting behavior that is *not* a proven
+  vulnerability (API surface, obfuscation, inventory, patterns without a flow).
+
+Each finding also shows an **analysis quality** rating and any **limitations**
+(e.g. “dynamic property access unresolved”), so the tool never pretends to
+understand JavaScript constructs it didn't fully model. The risk score is a
+bounded **0–100** with an itemized breakdown of exactly what contributes to it,
+plus an **investigate-first** priority list.
+
+---
+
+## Quick start
+
+Requires Python 3.8+.
+
+### Option A — one file (no clone needed)
+
+Download just [`scriptsentry.py`](scriptsentry.py) and run it. On first run it
+fetches the engine from the official GitHub repo, installs dependencies, and
+starts — everything stays local:
 
 ```bash
+python3 scriptsentry.py --port 8000
+```
+
+You can also grab it straight from the hosted dashboard: the setup modal (shown
+when the local engine isn't running) has a **⬇️ Download scriptsentry.py**
+button.
+
+### Option B — clone the repo
+
+```bash
+# 1. Get the project and install dependencies
+git clone https://github.com/AmitPal-CyberBuddy/ScriptSentry.git
+cd ScriptSentry
 pip install -r requirements.txt
 
-# Optional: enable the local headless-browser runtime evidence pass.
-# If you skip this, URL scans still work with static analysis only.
+# 2. (Optional) enable the local headless-browser runtime pass.
+#    Skip this and URL scans still work with static analysis only.
 python -m playwright install chromium
 
+# 3. Start the dashboard
 python3 server.py
 ```
 
-Open the dashboard URL printed by the server, paste JavaScript, or enter a target URL.
-The server prints a one-time-per-process **engine pairing token** at startup. Enter it in the
-privacy modal when prompted; the UI keeps it in this browser tab's session storage and sends it
-only as an `X-ScriptSentry-Token` header. The dashboard can **Export HTML Report** and **Export
-Text Report** after any analysis.
+Open the URL the server prints (default `http://127.0.0.1:8000`). On startup the
+server prints a one-time **engine pairing token** — paste it into the page's
+privacy modal when prompted. The token stays in that browser tab only and is
+sent as an `X-ScriptSentry-Token` header.
 
-### 🌐 GitHub Pages / hosted UI (free & private)
+You can then either:
 
-You can host the dashboard UI on GitHub Pages. The backend stays **entirely local**:
+- **Paste JavaScript** into the editor and hit **Analyze Code**, or
+- **Enter a target URL** and choose a profile (Fast / Balanced / Strict),
+  recursion depth, and file cap, then hit **Analyze Target**.
 
-1. Publish `webui/` to Pages (see `deployment/deploy-pages.yml`).
-2. A visitor opens the hosted page and gets a **privacy-first setup guide** if `server.py` isn't
-   running locally.
-3. They run `pip install -r requirements.txt && python3 server.py --port 8000` on their machine.
-4. The hosted page connects to the local engine (`http://127.0.0.1:8000`) and runs fully private —
-   no code ever uploads to the cloud.
+### Command line
 
-The local engine only accepts API calls from localhost/loopback origins and GitHub Pages
-origins (plus an exact `SCRIPTSENTRY_ALLOWED_ORIGINS` entry if you host the UI on a custom
-domain). Health is public, but analysis, status, results, cancellation, and exports require
-the pairing token. The crawler also rejects credential-bearing URLs, loopback/private IPs,
-and unsafe redirects. Other websites cannot drive it as an open proxy.
+```bash
+# Scan a live site (discovers & recursively analyzes every script)
+python3 main.py https://example.com --profile balanced --format all
 
-See `DEPLOYMENT.md` for the full guide.
+# Reports are written to output/ : report.txt / .json / .html / .csv / .sarif
+```
 
-Launch the dashboard directly from the CLI too:
+Launch the dashboard directly from the CLI:
 
 ```bash
 python3 main.py --serve --port 8000
 ```
 
-## 📤 Dashboard Report Export
-
-From the web UI press one of the header buttons after analysis:
-
-- **Export HTML Report** — polished shareable report (executive summary, risk signals,
-  category bars, per-file detail, remediation plan)
-- **Export Text Report** — triage-friendly CLI-style report
-- **Export CSV Report** — spreadsheet-friendly unified findings (id, severity, file, line,
-  source → sink, flow, status)
-- **Export SARIF Report** — SARIF 2.1.0 for GitHub code scanning / CI tooling
-
-The dashboard has an analyst **Findings** tab where you can triage each signal as
-*Confirmed / False positive / Informational / Needs review* (stored only in your browser).
-
-Equivalent API endpoints (used by the UI, also callable directly):
-
-```bash
-# Use the token printed by server.py; do not commit it or put it in a public config file.
-TOKEN='paste-the-process-token-here'
-curl -X POST 'http://localhost:8000/api/report?format=html' \
-  -H "X-ScriptSentry-Token: $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"mode":"code","code":"const key=EncryptionKey=\"abc\";"}'
-
-curl -X POST 'http://localhost:8000/api/report?format=csv' \
-  -H "X-ScriptSentry-Token: $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"mode":"code","code":"const q=location.search;innerHTML=q;"}'
-```
-
-## 🧪 CLI Scan
-
-```bash
-python3 main.py https://example.com --profile balanced --format all
-python3 main.py "https://example.com/static/js/app.js"
-python3 main.py https://example.com --max-depth 5 --profile strict --format html
-```
-
-Output is written to `output/` (`report.txt`, `report.json`, `report.html`,
-`report.csv`, `report.sarif`).
-
-Optional AI-style summary:
+Optional AI-style summary (not required for any core analysis):
 
 ```bash
 python3 main.py https://example.com --ai openai --api-key YOUR_KEY --model gpt-4o-mini
 ```
 
-See [`AUDIT.md`](AUDIT.md) for the repository audit, security decisions, verification commands, and deliberate limitations.
+---
 
-## 🗂 Architecture
+## Reading the dashboard
 
-```
-╭──────────────────────────────────────────────╮
-│  webui/  — modern animated single-page GUI   │
-│  server.py — stdlib HTTP dashboard + /api    │
-│                                              │
-│  core/                                       │
-│   analyzer_service.py — orchestration        │
-│   scanner.py — regex signal detection        │
-│   analysis_model.py — finding vocab/correlation│
-│   ast_analyzer.py — AST intelligence         │
-│   js_parser.py — optional esprima wrapper    │
-│   taint.py — AST source→sink taint analysis  │
-│   attack_surface.py — endpoint/API surface   │
-│   framework_rules.py — React/Angular/Vue/jQ  │
-│   crypto.py — key / IV / crypto extraction   │
-│   decoder.py — base64 + hex decoding         │
-│   discovery.py — JS asset discovery          │
-│   downloader.py — parallel downloads         │
-│   beautifier.py — JSON/JS beautify           │
-│   reporter.py — report model, TXT/HTML/GUI   │
-│   runtime_evidence.py — optional Playwright  │
-│   runtime DOM/network/storage capture        │
-│   source_maps.py — bounded map metadata      │
-│   url_policy.py — SSRF/response boundaries   │
-│   jobs.py — bounded background job lifecycle │
-│   script_intel.py — script inventory,        │
-│   behavior profiles, risk scoring, exfil     │
-│                                              │
-│  analyzers/ — additive analysis modules      │
-│  ai/ — optional AI summary                   │
-│  config.py — profiles and detection config   │
-╰──────────────────────────────────────────────╯
-```
+The interface is organized into five focused views:
 
-## 🧠 Engine Notes
+1. **📊 Overview** — answers three questions up front: *is this app risky?*,
+   *why?* (itemized risk-score breakdown), and *what should I investigate
+   first?* (priority list). Charts and the detection snapshot sit below.
+2. **🚦 Findings** — Actionable Findings to triage, and Security Observations.
+   Click a finding's status chip to cycle it through Open → Needs review →
+   Confirmed → False positive → Informational (stored only in your browser).
+3. **📚 Scripts** — the script inventory: every discovered script with
+   first/third-party attribution, sensitive reads, DOM/network writes, browser
+   APIs, external destinations, load relationships, and a per-script risk
+   score. Also includes the per-asset file details.
+4. **🧠 Intelligence** — source→sink data flows, attack surface, secrets, and
+   dependencies/transport.
+5. **🖥️ Runtime** — the optional headless-browser evidence (network, console,
+   DOM sinks, eval, storage/cookies, WebSockets, dynamically loaded scripts).
 
-The dashboard uses a deterministic rule-based engine. Every detection is independently scored
-and normalized into a single dashboard payload, so the same JavaScript always produces the same
-risk picture. URL scanning requires `requests` + `beautifulsoup4`; snippet analysis only needs
-Python's standard library. The optional runtime pass additionally requires `playwright` and a
-local Chromium install; when those are absent ScriptSentry reports `missing_dependency` and
-continues with static analysis.
+### Export a report
 
-### Deep JavaScript discovery
+After any analysis, use the header buttons (or the API/CLI) to export:
 
-The URL analyzer does not stop at the entry `<script>` tags. After the initial discovery it
-walks every script/module reference found inside each downloaded bundle, so nested route-level
-chunks and lazy-loaded modules are included too. Assets are saved with URL-derived unique names
-(such as `app-1a2b3c4d5e.js`) so many `app.js` files under different paths never overwrite each
-other. The scan report includes:
+- **HTML** — polished, shareable report
+- **TXT** — triage-friendly text report
+- **CSV** — spreadsheet of findings (severity, confidence, status, source→sink,
+  flow, quality, limitations)
+- **SARIF** — SARIF 2.1.0 for GitHub code scanning / CI
 
-* `total_discovered` — page-level script/entry points
-* `total_files` — unique files actually analyzed (including recursively found chunks)
-* `skipped_files` + `skipped_reasons` — explicit accounting when limits are hit
-* `bytes_scanned`, `total_bytes`, `runtime_status`, and whether a hard cap was reached
+---
 
-The dashboard exposes these in the **📁 JavaScript Assets** view, while the console shows the
-live phase, file/byte counters and ETA during the scan.
+## Hosted UI with a local engine
+
+You can host the dashboard front-end (for example on **GitHub Pages**) while the
+analysis engine stays entirely on your own machine:
+
+1. Publish the `webui/` folder (a ready-made workflow is in
+   `deployment/deploy-pages.yml`).
+2. On your machine run `pip install -r requirements.txt && python3 server.py`.
+3. Open the hosted page and enter the pairing token. It talks directly to your
+   local `127.0.0.1` engine — **no code ever leaves your computer**.
+
+The local engine only accepts loopback/GitHub-Pages origins, requires the
+pairing token for analysis, rejects credential-bearing or private/loopback
+target URLs, and validates redirects so it can't be abused as an open proxy.
+See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the full hosting guide.
+
+---
+
+## Privacy & security model
+
+- **100% local analysis.** The hosted page is just the interface; all scanning
+  happens against `localhost` via `server.py`.
+- The runtime pass records URL/console text, DOM-sink values, and storage/cookie
+  **key names only** — never cookie values, request bodies, or localStorage
+  values. Dynamic script bodies are rescanned locally and then dropped from
+  serialized evidence.
+- The server binds to loopback by default, uses a process-scoped pairing token
+  with `hmac.compare_digest`, enforces origin checks, and bounds request body
+  and URL sizes.
+
+---
+
+## Learn more
+
+- 📘 [`AUDIT.md`](AUDIT.md) — security decisions, architecture internals,
+  detection methodology, and deliberate limitations (for contributors and
+  reviewers).
+- 🚀 [`DEPLOYMENT.md`](DEPLOYMENT.md) — hosting the UI and running the engine.
+- 🧪 Tests use an accuracy regression suite (true-positive, true-negative,
+  known-false-positive, edge, minified and obfuscated fixtures) to keep false
+  positives and false negatives in check.
+
+**Current status:** 🚧 under development / pre-release (`2.2.0-dev`). Version
+and release details live in [`release.json`](release.json) and
+[`CHANGELOG.md`](CHANGELOG.md).
+
+> ScriptSentry produces deterministic signals for triage — it is not proof of
+> exploitation. Always validate findings with server-side behavior and manual
+> review.

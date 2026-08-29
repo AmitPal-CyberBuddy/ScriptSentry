@@ -153,17 +153,34 @@ def _is_followable_ref(ref):
 def extract_script_refs(content):
     """Extract every script/module reference visible in a JS bundle.
 
-    Covers the common real-world patterns: static imports, dynamic
-    ``import(...)``, CommonJS ``require``, routed chunk files, ``/static/js``
-    and ``assets`` bundles, and absolute script URLs. Bare module references
-    from import/require are followed; arbitrary API paths are not.
+    Discovery is layered (see ``core.module_discovery``): exact
+    import/require sources from the AST first, then bundler-specific asset
+    signatures (Webpack chunk maps, Vite/Rollup/Next.js/Parcel assets), then
+    the legacy regex layer for environments without a parser. Only script-like
+    references are returned; arbitrary ``fetch``/API paths and JSON/CSS/font
+    imports are never followed.
     """
     refs = set()
+
+    # Layers 1+2: AST module understanding and bundler adapters.
+    try:
+        from core.module_discovery import discover_module_refs
+        for ref in discover_module_refs(content):
+            ref = ref.split("?")[0].split("#")[0]
+            if _is_followable_ref(ref) or ref.startswith(("./", "../")):
+                refs.add(ref)
+    except Exception:
+        pass
+
+    # Fallback layer: regex coverage, kept as a safety net when the AST layer
+    # is unavailable or cannot parse the dialect. Covers static imports,
+    # dynamic import(...), CommonJS require, routed chunk files, /static/js
+    # and assets bundles, and absolute script URLs.
     module_patterns = [
         r"""import\s*\(\s*['"]([^'"]+)['"]""",
         r"""require\s*\(\s*['"]([^'"]+)['"]""",
         r"""import\s+['"]([^'"]+)['"]""",
-        r"""import\s+[^'"]+?\s+from\s+['"]([^'"]+)['"]""",
+        r"""import\s+[^'"]+?\s+from\s*['"]([^'"]+)['"]""",
     ]
     asset_patterns = [
         r"""['"]([^'"]*chunk-[A-Za-z0-9]+\.js[^'"]*)['"]""",

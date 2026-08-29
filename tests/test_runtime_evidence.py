@@ -47,9 +47,22 @@ class RuntimeEvidenceTest(unittest.TestCase):
         self.assertIn("runtime_dom_sink", by_id)
         self.assertIn("runtime_sensitive_storage", by_id)
         self.assertIn("runtime_websocket", by_id)
-        self.assertTrue(all(f.get("evidence_type") == "runtime_browser" for f in findings))
+        self.assertTrue(all(str(f.get("evidence_type", "")).startswith("runtime") for f in findings))
         self.assertEqual(by_id["runtime_eval"]["severity"], "HIGH")
-        self.assertEqual(by_id["runtime_dom_sink"]["status"], "confirmed")
+
+        # Confirmed is reserved for a *demonstrated dangerous effect*: eval
+        # actually executed in the live browser.
+        self.assertEqual(by_id["runtime_eval"]["status"], "confirmed")
+        self.assertEqual(by_id["runtime_eval"]["evidence_type"], "runtime_effect")
+
+        # A DOM sink that executed is strong evidence (high/open) but not
+        # proven exploitable -> never auto-confirmed.
+        self.assertEqual(by_id["runtime_dom_sink"]["status"], "open")
+        self.assertEqual(by_id["runtime_dom_sink"]["confidence"], "high")
+
+        # A live WebSocket is behavior/inventory, not a vulnerability.
+        self.assertEqual(by_id["runtime_websocket"]["status"], "informational")
+        self.assertTrue(by_id["runtime_websocket"].get("observation"))
 
     def test_missing_or_disabled_evidence_produces_no_findings(self):
         offline = {"enabled": True, "available": False, "captured": False, "status": "missing_dependency", "reason": "no playwright"}

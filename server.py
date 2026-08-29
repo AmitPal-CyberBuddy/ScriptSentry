@@ -6,6 +6,23 @@ Run:
 
 The secure default binds only to loopback.  Use ``--host 0.0.0.0`` only when a
 reverse proxy or a development preview explicitly requires network exposure.
+
+Maintainability note
+--------------------
+This file intentionally stays dependency-free (stdlib only) so the local engine
+is trivial to run. It currently folds together static-UI serving, CORS,
+pairing-token auth, API routing, report generation, async-job handling and
+request validation. That is acceptable at the current size, but the planned
+decomposition (when the surface grows further) is a small ``api/`` package::
+
+    api/auth.py      pairing token, origin checks, hmac comparison
+    api/cors.py      allow/origin handling
+    api/handlers.py  request dispatch + body/URL validation
+    api/analysis_routes.py  /api/analyze, /api/status, /api/result, /api/cancel
+    api/report_routes.py    /api/report (txt/html/csv/sarif)
+
+keeping ``server.py`` as the thin loopback server/bootstrap. The handlers are
+already factored into discrete methods to make that split mechanical.
 """
 import argparse
 import hmac
@@ -22,6 +39,7 @@ from core.analyzer_service import analyze_content, analyze_url
 from core.jobs import jobs
 from core.runtime_evidence import playwright_available, runtime_evidence_enabled
 from core.url_policy import validate_public_url
+from core.version import ENGINE_NAME, RELEASE_STATUS, __version__ as ENGINE_VERSION, is_dev_build
 from core.reporter import (
     build_dashboard_payload,
     generate_csv_report,
@@ -41,7 +59,7 @@ API_TOKEN = os.environ.get("SCRIPTSENTRY_API_TOKEN", "").strip() or secrets.toke
 class DashboardHandler(SimpleHTTPRequestHandler):
     """Serves the single-page dashboard and answers analysis requests."""
 
-    server_version = "ScriptSentryDashboard/2.1"
+    server_version = f"ScriptSentryDashboard/{ENGINE_VERSION}"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_ROOT, **kwargs)
@@ -159,8 +177,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/health":
                 self._send_json({
                     "ok": True,
-                    "engine": "ScriptSentry Analyzer",
-                    "version": "2.1",
+                    "engine": ENGINE_NAME,
+                    "version": ENGINE_VERSION,
+                    "release_status": RELEASE_STATUS,
+                    "dev_build": is_dev_build(),
                     "privacy": "local-only",
                     "auth_required": True,
                     "pairing": "Set X-ScriptSentry-Token to use analysis endpoints.",
@@ -450,6 +470,8 @@ def main():
 
     server = make_server(args.host, args.port)
     print(f"ScriptSentry dashboard listening on http://{args.host}:{args.port}", flush=True)
+    if is_dev_build():
+        print("⚠  UNDER DEVELOPMENT — pre-release build (not a published/stable release).", flush=True)
     print(f"Engine pairing token: {API_TOKEN}", flush=True)
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print("WARNING: non-loopback binding; protect the port with a firewall/reverse proxy.", flush=True)

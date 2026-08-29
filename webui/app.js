@@ -118,6 +118,42 @@
     }
   }
 
+  // Decide whether a failure is an engine connection/pairing problem (which
+  // should open the setup modal) or an actual analysis rejection (invalid
+  // target, private URL, scan error) which should surface inline instead.
+  function isConnectionFailure(error) {
+    const msg = String((error && error.message) || "").toLowerCase();
+    if (msg.includes("unreadable response") || msg.includes("failed to fetch") ||
+        msg.includes("networkerror") || msg.includes("load failed")) {
+      return true;
+    }
+    // 401/403 pairing/origin issues are connection/setup problems.
+    if (msg.includes("pairing") || msg.includes("token") || msg.includes("origin") ||
+        msg.includes("401") || msg.includes("403")) {
+      return true;
+    }
+    return false;
+  }
+
+  // Show an analysis failure inline (URL tab) or as a console error, and only
+  // open the setup modal when the engine itself is unreachable/unpaired.
+  async function handleAnalysisError(error, { urlMode } = {}) {
+    const msg = (error && error.message) || "Analysis failed.";
+    setEngineStatus("checking", msg);
+    if (isConnectionFailure(error)) {
+      showConnectionError(error);
+      openPrivacyModal();
+      return;
+    }
+    // The engine responded but rejected/failed the analysis — show inline.
+    closePrivacyModal();
+    if (urlMode) {
+      setFieldError("#url-input", "#url-error", msg);
+    } else {
+      setFieldError("#code-input", "#code-error", msg);
+    }
+  }
+
   function closePrivacyModal() {
     const modal = $("#privacy-modal");
     if (modal) modal.hidden = true;
@@ -370,12 +406,45 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  function setFieldError(inputId, errorId, message) {
+    const err = $(errorId);
+    const input = $(inputId);
+    if (err) {
+      err.textContent = message || "";
+      err.hidden = !message;
+    }
+    if (input) input.classList.toggle("input-invalid", !!message);
+    if (message && input) {
+      input.focus();
+      input.setAttribute("aria-invalid", "true");
+    } else if (input) {
+      input.removeAttribute("aria-invalid");
+    }
+  }
+
+  function isValidHttpUrl(value) {
+    const v = String(value || "").trim();
+    if (!v) return false;
+    let u;
+    try {
+      u = new URL(v);
+    } catch {
+      return false;
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    if (!u.hostname) return false;
+    // No credentials allowed in the target URL.
+    if (u.username || u.password) return false;
+    return true;
+  }
+
   async function analyzeCode() {
     const code = $("#code-input").value;
     if (!code.trim()) {
-      alert("Paste some JavaScript first.");
+      setFieldError("#code-input", "#code-error", "Paste some JavaScript to analyze first.");
       return;
     }
+    setFieldError("#code-input", "#code-error", "");
     if (!(await ensureBackend())) return;
     showLoading("Analyzing JavaScript…");
     try {
@@ -391,20 +460,27 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       await pollJob(data.job_id);
       await finishJob(data.job_id);
     } catch (err) {
-      showConnectionError(err);
-      setEngineStatus("checking", err.message || "Analysis failed");
-      openPrivacyModal();
+      await handleAnalysisError(err, { urlMode: false });
     } finally {
       hideLoading();
     }
   }
 
   async function analyzeUrl() {
-    const url = $("#url-input").value.trim();
-    if (!url) {
-      alert("Enter a target URL.");
+    const rawUrl = $("#url-input").value.trim();
+    setFieldError("#url-input", "#url-error", "");
+    if (!rawUrl) {
+      setFieldError("#url-input", "#url-error", "Enter a target URL to scan — for example https://example.com or a direct https://…/app.js link.");
       return;
     }
+    if (!isValidHttpUrl(rawUrl)) {
+      setFieldError(
+        "#url-input", "#url-error",
+        "That doesn't look like a valid http(s) URL. Use a full address such as https://example.com. Local/private addresses and URLs containing credentials are rejected.",
+      );
+      return;
+    }
+    const url = rawUrl;
     if (!(await ensureBackend())) return;
     showLoading("Discovering and scanning JavaScript… this can take a moment.");
     try {
@@ -424,9 +500,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       await pollJob(data.job_id);
       await finishJob(data.job_id);
     } catch (err) {
-      showConnectionError(err);
-      setEngineStatus("checking", err.message || "Analysis failed");
-      openPrivacyModal();
+      await handleAnalysisError(err, { urlMode: true });
     } finally {
       hideLoading();
     }
@@ -437,7 +511,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
   async function exportReport(format) {
     if (!lastQuery) {
-      alert("Analyze something before exporting a report.");
+      setEngineStatus("checking", "Run an analysis first, then export a report.");
+      $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
     if (!(await ensureBackend())) return;
@@ -484,6 +559,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     results.classList.add("show");
     $("#result-meta").textContent = `${payload.meta.engine} · ${payload.meta.analysis_mode === "url" ? "Remote URL" : "Source snippet"} · ${payload.meta.generated_at || ""}`;
     renderSummary();
+    renderPriorities();
+    renderRiskBreakdown();
     renderSignals();
     renderScripts();
     renderDeps();
@@ -498,20 +575,84 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     renderFiles();
   }
 
+  const SEV_COLOR = { CRITICAL: "#ff4d6d", HIGH: "#ff9f43", MEDIUM: "#ffd166", LOW: "#22d3ee", INFO: "#a78bfa" };
+  const CONF_LABEL = { confirmed: "confirmed", high: "high", medium: "medium", low: "low" };
+
+  /* Overview: answer "is it risky / why / what first" immediately. */
+  function renderPriorities() {
+    const priorities = (payload.summary.priorities || []).filter(Boolean);
+    const panel = $("#priority-list");
+    if (!panel) return;
+    if (!priorities.length) {
+      panel.innerHTML = `<li><span class="risk-dot" style="color:#34d399"></span><span><b>No actionable findings.</b> Only routine observations — this application looks low-risk from the analyzed code.</span></li>`;
+      return;
+    }
+    panel.innerHTML = priorities.slice(0, 6).map((p, i) => {
+      const color = SEV_COLOR[p.severity] || "#22d3ee";
+      const where = p.location ? ` · ${escapeHtml(p.location)}` : "";
+      const detail = p.source ? `${escapeHtml(p.source)} → ${escapeHtml(p.sink || "")}` : escapeHtml(p.sink || "");
+      const limits = (p.limitations || []).length
+        ? `<br><span style="color:#fbbf24;font-size:11px">⚠ ${escapeHtml(p.limitations[0])}</span>` : "";
+      return `<li style="animation-delay:${i * 0.05}s">
+        <span class="risk-dot" style="color:${color}"></span>
+        <span><b>${escapeHtml(p.type)}</b> · ${escapeHtml(p.severity)} · confidence ${escapeHtml(CONF_LABEL[p.confidence] || p.confidence || "?")}${where}
+        <br><span style="color:#8ea2c1">${detail}</span>${limits}</span>
+      </li>`;
+    }).join("");
+  }
+
+  function renderRiskBreakdown() {
+    const contributors = payload.summary.risk_contributors || [];
+    const panel = $("#risk-breakdown");
+    if (!panel) return;
+    if (!contributors.length) {
+      panel.innerHTML = `<div class="modal-note">No risk contributors — score 0.</div>`;
+      return;
+    }
+    const maxPoints = Math.max(...contributors.map((c) => c.points), 1);
+    panel.innerHTML = contributors.map((c) => {
+      const width = Math.max(4, Math.min(100, (c.points / maxPoints) * 100));
+      const color = c.tier >= 3 ? "#ff4d6d" : c.tier === 2 ? "#ff9f43" : c.tier === 1 ? "#ffd166" : "#22d3ee";
+      return `<div class="category">
+        <div class="name"><span>+${c.points} · ${escapeHtml(c.label)}</span><b style="color:${color}">${c.points}</b></div>
+        <div class="cat-bar"><i style="--cat:${color};width:${width}%"></i></div>
+      </div>`;
+    }).join("");
+  }
+
   function renderSignals() {
+    // Observations = interesting behavior that is not a proven vulnerability:
+    // coarse risk signals plus informational/sanitized findings. This keeps
+    // the Findings view honest about what is (and isn't) actionable.
     const signals = payload.summary.signals || [];
-    const sevColor = { CRITICAL: "#ff4d6d", HIGH: "#ff9f43", MEDIUM: "#ffd166", LOW: "#22d3ee", INFO: "#a78bfa" };
-    $("#risk-signals").innerHTML = signals.length
-      ? signals
-          .slice(0, 12)
-          .map(
-            (s, i) => `<li style="animation-delay:${i * 0.05}s">
-              <span class="risk-dot" style="color:${sevColor[s.severity] || "#22d3ee"}"></span>
-              <span><b>${escapeHtml(s.title || s.id)}</b> · ${escapeHtml(s.file || "")}<br><span style="color:#8ea2c1">${escapeHtml((s.evidence || []).slice(0, 2).join(" · "))}</span></span>
-            </li>`
-          )
-          .join("")
-      : `<li><span class="risk-dot" style="color:#22d3ee"></span><span>No high-priority risk signals raised.</span></li>`;
+    const findings = payload.summary.findings || [];
+    const observationFindings = findings.filter((f) => isObservation(f));
+    const sevColor = SEV_COLOR;
+
+    const signalHtml = signals.slice(0, 14).map((s, i) => {
+      const isFlow = s.status === "open" || s.confidence === "high" || s.confidence === "confirmed";
+      const color = sevColor[s.severity] || "#22d3ee";
+      return `<li style="animation-delay:${i * 0.04}s">
+        <span class="risk-dot" style="color:${isFlow ? "#fb7185" : color}"></span>
+        <span><b>${escapeHtml(s.title || s.id)}</b> · ${escapeHtml(s.file || "")}<br>
+        <span style="color:#8ea2c1">${escapeHtml((s.evidence || []).slice(0, 2).join(" · "))}</span>
+        <span class="quality-chip">${escapeHtml(s.confidence || "low")} confidence</span></span>
+      </li>`;
+    });
+
+    const findingHtml = observationFindings.slice(0, 10).map((f, i) => {
+      const color = sevColor[f.severity] || "#22d3ee";
+      return `<li style="animation-delay:${(signalHtml.length + i) * 0.04}s">
+        <span class="risk-dot" style="color:${color}"></span>
+        <span><b>${escapeHtml(f.type || f.id)}</b> · ${escapeHtml(f.file || "")}<br>
+        <span style="color:#8ea2c1">${escapeHtml(f.sink || (Array.isArray(f.evidence) ? f.evidence.join(" ") : f.evidence) || "")}</span></span>
+      </li>`;
+    });
+
+    const rows = signalHtml.concat(findingHtml);
+    $("#risk-signals").innerHTML = rows.length
+      ? rows.join("")
+      : `<li><span class="risk-dot" style="color:#34d399"></span><span>No security observations raised. This scan found only routine code patterns.</span></li>`;
   }
 
   function renderScripts() {
@@ -701,13 +842,17 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     $("#flow-panel").innerHTML = flows.length
       ? flows.slice(0, 40).map((flow, i) => {
           const sev = flow.severity || "MEDIUM";
-          const color = { CRITICAL: "#ff4d6d", HIGH: "#ff9f43", MEDIUM: "#ffd166", LOW: "#22d3ee" }[sev] || "#22d3ee";
+          const color = SEV_COLOR[sev] || "#22d3ee";
           const path = (flow.flow || []).slice(0, 8).join(" → ");
+          const quality = flow.analysis_quality ? `<span class="quality-chip quality-${flow.analysis_quality}">${escapeHtml(flow.analysis_quality)} quality</span>` : "";
+          const limits = (flow.limitations || []).slice(0, 2).map((l) => `<br><span style="color:#fbbf24;font-size:11px">⚠ ${escapeHtml(l)}</span>`).join("");
           return `<li style="animation-delay:${i * 0.04}s">
             <span class="risk-dot" style="color:${color}"></span>
-            <span><b>${escapeHtml(flow.type || "Source→sink flow")}</b> · ${escapeHtml(flow.status || "potential")} · ${escapeHtml(flow.file || "")} ${flow.line ? `· L${flow.line}` : ""}
+            <span><b>${escapeHtml(flow.type || "Source→sink flow")}</b> · ${escapeHtml(STATUS_LABEL[getStatus(flow)] || flow.status || "open")} · conf ${escapeHtml(CONF_LABEL[flow.confidence] || flow.confidence || "?")} · ${escapeHtml(flow.file || "")} ${flow.line ? `· L${flow.line}` : ""}
+            ${quality}
             <br><span style="color:#8ea2c1">source: ${escapeHtml(flow.source || "unknown")} → sink: ${escapeHtml(flow.sink || "")}</span>
-            ${path ? `<br><span style="color:#c084fc">path: ${escapeHtml(path)}</span>` : ""}</span>
+            ${path ? `<br><span style="color:#c084fc">path: ${escapeHtml(path)}</span>` : ""}
+            ${limits}</span>
           </li>`;
         }).join("")
       : `<li><span class="risk-dot" style="color:#22d3ee"></span><span>No source-to-sink flows detected.</span></li>`;
@@ -730,7 +875,25 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       .join(`<div class="finding-chip"><span class="chip-title">No sensitive data surfaced</span></div>`);
   }
 
-  const STATUS_CYCLE = ["confirmed", "false_positive", "informational", "needs_review"];
+  const STATUS_CYCLE = ["open", "needs_review", "confirmed", "false_positive", "informational"];
+  const STATUS_LABEL = {
+    open: "Open",
+    needs_review: "Needs review",
+    confirmed: "Confirmed",
+    false_positive: "False positive",
+    informational: "Informational",
+    potential: "Needs review",
+  };
+  const OBSERVATION_STATUSES = new Set(["informational", "false_positive"]);
+
+  function isObservation(f) {
+    if (f.observation) return true;
+    if (f.sanitization_detected) return true;
+    if (OBSERVATION_STATUSES.has(getStatusRaw(f))) return true;
+    return false;
+  }
+
+
 
   function findingKey(f) {
     return `${f.id || f.type || "finding"}|${f.file || ""}|${f.line || 0}|${String(f.sink || "").slice(0, 80)}`;
@@ -762,13 +925,19 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     const all = (payload.summary.findings || []).concat(payload.summary.dataflows || []).map((f) => ({ ...f, file: f.file || payload.meta.source }));
     const unique = new Map();
     all.forEach((f) => unique.set(findingKey(f), f));
-    const findings = Array.from(unique.values());
+    // Actionable findings only; pure observations are shown separately under
+    // "Security Observations".
+    const findings = Array.from(unique.values()).filter((f) => {
+      const st = getStatus(f);
+      return !(OBSERVATION_STATUSES.has(st) || (f.observation && st !== "open" && st !== "confirmed" && st !== "false_positive"));
+    });
     $("#finding-filters").innerHTML = [
       ["all", "All"],
+      ["open", "Open"],
+      ["needs_review", "Needs review"],
       ["confirmed", "Confirmed"],
       ["false_positive", "False positive"],
       ["informational", "Info"],
-      ["needs_review", "Needs review"],
     ].map(([v, label]) => `<button class="file-tab ${v === "all" ? "active" : ""}" data-f="${v}">${label}</button>`).join("");
 
     const filter = (window.__findingFilter || "all");
@@ -776,16 +945,20 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     $("#unified-findings").innerHTML = list.length
       ? list.slice(0, 80).map((f, i) => {
           const sev = f.severity || "MEDIUM";
-          const color = { CRITICAL: "#ff4d6d", HIGH: "#ff9f43", MEDIUM: "#ffd166", LOW: "#22d3ee" }[sev] || "#22d3ee";
+          const color = SEV_COLOR[sev] || "#22d3ee";
           const st = getStatus(f);
+          const quality = f.analysis_quality ? `<span class="quality-chip quality-${f.analysis_quality}">${escapeHtml(f.analysis_quality)} quality</span>` : "";
+          const limits = (f.limitations || []).length
+            ? `<br><span style="color:#fbbf24;font-size:11px">⚠ Analysis limit: ${escapeHtml(f.limitations[0])}</span>` : "";
           return `<li style="animation-delay:${i * 0.03}s">
             <span class="risk-dot" style="color:${color}"></span>
-            <span><b>${escapeHtml(f.type || f.id || "finding")}</b> · ${escapeHtml(f.severity || "")} · ${escapeHtml(f.file || "")}${f.line ? ` · L${f.line}` : ""}<br>
-            <span style="color:#8ea2c1">${escapeHtml(f.source ? `${f.source} → ` : "")}${escapeHtml(f.sink || f.evidence || "")}</span>
-            <button class="status-chip status-${st}" data-key="${encodeURIComponent(findingKey(f))}">${escapeHtml(st.replace("_", " "))}</button></span>
+            <span><b>${escapeHtml(f.type || f.id || "finding")}</b> · ${escapeHtml(f.severity || "")} · conf ${escapeHtml(CONF_LABEL[f.confidence] || f.confidence || "?")} · ${escapeHtml(f.file || "")}${f.line ? ` · L${f.line}` : ""}<br>
+            <span style="color:#8ea2c1">${escapeHtml(f.source ? `${f.source} → ` : "")}${escapeHtml(f.sink || (Array.isArray(f.evidence) ? f.evidence.join(" ") : f.evidence) || "")}</span>
+            ${quality}${limits}
+            <button class="status-chip status-${st}" data-key="${encodeURIComponent(findingKey(f))}" title="Click to cycle triage status">${escapeHtml(STATUS_LABEL[st] || st)}</button></span>
           </li>`;
         }).join("")
-      : `<li><span class="risk-dot" style="color:#22d3ee"></span><span>No findings for this filter.</span></li>`;
+      : `<li><span class="risk-dot" style="color:#34d399"></span><span>No actionable findings for this filter. See <b>Security Observations</b> for capability signals.</span></li>`;
 
     $("#unified-findings").querySelectorAll(".status-chip").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -828,7 +1001,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     const riskColor = summary.risk_color || "#22d3ee";
 
     const circ = 2 * Math.PI * 50;
-    const pct = Math.max(4, Math.min(100, score * 4));
+    // overall_score is now an explainable 0-100 evidence-weighted score.
+    const pct = Math.max(2, Math.min(100, score));
     const gauge = $("#gauge");
     gauge.style.stroke = riskColor;
     gauge.setAttribute("stroke", riskColor);
@@ -836,17 +1010,19 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
     $("#risk-label").textContent = riskLabel;
     $("#risk-label").style.color = riskColor;
-    $("#risk-score").textContent = `Score ${score}`;
+    $("#risk-score").textContent = `Risk ${score}/100`;
     const chip = $("#risk-chip");
-    chip.textContent = `${summary.total_findings || 0} signals`;
+    const actionCount = summary.total_findings || 0;
+    const obsCount = summary.total_observations || 0;
+    chip.textContent = `${actionCount} action${actionCount === 1 ? "" : "s"} · ${obsCount} observation${obsCount === 1 ? "" : "s"}`;
     chip.style.background = riskColor;
     chip.style.color = "#071019";
 
     const metrics = [
       { label: "Files Analyzed", value: summary.total_files || 0, color: "#22d3ee" },
-      { label: "Detections", value: summary.total_findings || 0, color: "#a78bfa" },
-      { label: "Crypto Flows", value: summary.crypto_flow_count || 0, color: "#f472b6" },
-      { label: "Risk Score", value: score, color: riskColor },
+      { label: "Actionable Findings", value: actionCount, color: "#fb7185" },
+      { label: "Confirmed Effects", value: (summary.risk_counts || {}).confirmed || 0, color: "#ff4d6d" },
+      { label: "Risk Score /100", value: score, color: riskColor },
     ];
 
     $("#metrics").innerHTML = metrics
@@ -1191,20 +1367,38 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     $("#cancel-scan").addEventListener("click", cancelCurrentJob);
     const tokenField = $("#engine-token");
     if (tokenField) tokenField.value = apiToken();
-    $("#copy-setup").addEventListener("click", () => {
-      const code = $("#setup-code").textContent;
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(code);
-      } else {
-        const ta = document.createElement("textarea");
-        ta.value = code;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        ta.remove();
-      }
-      $("#copy-setup").textContent = "✅ Copied";
-      setTimeout(() => ($("#copy-setup").textContent = "📋 Copy"), 1600);
+    // Copy buttons in the setup modal (generic, per data-copy target).
+    $$("[data-copy]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const target = btn.getAttribute("data-copy");
+        const node = target ? document.getElementById(target) : null;
+        const code = node ? node.textContent : "";
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(code);
+        } else {
+          const ta = document.createElement("textarea");
+          ta.value = code;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          ta.remove();
+        }
+        const original = btn.textContent;
+        btn.textContent = "✅ Copied";
+        setTimeout(() => (btn.textContent = original), 1600);
+      });
+    });
+
+    // Setup modal tabs (one-file launcher vs git clone).
+    $$(".setup-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        $$(".setup-tab").forEach((t) => t.classList.remove("active"));
+        tab.classList.add("active");
+        const which = tab.dataset.setup;
+        $$(".setup-pane").forEach((pane) => {
+          pane.hidden = pane.dataset.setupPane !== which;
+        });
+      });
     });
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") closePrivacyModal();

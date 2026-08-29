@@ -424,5 +424,10 @@ def data_exfiltration_candidates(results, runtime_evidence=None, page_url=""):
             "sanitization_detected": False,
             "framework": "Script behavior correlation",
             "evidence_type": "behavioral_correlation",
+            "analysis_quality": "medium",
+            "limitations": [
+                "Sensitive-read capability and external destinations both present, but no runtime data payload is captured; this is a correlation, not proven exfiltration.",
+            ],
+            "observation": False,
         })
     return candidates

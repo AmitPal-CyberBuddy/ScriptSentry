@@ -23,6 +23,7 @@
           ScriptSentry
           <div class="sub">JS Intelligence Studio</div>
         </span>
+        <span class="dev-badge" title="Pre-release build — not a published/stable release">🚧 Under development</span>
       </div>
       <div class="status" id="engine-status">
         <span class="dot" id="engine-dot"></span>
@@ -53,6 +54,17 @@
           <b>ScriptSentry&nbsp;server.py</b>. No code uploads, no clouds, no accounts.
         </div>
       </div>
+
+      <div class="authorized-banner fade-up">
+        <div class="authorized-ico">⚖️</div>
+        <div>
+          <b>Authorized testing only.</b> Only scan applications and systems you own or have
+          explicit written permission to test. You are responsible for complying with all
+          applicable laws and the target's terms of service. ScriptSentry provides triage
+          signals, not proof of exploitation — always verify findings and never use them to
+          access systems without authorization.
+        </div>
+      </div>
     </section>
 
     <section class="console fade-up">
@@ -68,6 +80,7 @@
         <div class="pane active" id="pane-code">
           <label class="field-label" for="code-input">JavaScript source</label>
           <textarea id="code-input" spellcheck="false" placeholder="// Paste your JavaScript here..."></textarea>
+          <p class="field-error" id="code-error" role="alert" hidden></p>
           <div class="row">
             <button class="btn" id="analyze-code">⚡ Analyze Code</button>
             <button class="btn ghost" id="load-sample">✨ Try a sample</button>
@@ -77,7 +90,10 @@
 
         <div class="pane" id="pane-url">
           <label class="field-label" for="url-input">Target URL</label>
-          <input id="url-input" type="text" placeholder="https://example.com/app.js or https://example.com" />
+          <input id="url-input" type="url" inputmode="url" autocapitalize="off" spellcheck="false"
+                 placeholder="https://example.com/app.js or https://example.com" />
+          <p class="field-error" id="url-error" role="alert" hidden></p>
+          <p class="field-hint">Only public <code>http(s)</code> URLs are scanned — locally, by your own engine. Private/loopback addresses and credentials in the URL are rejected.</p>
           <div class="config-row">
             <div class="config-block">
               <label class="field-label" for="profile">Profile</label>
@@ -150,13 +166,9 @@
 
       <div class="view-tabs fade-up" id="view-tabs">
         <button class="view-tab active" data-view="overview">📊 Overview</button>
-        <button class="view-tab" data-view="scripts">📚 Scripts</button>
-        <button class="view-tab" data-view="assets">📁 Assets</button>
-        <button class="view-tab" data-view="attack">🎯 Attack Surface</button>
         <button class="view-tab" data-view="findings">🚦 Findings</button>
-        <button class="view-tab" data-view="flows">🔁 Data Flows</button>
-        <button class="view-tab" data-view="secrets">🔐 Secrets</button>
-        <button class="view-tab" data-view="deps">🧰 Dependencies</button>
+        <button class="view-tab" data-view="scripts">📚 Scripts</button>
+        <button class="view-tab" data-view="intelligence">🧠 Intelligence</button>
         <button class="view-tab" data-view="runtime">🖥️ Runtime</button>
       </div>
 
@@ -178,6 +190,19 @@
           </div>
         </div>
 
+        <div class="card">
+          <h3>🎯 What to investigate first</h3>
+          <p class="modal-note" style="margin:0 0 8px">Actionable findings ranked by evidence strength and impact — not decoration.</p>
+          <div class="find-list" id="priority-list"></div>
+        </div>
+      </div>
+
+      <div class="grid grid-2 view-group" style="margin-top:18px" data-view="overview">
+        <div class="card">
+          <h3>Why this score?</h3>
+          <p class="modal-note" style="margin:0 0 8px">Every point is explained by evidence. Demonstrated/high-confidence flows weigh far more than regex observations.</p>
+          <div id="risk-breakdown"></div>
+        </div>
         <div class="card">
           <h3>Detection Snapshot</h3>
           <div id="category-bars"></div>
@@ -208,34 +233,42 @@
         <div id="script-panel"></div>
       </div>
 
-      <div class="card view-group" style="margin-top:18px" data-view="findings">
-        <h3>🚦 Risk Signals</h3>
-        <div class="find-list" id="risk-signals"></div>
+      <div class="card view-group" style="margin-top:18px" data-view="scripts">
+        <h3>📁 JavaScript Assets</h3>
+        <div class="finding-grid" id="scan-summary"></div>
+        <div class="file-tabs" id="file-tabs"></div>
+        <div id="file-panel"></div>
       </div>
 
       <div class="card view-group" style="margin-top:18px" data-view="findings">
-        <h3>🛠️ Unified Findings</h3>
-        <p class="modal-note" style="margin:0 0 8px">Click <b>status</b> to mark as Confirmed / False Positive / Informational / Needs Review (stored in your browser only).</p>
+        <h3>🛠️ Actionable Findings</h3>
+        <p class="modal-note" style="margin:0 0 8px">Issues that require investigation or remediation. <b>Confirmed</b> is reserved for demonstrated/deterministic proof; static source→sink flows are high-confidence and open for triage. Click <b>status</b> to triage (stored in your browser only).</p>
         <div class="file-tabs" id="finding-filters"></div>
         <div class="find-list" id="unified-findings"></div>
       </div>
 
-      <div class="card view-group" style="margin-top:18px" data-view="attack">
-        <h3>🎯 Attack Surface</h3>
-        <div class="finding-grid" id="attack-panel"></div>
+      <div class="card view-group" style="margin-top:18px" data-view="findings">
+        <h3>👁️ Security Observations</h3>
+        <p class="modal-note" style="margin:0 0 8px">Interesting behavior and capability signals that are <b>not</b> proven vulnerabilities — API surface, obfuscation, inventory, and patterns without an established source→sink path.</p>
+        <div class="find-list" id="risk-signals"></div>
       </div>
 
-      <div class="card view-group" style="margin-top:18px" data-view="flows">
+      <div class="card view-group" style="margin-top:18px" data-view="intelligence">
         <h3>🔁 Source → Sink Data Flows</h3>
         <div class="find-list" id="flow-panel"></div>
       </div>
 
-      <div class="card view-group" style="margin-top:18px" data-view="secrets">
+      <div class="card view-group" style="margin-top:18px" data-view="intelligence">
+        <h3>🎯 Attack Surface</h3>
+        <div class="finding-grid" id="attack-panel"></div>
+      </div>
+
+      <div class="card view-group" style="margin-top:18px" data-view="intelligence">
         <h3>🔐 Secrets &amp; Sensitive Data</h3>
         <div class="finding-grid" id="secrets-panel"></div>
       </div>
 
-      <div class="card view-group" style="margin-top:18px" data-view="deps">
+      <div class="card view-group" style="margin-top:18px" data-view="intelligence">
         <h3>🧰 Dependencies &amp; Transport</h3>
         <div class="finding-grid" id="dep-panel"></div>
       </div>
@@ -248,13 +281,6 @@
           request bodies, or localStorage values.
         </p>
         <div id="runtime-panel"></div>
-      </div>
-
-      <div class="card view-group" style="margin-top:18px" data-view="assets">
-        <h3>📁 JavaScript Assets</h3>
-        <div class="finding-grid" id="scan-summary"></div>
-        <div class="file-tabs" id="file-tabs"></div>
-        <div id="file-panel"></div>
       </div>
     </section>
 
@@ -269,21 +295,58 @@
       <h2 id="privacy-title">Run it locally — it's free &amp; private</h2>
       <p>
         You're viewing the <b>hosted interface</b>. For privacy, ScriptSentry never sends your
-        code to a cloud. Start the local engine, then this page will connect to it automatically.
+        code to a cloud. Start the local engine, then this page connects to it automatically.
+        Pick the easiest option:
       </p>
-      <ol class="setup-steps">
-        <li><b>Get the project:</b> clone or download <code>ScriptSentry</code>.</li>
-        <li><b>Open a terminal</b> inside the project folder.</li>
-        <li><b>Install deps:</b> <code>pip install -r requirements.txt</code></li>
-        <li><b>Start the server:</b> <code>python3 server.py --port 8000</code></li>
-        <li><b>Keep this page open</b> and press <em>Retry connection</em> (connected via <code>127.0.0.1</code>).</li>
-      </ol>
-      <div class="code-box">
-        <pre id="setup-code">cd ScriptSentry
+
+      <div class="setup-toggle" role="tablist">
+        <button class="setup-tab active" data-setup="easy" role="tab">⭐ Easiest: one file</button>
+        <button class="setup-tab" data-setup="clone" role="tab">🐙 Clone the repo</button>
+      </div>
+
+      <div class="setup-pane" data-setup-pane="easy">
+        <p class="modal-note" style="margin:6px 0 10px">
+          Download <b>one file</b>. On first run it fetches the engine from the official GitHub
+          repo, installs dependencies, and starts — no clone needed.
+        </p>
+        <div class="setup-actions">
+          <a class="btn" id="download-launcher" rel="noopener"
+             href="https://raw.githubusercontent.com/AmitPal-CyberBuddy/ScriptSentry/main/scriptsentry.py"
+             download="scriptsentry.py">⬇️ Download scriptsentry.py</a>
+        </div>
+        <ol class="setup-steps">
+          <li><b>Download</b> the launcher above (or copy it straight from GitHub).</li>
+          <li><b>Run it:</b> <code>python3 scriptsentry.py --port 8000</code> — the first run downloads the engine.</li>
+          <li><b>Paste the pairing token</b> it prints into the field below.</li>
+        </ol>
+        <div class="code-box">
+          <pre id="setup-code-easy"># downloads &amp; starts the engine on first run
+python3 scriptsentry.py --port 8000</pre>
+          <button class="btn ghost" data-copy="setup-code-easy">📋 Copy</button>
+        </div>
+      </div>
+
+      <div class="setup-pane" data-setup-pane="clone" hidden>
+        <ol class="setup-steps">
+          <li><b>Get the project:</b> clone or download <code>ScriptSentry</code>.</li>
+          <li><b>Open a terminal</b> inside the project folder.</li>
+          <li><b>Install deps:</b> <code>pip install -r requirements.txt</code></li>
+          <li><b>Start the server:</b> <code>python3 server.py --port 8000</code></li>
+          <li><b>Keep this page open</b> and press <em>Retry connection</em>.</li>
+        </ol>
+        <div class="code-box">
+          <pre id="setup-code-clone">git clone https://github.com/AmitPal-CyberBuddy/ScriptSentry.git
+cd ScriptSentry
 pip install -r requirements.txt
 python3 server.py --port 8000</pre>
-        <button class="btn ghost" id="copy-setup">📋 Copy</button>
+          <button class="btn ghost" data-copy="setup-code-clone">📋 Copy</button>
+        </div>
       </div>
+
+      <p class="modal-note authorized-note">
+        ⚖️ <b>Authorized testing only.</b> Only scan systems you own or have explicit written
+        permission to test. You are responsible for lawful use.
+      </p>
       <p class="modal-note">
         ⚠️ If you change the port, update <code>webui/config.js</code> to the same port.
         The engine prints a pairing token at startup; it stays in this tab only.

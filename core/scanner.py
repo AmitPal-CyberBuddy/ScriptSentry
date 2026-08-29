@@ -18,7 +18,14 @@ def _credible_secret(candidate):
     """Filter obvious fixtures/labels before raising a secret risk signal."""
     text = str(candidate or "")
     lower = text.lower()
-    if any(marker in lower for marker in ("example", "sample", "placeholder", "changeme", "dummy", "test123")):
+    if any(marker in lower for marker in (
+        "example", "sample", "placeholder", "changeme", "dummy", "test123",
+        "your_", "_here", "xxx", "todo", "fixme", "redact", "lorem",
+        "api_token", "token_here", "<your", "replace_", "00000000",
+    )):
+        return False
+    # Template placeholders like ${TOKEN}, <token>, [key] are not secrets.
+    if re.search(r"[\$%]?\{[^}]*\}|<[^>]+>|\[\w+\]", text):
         return False
     if "-----begin " in lower or re.search(r"eyj[\w-]+\.[\w-]+\.[\w-]+", text, re.I):
         return True
@@ -459,40 +466,55 @@ def scan_file(file_path, content=None):
     # =========================================
     # ⚠️ NORMALIZED RISK SIGNALS
     # =========================================
+    # Risk signals are coarse, static (or static-heuristic) observations. They
+    # never reach the "confirmed" triage state on their own; a finding requires
+    # a source-to-sink flow or runtime evidence. Low-impact signals are tagged
+    # as observations so the dashboard can present "interesting behavior"
+    # separately from "actionable findings".
     risk_signals = []
+    def _signal(sig_id, severity, title, evidence, confidence="medium", observation=None):
+        sev = str(severity).upper()
+        if observation is None:
+            observation = sev not in ("CRITICAL", "HIGH")
+        risk_signals.append({
+            "id": sig_id,
+            "severity": sev,
+            "title": title,
+            "evidence": evidence,
+            "confidence": confidence,
+            "evidence_type": "static_pattern",
+            "observation": bool(observation),
+        })
+
     if results.get("credible_secrets"):
-        risk_signals.append({"id": "hardcoded_secret", "severity": "HIGH", "title": "Hardcoded secret candidate", "evidence": results["credible_secrets"][:3], "confidence": "high"})
+        _signal("hardcoded_secret", "HIGH", "Hardcoded secret candidate", results["credible_secrets"][:3], confidence="medium", observation=False)
     if results.get("keys") and results.get("ivs"):
-        risk_signals.append({"id": "exposed_key_iv_pair", "severity": "CRITICAL", "title": "Static crypto key/IV pair exposed", "evidence": [results["keys"][:2], results["ivs"][:2]]})
+        _signal("exposed_key_iv_pair", "CRITICAL", "Static crypto key/IV pair exposed", [results["keys"][:2], results["ivs"][:2]], confidence="medium", observation=False)
     elif results.get("keys"):
-        risk_signals.append({"id": "static_crypto_key", "severity": "HIGH", "title": "Static crypto key material", "evidence": results["keys"][:2]})
+        _signal("static_crypto_key", "HIGH", "Static crypto key material", results["keys"][:2], confidence="medium", observation=False)
     if results.get("ivs"):
-        risk_signals.append({"id": "static_iv", "severity": "MEDIUM", "title": "Static IV/nonce material", "evidence": results["ivs"][:2]})
+        _signal("static_iv", "MEDIUM", "Static IV/nonce material", results["ivs"][:2], confidence="medium", observation=False)
     if results.get("real_crypto_detected") or results.get("crypto"):
         crypto_names = list(dict.fromkeys(results.get("crypto", []) + [f.get("signal" if isinstance(f, dict) else "") for f in results.get("crypto_flows", [])]))[:3]
-        risk_signals.append({
-            "id": "client_side_crypto", "severity": "MEDIUM",
-            "title": "Client-side cryptographic flow detected",
-            "evidence": crypto_names or ["crypto library/operation present"],
-        })
+        _signal("client_side_crypto", "MEDIUM", "Client-side cryptographic flow detected", crypto_names or ["crypto library/operation present"])
     if results.get("storage"):
         storage_text = " ".join(map(str, results["storage"])).lower()
         sensitive = bool(results.get("sensitive_storage")) or any(t in storage_text for t in ("token", "auth", "secret", "password", "session"))
-        risk_signals.append({
-            "id": "sensitive_storage", "severity": "HIGH" if sensitive else "MEDIUM",
-            "title": "Client storage used" + (" for sensitive data" if sensitive else ""),
-            "evidence": results["storage"][:3],
-        })
+        _signal(
+            "sensitive_storage", "HIGH" if sensitive else "MEDIUM",
+            "Client storage used" + (" for sensitive data" if sensitive else ""),
+            results["storage"][:3],
+        )
     if results.get("dom_risks"):
         # This is a capability observation.  A vulnerability requires a
         # source-to-sink path (added below by the taint pass).
-        risk_signals.append({"id": "dom_injection", "severity": "MEDIUM", "title": "DOM/dynamic sink observed", "evidence": results["dom_risks"][:3], "confidence": "medium"})
+        _signal("dom_injection", "MEDIUM", "DOM/dynamic sink observed", results["dom_risks"][:3], confidence="low", observation=True)
     if results.get("suspicious_calls"):
-        risk_signals.append({"id": "unsafe_runtime", "severity": "MEDIUM", "title": "Unsafe runtime execution", "evidence": results["suspicious_calls"][:3]})
+        _signal("unsafe_runtime", "MEDIUM", "Unsafe runtime execution pattern", results["suspicious_calls"][:3], confidence="low", observation=True)
     if results.get("endpoints") or results.get("api_calls"):
-        risk_signals.append({"id": "api_surface", "severity": "LOW", "title": "API surface mapped", "evidence": (results.get("endpoints") or results.get("api_calls"))[:3]})
+        _signal("api_surface", "LOW", "API surface mapped", (results.get("endpoints") or results.get("api_calls"))[:3], confidence="low", observation=True)
     if results.get("obfuscation_analysis", {}).get("evidence"):
-        risk_signals.append({"id": "obfuscation", "severity": "LOW", "title": "Obfuscation signals", "evidence": results["obfuscation_analysis"].get("evidence", [])[:3]})
+        _signal("obfuscation", "LOW", "Obfuscation signals", results["obfuscation_analysis"].get("evidence", [])[:3], confidence="low", observation=True)
     results["risk_signals"] = risk_signals
 
     # =========================================
