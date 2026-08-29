@@ -1,0 +1,36 @@
+{
+  "name": "ScriptSentry",
+  "version": "2.2.0-dev",
+  "release_type": "dev",
+  "status": "under development",
+  "published": false,
+  "date": "2026-08-29",
+  "engine": "ScriptSentry Analyzer",
+  "tagline": "Watch every line. Detect every risk.",
+  "notice": "Under active development — not a published/stable release. Expect breaking changes; do not treat findings or scores as production-grade yet.",
+  "summary": "Accuracy and triage overhaul: independent severity/confidence/status, a stricter Confirmed bar, an explainable 0-100 risk score, layered AST/bundler script discovery, and a clear split between actionable findings and security observations.",
+  "highlights": [
+    "Severity, confidence, triage status and analysis quality are now independent axes; confidence is derived from evidence, never from severity.",
+    "Confirmed is reserved for deterministic proof or a demonstrated runtime effect; static source-to-sink flows stay Open for triage.",
+    "Every flow reports an analysis quality (high/medium/heuristic) plus explicit limitations instead of overclaiming.",
+    "Explainable 0-100 risk score with per-contributor breakdown and an investigate-first priority list on the Overview.",
+    "Findings view separates Actionable Findings from Security Observations.",
+    "Layered script discovery: AST import/require/import() first, bundler adapters (Webpack/Vite/Next/Parcel) second, regex fallback third.",
+    "Dashboard navigation reduced from nine views to five (Overview, Findings, Scripts, Intelligence, Runtime).",
+    "Formal accuracy regression suite covering true positives, true negatives, known false positives, edge, minified and obfuscated variants.",
+    "One-file launcher (scriptsentry.py): download a single file and run it; on first run it bootstraps the engine from GitHub, installs dependencies and starts the server.",
+    "Dashboard setup modal offers a download button for the launcher vs. git clone, plus inline input validation (no more browser alert popups) and an authorized-testing notice.",
+    "Local file upload: drag & drop or browse one or more .js/.mjs/.ts files to analyze together with per-file attribution (read in the browser, analyzed only by the local engine); extension and size limits enforced.",
+    "Scan options (profile, depth, file cap, workers) now have inline ? tooltips explaining each control."
+  ],
+  "compatibility": {
+    "python": ">=3.8",
+    "report_schema": "2.2-dev",
+    "dashboard_payload": "2.2-dev"
+  },
+  "metadata_sources": {
+    "version_py": "core/version.py",
+    "changelog": "CHANGELOG.md",
+    "release_notes": "release.json"
+  }
+}

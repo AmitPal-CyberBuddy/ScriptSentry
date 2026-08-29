@@ -16,20 +16,29 @@ def analyze_framework(content, filename="inline.js"):
         return findings
 
     def add(node_id, framework, title, severity, line, evidence, confidence="medium"):
+        sanitized = any(h in evidence.lower() for h in ("sanitize", "dopurify", "textcontent", "escapehtml"))
+        # A framework sink (v-html, dangerouslySetInnerHTML, $().html) is a
+        # dangerous *pattern*; whether untrusted data actually reaches it
+        # requires the taint pass. So these default to needs_review, never
+        # confirmed, and sanitized-looking sinks become observations.
         findings.append({
             "id": node_id,
             "type": title,
             "framework": framework,
             "severity": severity,
             "confidence": confidence,
-            "status": "potential",
+            "status": "informational" if sanitized else "needs_review",
             "file": filename,
             "line": line,
             "source": "",
             "sink": evidence[:120],
             "flow": [],
-            "sanitization_detected": any(h in evidence.lower() for h in ("sanitize", "dopurify", "textcontent", "escapehtml")),
+            "sanitization_detected": sanitized,
             "evidence": evidence[:240],
+            "evidence_type": "framework_pattern",
+            "analysis_quality": "medium",
+            "limitations": ["Framework sink present; source-to-sink data flow not established by this rule."],
+            "observation": sanitized,
         })
 
     # React

@@ -606,6 +606,9 @@ def build_runtime_findings(runtime, target_url=""):
     findings = []
 
     # 1) Dynamic code execution (eval / new Function / string timers).
+    #    eval actually executed in the live browser: the dangerous behavior
+    #    was demonstrated, not merely inferred. This is one of the few cases
+    #    where the engine may emit ``confirmed`` automatically.
     eval_calls = _evidence_text(runtime.get("eval_calls", []), 4)
     string_timers = _evidence_text(runtime.get("string_timers", []), 3)
     if eval_calls:
@@ -613,17 +616,20 @@ def build_runtime_findings(runtime, target_url=""):
             "id": "runtime_eval",
             "type": "Dynamic code execution observed",
             "severity": "HIGH",
-            "confidence": "high",
+            "confidence": "confirmed",
             "status": "confirmed",
             "file": target_url,
             "line": 0,
             "source": "browser runtime",
             "sink": "eval / new Function",
-            "flow": ["runtime eval", "synchronous code injection"],
+            "flow": ["runtime eval", "synchronous code injection executed"],
             "evidence": eval_calls,
             "sanitization_detected": False,
             "framework": "Playwright runtime",
-            "evidence_type": "runtime_browser",
+            "evidence_type": "runtime_effect",
+            "analysis_quality": "high",
+            "limitations": [],
+            "observation": False,
         })
     elif string_timers:
         findings.append({
@@ -641,9 +647,17 @@ def build_runtime_findings(runtime, target_url=""):
             "sanitization_detected": False,
             "framework": "Playwright runtime",
             "evidence_type": "runtime_browser",
+            "analysis_quality": "medium",
+            "limitations": ["String scheduled, but attacker control of the string was not established."],
+            "observation": True,
         })
 
     # 2) DOM sinks observed at runtime.
+    #    The sink *executed*, which is strong evidence, but ScriptSentry does
+    #    not assert that the written value was attacker-controlled or that the
+    #    result was an actual unsafe XSS effect. So: high confidence, open for
+    #    triage --- confirmed is reserved for the analyst or a demonstrated
+    #    dangerous effect.
     dom_sinks = _evidence_text(runtime.get("dom_sinks", []), 6)
     if dom_sinks:
         findings.append({
@@ -651,16 +665,19 @@ def build_runtime_findings(runtime, target_url=""):
             "type": "DOM sink executed at runtime",
             "severity": "HIGH",
             "confidence": "high",
-            "status": "confirmed",
+            "status": "open",
             "file": target_url,
             "line": 0,
             "source": "browser runtime",
             "sink": "innerHTML / insertAdjacentHTML / document.write",
-            "flow": ["runtime DOM mutation", "DOM sink write"],
+            "flow": ["runtime DOM mutation", "DOM sink write executed"],
             "evidence": dom_sinks,
             "sanitization_detected": False,
             "framework": "Playwright runtime",
             "evidence_type": "runtime_browser",
+            "analysis_quality": "high",
+            "limitations": ["Sink executed, but attacker control and the actual unsafe effect (e.g. script execution) were not demonstrated."],
+            "observation": False,
         })
 
     # 3) Sensitive client storage writes / visible keys.
@@ -689,6 +706,9 @@ def build_runtime_findings(runtime, target_url=""):
             "sanitization_detected": False,
             "framework": "Playwright runtime",
             "evidence_type": "runtime_browser",
+            "analysis_quality": "medium",
+            "limitations": ["Sensitive key names observed; secret values are never captured or proven."],
+            "observation": False,
         })
 
     # 4) Console errors / page exceptions.
@@ -713,6 +733,9 @@ def build_runtime_findings(runtime, target_url=""):
             "sanitization_detected": False,
             "framework": "Playwright runtime",
             "evidence_type": "runtime_browser",
+            "analysis_quality": "high",
+            "limitations": ["Errors may come from third-party scripts or environmental conditions."],
+            "observation": True,
         })
 
     # 5) Failed requests are useful for mapping unreachable endpoints.
@@ -733,6 +756,9 @@ def build_runtime_findings(runtime, target_url=""):
             "sanitization_detected": False,
             "framework": "Playwright runtime",
             "evidence_type": "runtime_browser",
+            "analysis_quality": "high",
+            "limitations": ["Network failure observed; not a security vulnerability by itself."],
+            "observation": True,
         })
 
     # 6) WebSocket endpoints only observable at runtime.
@@ -741,9 +767,9 @@ def build_runtime_findings(runtime, target_url=""):
         findings.append({
             "id": "runtime_websocket",
             "type": "Live WebSocket channel observed",
-            "severity": "MEDIUM",
+            "severity": "LOW",
             "confidence": "high",
-            "status": "confirmed",
+            "status": "informational",
             "file": target_url,
             "line": 0,
             "source": "browser runtime",
@@ -753,6 +779,9 @@ def build_runtime_findings(runtime, target_url=""):
             "sanitization_detected": False,
             "framework": "Playwright runtime",
             "evidence_type": "runtime_browser",
+            "analysis_quality": "high",
+            "limitations": ["A live channel is inventory/behavior data; data sensitivity is assessed separately."],
+            "observation": True,
         })
 
     # 7) Dynamic network / API surface that static analysis could not see.
@@ -781,6 +810,9 @@ def build_runtime_findings(runtime, target_url=""):
             "sanitization_detected": False,
             "framework": "Playwright runtime",
             "evidence_type": "runtime_browser",
+            "analysis_quality": "high",
+            "limitations": ["Observed requests; sensitivity of the transmitted data not established."],
+            "observation": True,
         })
 
     # 8) Data exfiltration correlation: sensitive runtime storage/cookie access
@@ -808,6 +840,9 @@ def build_runtime_findings(runtime, target_url=""):
             "sanitization_detected": False,
             "framework": "Playwright runtime",
             "evidence_type": "runtime_browser",
+            "analysis_quality": "medium",
+            "limitations": ["Sensitive keys and external requests both observed, but the actual payload contents are not captured; correlation, not proof."],
+            "observation": False,
         })
 
     return findings

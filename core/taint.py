@@ -113,9 +113,10 @@ class _Taint:
     sanitized: bool = False
     path: list = field(default_factory=list)
     confidence: str = "medium"
+    limitations: list = field(default_factory=list)
 
     def copy(self):
-        return _Taint(list(self.sources), self.sanitized, list(self.path), self.confidence)
+        return _Taint(list(self.sources), self.sanitized, list(self.path), self.confidence, list(self.limitations))
 
     def merge(self, other):
         for source in other.sources:
@@ -126,12 +127,37 @@ class _Taint:
         for step in other.path:
             if step not in self.path:
                 self.path.append(step)
+        for note in getattr(other, "limitations", []) or []:
+            if note not in self.limitations:
+                self.limitations.append(note)
         self.confidence = _max_confidence(self.confidence, other.confidence)
+
+    def limit(self, note):
+        """Record an analysis limitation and lower confidence accordingly.
+
+        Advanced JS taint analysis cannot model every construct; being honest
+        about *what did not resolve* (dynamic property access, an unknown
+        third-party function, a callback boundary) makes the finding
+        transparent instead of overclaiming.
+        """
+        if note not in self.limitations:
+            self.limitations.append(note)
+        # A flow that crosses a construct the engine cannot model is never
+        # stronger than medium confidence.
+        if self.confidence == "high":
+            self.confidence = "medium"
 
 
 def _max_confidence(a, b):
     order = {"low": 0, "medium": 1, "high": 2}
     return a if order.get(a, 0) >= order.get(b, 0) else b
+
+
+def min_confidence(conf, ceiling="medium"):
+    """Cap confidence for line-based heuristic flows (never claim high)."""
+    order = {"low": 0, "medium": 1, "high": 2}
+    conf = conf if conf in order else "low"
+    return conf if order[conf] <= order[ceiling] else ceiling
 
 
 def _line(node):
@@ -160,6 +186,36 @@ class TaintAnalyzer:
         self.findings = []
         self._seen = set()
         self._func_depth = 0
+        # Analysis-quality bookkeeping: which constructs did we fail to model?
+        self.limitations = []
+        self.ast_used = False
+
+    def _note_limitation(self, note):
+        if note not in self.limitations:
+            self.limitations.append(note)
+
+    def _quality(self):
+        """Overall analysis quality for this document.
+
+        ``high``   = AST parsed and the propagation path resolved cleanly
+        ``medium`` = AST parsed but a construct could not be fully modeled
+        ``heuristic`` = AST unavailable; line/regex fallback only
+        """
+        if not self.ast_used:
+            return "heuristic"
+        return "medium" if self.limitations else "high"
+
+    def _finding_limitations(self, taint, extra=None):
+        notes = list(getattr(taint, "limitations", []) or [])
+        for note in extra or []:
+            if note not in notes:
+                notes.append(note)
+        # Document-level limitations apply to every flow (e.g. parser fallback).
+        if not self.ast_used:
+            note = "AST parser unavailable; flow derived from line-based heuristics."
+            if note not in notes:
+                notes.append(note)
+        return notes[:8]
 
     # ---------------- source extraction ----------------
     def _strip_calls(self, expr):
@@ -192,6 +248,11 @@ class TaintAnalyzer:
             args = expr.get("arguments", []) or []
             arg_texts = [self._node_simple_text(a) for a in args[:2]]
             return f"{callee}({','.join(a for a in arg_texts if a)})"
+        if ntype == "NewExpression":
+            callee = self._strip_calls(expr.get("callee", {}))
+            args = expr.get("arguments", []) or []
+            arg_texts = [self._node_simple_text(a) for a in args[:2]]
+            return f"new {callee}({','.join(a for a in arg_texts if a)})"
         if ntype == "Literal":
             return str(expr.get("value", ""))
         if ntype == "BinaryExpression":
@@ -273,6 +334,18 @@ class TaintAnalyzer:
         if ntype in ("AwaitExpression", "UnaryExpression", "ChainExpression"):
             return self._taint_of_expr(node.get("argument") or node.get("expression"), depth + 1)
 
+        # Computed/dynamic property access (obj[x]) cannot be resolved
+        # statically; flag it on the tainted value so the reported flow carries
+        # the limitation instead of pretending the object model was fully
+        # understood.
+        if ntype in ("MemberExpression",) and node.get("computed"):
+            obj_taint = self._taint_of_expr(node.get("object"), depth + 1)
+            if obj_taint and obj_taint.sources:
+                prop_txt = self._node_simple_text(node.get("property"))
+                note = f"Dynamic/computed property access [{prop_txt or '?'}]; property resolution incomplete."
+                obj_taint.limit(note)
+                return obj_taint
+
         # Member expression sources (location/search, storage, cookie, value...)
         if ntype in ("MemberExpression", "ChainExpression"):
             callee_txt = self._strip_calls(node).lower()
@@ -310,7 +383,8 @@ class TaintAnalyzer:
 
             # Explicit source getters.  A generic ``client.get()`` is not a
             # browser source and must not become a taint origin.
-            if "searchparams.get" in lower or "searchparams.getall" in lower:
+            if ("searchparams.get" in lower or "searchparams.getall" in lower
+                    or "urlsearchparams" in lower and lower.rstrip(")").endswith((".get", ".getall"))):
                 return _Taint(["source:URL search params"], False, [f"read {callee_txt}"], "high")
             if "getitem" in lower and ("localstorage" in lower or "sessionstorage" in lower):
                 return _Taint(["source:browser storage"], False, [f"read {callee_txt}"], "high")
@@ -349,8 +423,22 @@ class TaintAnalyzer:
                     result.path.append(f"sanitize {callee_txt}")
                     result.confidence = "low"
                     return result
-            # Propagate taint from function arguments? Only for known pass-through
-            # helpers is safe; avoid broad propagation to reduce false positives.
+            # Unknown call: if a tracked source is passed as an argument we
+            # conservatively retain the taint through the call, but at medium
+            # confidence with a limitation note so the flow is transparent
+            # rather than silently dropped or overclaimed.
+            unknown_limitation = f"Return value of unmodeled call '{callee_txt}' is assumed to propagate its arguments."
+            tracked_arg = None
+            for arg in node.get("arguments", []) or []:
+                candidate = self._taint_of_expr(arg, depth + 1)
+                if candidate and candidate.sources:
+                    tracked_arg = candidate.copy() if tracked_arg is None else tracked_arg
+                    if tracked_arg is not candidate:
+                        tracked_arg.merge(candidate)
+            if tracked_arg:
+                tracked_arg.path.append(f"call {callee_txt}(...)")
+                tracked_arg.limit(unknown_limitation)
+                return tracked_arg
             return None
 
         # CallExpression-like member flows (already handled above)
@@ -373,28 +461,42 @@ class TaintAnalyzer:
         if not taint or not taint.sources:
             return
         sanitized = bool(taint.sanitized)
+        extra = extra or {}
         if sanitized:
             severity = "LOW"
             confidence = "low"
+            # Sanitized flows are observations, not vulnerabilities.
             status = "informational"
+            observation = True
         else:
-            severity = extra.get("severity", "HIGH") if extra else "HIGH"
+            severity = extra.get("severity", "HIGH")
             confidence = taint.confidence or "medium"
-            status = "confirmed" if confidence == "high" else "potential"
+            # A static source-to-sink path is strong *evidence* but not proof
+            # of an exploitable bug: encoding, framework behavior, an
+            # unreachable branch or an unmodeled sanitizer may still neutralize
+            # it. So high confidence -> 'open' (actionable), never 'confirmed'.
+            status = "open" if confidence in ("high", "confirmed") else "needs_review"
+            observation = False
         sources = [s.replace("source:", "") for s in taint.sources]
+        flow_steps = list(dict.fromkeys(taint.path))[:12]
+        limitations = self._finding_limitations(taint, extra.get("limitations"))
         self._record({
-            "id": extra.get("id", sink_type) if extra else sink_type,
-            "type": extra.get("type", sink_type) if extra else sink_type,
+            "id": extra.get("id", sink_type),
+            "type": extra.get("type", sink_type),
             "severity": severity,
             "confidence": confidence,
             "status": status,
             "file": self.filename,
             "line": _line(node),
-            "source": " → ".join(sources),
+            "source": " → ".join(dict.fromkeys(sources)),
             "sink": _node_text(node, self.content)[:160] or sink_type,
-            "flow": list(dict.fromkeys(taint.path))[:12],
+            "flow": flow_steps,
             "sanitization_detected": sanitized,
-            "evidence": _node_text(node, self.content)[:240],
+            "evidence": (("sanitized: " if sanitized else "") + _node_text(node, self.content)[:240]).strip(),
+            "evidence_type": "source_to_sink",
+            "analysis_quality": self._quality() if not limitations or self._quality() != "high" else "medium",
+            "limitations": limitations,
+            "observation": observation,
         })
 
     def _check_call_sink(self, node):
@@ -535,7 +637,7 @@ class TaintAnalyzer:
             return
 
         # prototype pollution
-        if "__proto__" in left_txt or "constructor.prototype" in left_txt or ("object.assign" in left_txt and re.search(r"__proto__|prototype", content_low)):
+        if "__proto__" in left_txt or "constructor.prototype" in left_txt or ("object.assign" in left_txt and re.search(r"__proto__|prototype", self.content.lower())):
             self._record_sink("prototype_pollution", node, self._taint_of_expr(right) or _Taint(["source:dynamic"], False, [], "low"), {
                 "id": "prototype_pollution",
                 "type": "Prototype pollution",
@@ -642,7 +744,15 @@ class TaintAnalyzer:
 
     def _analyze_function_flow(self, call_node, func_name):
         fn = self.functions.get(func_name)
-        if not fn or self._func_depth > 4:
+        if not fn:
+            return
+        if self._func_depth > 4:
+            # Inter-procedural depth bound: record that propagation may be
+            # incomplete instead of silently treating the flow as fully proven.
+            self._note_limitation(
+                f"Call chain through '{func_name}' exceeded the inter-procedural depth bound; "
+                "downstream propagation may be incomplete."
+            )
             return
         params = fn["params"]
         args = call_node.get("arguments", []) or []
@@ -688,8 +798,12 @@ class TaintAnalyzer:
     def analyze(self):
         tree = parse_raw(self.content)
         if tree is None:
+            self.ast_used = False
+            self._note_limitation("AST parser unavailable or unable to parse this source.")
             self._regex_analyze()
+            self._apply_quality_metadata()
             return self.findings
+        self.ast_used = True
 
         # Pass 0: index declared functions so call args can be propagated into sinks.
         statements = tree.get("body", []) or []
@@ -711,8 +825,34 @@ class TaintAnalyzer:
         # actually has a taint source. A bare `eval("...")` is a pattern the scanner's
         # `unsafe_runtime` risk signal already covers, not a source-to-sink flow.
         if not self.findings and self._has_obvious_dangerous_patterns() and self._has_source_like_pattern():
+            before = set()
             self._regex_analyze()
+            self.ast_used = True  # AST parsed; fallback only supplemented missing flows.
+        self._apply_quality_metadata()
         return self.findings
+
+    def _apply_quality_metadata(self):
+        """Stamp every emitted flow with analysis quality and limitations.
+
+        A source-to-sink path that resolved entirely through the AST is high
+        quality; any crossing of an unmodeled construct (dynamic property,
+        untracked call, depth bound, regex fallback) lowers it and is listed
+        under ``limitations`` so the tester sees exactly what did not resolve.
+        """
+        doc_limitations = list(self.limitations)
+        if not self.ast_used:
+            doc_limitations.insert(0, "AST parser unavailable; flow derived from line-based heuristics.")
+        quality = "heuristic" if not self.ast_used else ("medium" if doc_limitations else "high")
+        for finding in self.findings:
+            notes = []
+            for note in list(finding.get("limitations", []) or []) + doc_limitations:
+                if note and note not in notes:
+                    notes.append(note)
+            finding["limitations"] = notes[:8]
+            # A flow carrying any limitation is never "high" quality analysis.
+            finding["analysis_quality"] = "heuristic" if not self.ast_used else ("medium" if notes else "high")
+            finding.setdefault("evidence_type", "source_to_sink")
+            finding.setdefault("observation", bool(finding.get("sanitization_detected")))
 
     def _walk(self, node, callback):
         if node is None:
@@ -849,24 +989,33 @@ class TaintAnalyzer:
                 flow = combine(taints_in(statement[sink.end():]))
                 is_dom = bool(re.search(r"innerHTML|outerHTML|srcdoc|insertAdjacentHTML|document\.", statement, re.I))
                 if flow:
+                    heuristic_note = "Line-based heuristic flow; statement-level aliasing may over- or under-approximate taint."
                     self._record({
                         "id": "dom_injection" if is_dom else "dangerous_dynamic_code",
                         "type": "DOM injection" if is_dom else "Dangerous dynamic code execution",
                         "severity": "LOW" if flow["sanitized"] else "HIGH",
-                        "confidence": "low" if flow["sanitized"] else flow["confidence"],
-                        "status": "informational" if flow["sanitized"] else ("confirmed" if flow["confidence"] == "high" else "potential"),
+                        "confidence": "low" if flow["sanitized"] else min_confidence(flow["confidence"]),
+                        "status": "informational" if flow["sanitized"] else ("open" if flow["confidence"] == "high" else "needs_review"),
                         "file": self.filename, "line": line_no,
                         "source": " → ".join(s.replace("source:", "") for s in flow["sources"]),
                         "sink": statement[sink.start():sink.end()].strip() + statement[sink.end():sink.end() + 120],
                         "flow": flow["path"][:8], "sanitization_detected": flow["sanitized"],
                         "evidence": ("sanitized: " if flow["sanitized"] else "") + statement[:240],
+                        "evidence_type": "source_to_sink",
+                        "analysis_quality": "heuristic",
+                        "limitations": [heuristic_note],
+                        "observation": bool(flow["sanitized"]),
                     })
                 elif not is_dom:
                     self._record({
                         "id": "dangerous_dynamic_code", "type": "Dangerous dynamic code execution", "severity": "MEDIUM",
-                        "confidence": "low", "status": "potential", "file": self.filename, "line": line_no,
+                        "confidence": "low", "status": "needs_review", "file": self.filename, "line": line_no,
                         "source": "", "sink": statement[:160], "flow": [], "sanitization_detected": False,
                         "evidence": statement[:240],
+                        "evidence_type": "static_pattern",
+                        "analysis_quality": "heuristic",
+                        "limitations": ["Regex pattern match without an established data flow."],
+                        "observation": True,
                     })
 
             redirect = re.search(r"\blocation\.(?:href|assign|replace)\s*(?:=|\()", statement, re.I)
@@ -875,12 +1024,15 @@ class TaintAnalyzer:
                 if flow:
                     self._record({
                         "id": "open_redirect", "type": "Client-side open redirect", "severity": "HIGH",
-                        "confidence": flow["confidence"],
-                        "status": "needs_review" if flow["sanitized"] else ("confirmed" if flow["confidence"] == "high" else "potential"),
+                        "confidence": min_confidence(flow["confidence"]),
+                        "status": "informational" if flow["sanitized"] else ("open" if flow["confidence"] == "high" else "needs_review"),
                         "file": self.filename, "line": line_no,
                         "source": " → ".join(s.replace("source:", "") for s in flow["sources"]),
                         "sink": statement[:160], "flow": flow["path"][:8],
                         "sanitization_detected": flow["sanitized"], "evidence": statement[:240],
+                        "evidence_type": "source_to_sink", "analysis_quality": "heuristic",
+                        "limitations": ["Line-based heuristic flow; statement-level aliasing may over- or under-approximate taint."],
+                        "observation": bool(flow["sanitized"]),
                     })
 
             if re.search(r"postMessage\s*\([^)]*,\s*['\"]\*['\"]", statement, re.I):
@@ -889,6 +1041,9 @@ class TaintAnalyzer:
                     "confidence": "medium", "status": "needs_review", "file": self.filename, "line": line_no,
                     "source": "message data", "sink": statement[:160], "flow": [],
                     "sanitization_detected": False, "evidence": statement[:240],
+                    "evidence_type": "static_pattern", "analysis_quality": "heuristic",
+                    "limitations": ["Wildcard targetOrigin observed; payload sensitivity not established."],
+                    "observation": False,
                 })
             if re.search(r"(?:__proto__|constructor\.prototype|Object\.assign\s*\([^)]*(?:__proto__|prototype))", statement, re.I):
                 self._record({
@@ -896,6 +1051,9 @@ class TaintAnalyzer:
                     "confidence": "low", "status": "needs_review", "file": self.filename, "line": line_no,
                     "source": "", "sink": statement[:160], "flow": [],
                     "sanitization_detected": False, "evidence": statement[:240],
+                    "evidence_type": "static_pattern", "analysis_quality": "heuristic",
+                    "limitations": ["Prototype-touching pattern; attacker control of the merged object not proven."],
+                    "observation": True,
                 })
 
         # Small inter-procedural fallback: propagate a tainted argument into a
@@ -922,24 +1080,23 @@ class TaintAnalyzer:
                 self._record({
                     "id": "dom_injection", "type": "DOM injection",
                     "severity": "LOW" if flow["sanitized"] else "HIGH",
-                    "confidence": "low" if flow["sanitized"] else flow["confidence"],
-                    "status": "informational" if flow["sanitized"] else ("confirmed" if flow["confidence"] == "high" else "potential"),
+                    "confidence": "low" if flow["sanitized"] else min_confidence(flow["confidence"]),
+                    "status": "informational" if flow["sanitized"] else ("open" if flow["confidence"] == "high" else "needs_review"),
                     "file": self.filename, "line": line_no,
                     "source": " → ".join(src.replace("source:", "") for src in flow["sources"]),
                     "sink": rendered[sink.start():sink.end()].strip() + rendered[sink.end():sink.end() + 120],
                     "flow": flow["path"][:8] + [f"call {fn_name}"],
                     "sanitization_detected": flow["sanitized"],
                     "evidence": ("sanitized: " if flow["sanitized"] else "") + rendered[:240],
+                    "evidence_type": "source_to_sink",
+                    "analysis_quality": "heuristic",
+                    "limitations": ["Simple regex inter-procedural substitution; closures, aliases and callbacks are not modeled."],
+                    "observation": bool(flow["sanitized"]),
                 })
 
 
 
-content_low = ""
-
-
 def analyze_taint(content, filename="inline.js"):
     """Public entrypoint: return source-to-sink data-flow findings."""
-    global content_low
-    content_low = content or ""
     analyzer = TaintAnalyzer(content or "", filename=filename)
     return analyzer.analyze()

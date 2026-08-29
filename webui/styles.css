@@ -258,6 +258,92 @@ body {
   font-size: 20px;
 }
 
+/* Authorized-testing / legal notice. */
+.authorized-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  max-width: 760px;
+  margin: 14px auto 0;
+  padding: 15px 18px;
+  border: 1px solid rgba(251, 191, 36, 0.32);
+  border-radius: 16px;
+  background: rgba(38, 30, 6, 0.6);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: #fde9b8;
+  font-size: 13px;
+  line-height: 1.65;
+  text-align: left;
+  animation-delay: 0.55s;
+}
+.authorized-ico {
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: rgba(251, 191, 36, 0.14);
+  font-size: 20px;
+}
+
+/* Inline field errors / hints (replace native alert() popups). */
+.setup-toggle {
+  display: flex;
+  gap: 8px;
+  margin: 14px 0 6px;
+}
+.setup-tab {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border, rgba(142, 162, 193, .25));
+  background: transparent;
+  color: var(--muted, #8ea2c1);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.setup-tab.active {
+  background: rgba(34, 211, 238, .14);
+  border-color: rgba(34, 211, 238, .45);
+  color: #67e8f9;
+}
+.setup-actions {
+  margin: 4px 0 12px;
+}
+.authorized-note {
+  border-left: 3px solid rgba(251, 191, 36, .5);
+  padding-left: 10px;
+  color: #fde9b8;
+}
+
+.field-error {
+  margin: 8px 0 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(251, 113, 133, 0.45);
+  background: rgba(255, 77, 109, 0.12);
+  color: #fda4af;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.field-hint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.field-hint code {
+  font-family: "JetBrains Mono", monospace;
+  color: #7dd3fc;
+}
+.input-invalid {
+  border-color: rgba(251, 113, 133, 0.75) !important;
+  box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.15);
+}
+
 /* Engine status dot state */
 .dot.offline {
   background: var(--danger);
@@ -732,6 +818,43 @@ select {
 .status-false_positive { background: rgba(34,211,238,.16); color:#7dd3fc; }
 .status-informational { background: rgba(163,163,163,.16); color:#cbd5e1; }
 .status-needs_review { background: rgba(255,159,67,.16); color:#ffc089; }
+.status-open { background: rgba(167,139,250,.2); color:#c4b5fd; }
+
+/* Under-development / pre-release marker. */
+.dev-badge {
+  margin-left: 12px;
+  align-self: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  color: #fde68a;
+  background: rgba(255, 209, 102, .14);
+  border: 1px solid rgba(255, 209, 102, .35);
+  white-space: nowrap;
+}
+
+/* Analysis-quality chip: how much of the analysis machinery resolved. */
+.quality-chip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  background: rgba(142,162,193,.14);
+  color:#a5b4ce;
+  border: 1px solid rgba(142,162,193,.25);
+  vertical-align: middle;
+}
+.quality-high { background: rgba(52,211,153,.16); color:#6ee7b7; border-color: rgba(52,211,153,.3); }
+.quality-medium { background: rgba(255,209,102,.14); color:#fde68a; border-color: rgba(255,209,102,.28); }
+.quality-heuristic, .quality-low { background: rgba(251,113,133,.14); color:#fda4af; border-color: rgba(251,113,133,.28); }
+
+#priority-list li, #risk-breakdown .category { margin-bottom: 10px; }
 
 .results-header {
   display: flex;
@@ -1191,4 +1314,119 @@ select {
   .hero h1 {
     font-size: 40px;
   }
+}
+
+/* ============================================================
+   Paste/upload sub-tabs + file upload + help tooltips
+   ============================================================ */
+
+/* Paste/upload sub-tabs inside the Paste Code pane. */
+.inline-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+.inline-tab {
+  flex: 0 0 auto;
+  padding: 7px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border, rgba(142, 162, 193, .25));
+  background: transparent;
+  color: var(--muted, #8ea2c1);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.inline-tab.active {
+  background: rgba(34, 211, 238, .14);
+  border-color: rgba(34, 211, 238, .45);
+  color: #67e8f9;
+}
+
+/* File upload dropzone. */
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 28px 18px;
+  text-align: center;
+  border: 1.5px dashed rgba(142, 162, 193, .35);
+  border-radius: 14px;
+  background: rgba(11, 20, 40, .4);
+  color: var(--muted, #8ea2c1);
+  font-size: 13.5px;
+  line-height: 1.6;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.dropzone:hover, .dropzone.dragover {
+  border-color: rgba(34, 211, 238, .6);
+  background: rgba(34, 211, 238, .07);
+}
+.dropzone-ico { font-size: 28px; }
+.dropzone-sub { font-size: 11.5px; color: #6b7891; }
+.dropzone code { color: #7dd3fc; font-family: "JetBrains Mono", monospace; }
+.file-list { margin: 12px 0 4px; display: grid; gap: 6px; }
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border, rgba(142, 162, 193, .2));
+  background: rgba(11, 20, 40, .45);
+  font-size: 13px;
+}
+.file-item .fname { flex: 1; color: #dbe7ff; word-break: break-all; }
+.file-item .fsize { color: #8ea2c1; font-size: 11.5px; white-space: nowrap; }
+.file-item .fremove { border: none; background: none; color: #fb7185; cursor: pointer; font-size: 15px; line-height: 1; }
+
+/* Help tooltip ("?" beside field labels). */
+.help {
+  display: inline-grid;
+  place-items: center;
+  width: 15px; height: 15px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: rgba(142, 162, 193, .18);
+  color: #a5b4ce;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: help;
+  position: relative;
+  vertical-align: middle;
+}
+.help:hover, .help:focus {
+  background: rgba(34, 211, 238, .3);
+  color: #eafcff;
+  outline: none;
+}
+.help::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 230px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: #0b1428;
+  border: 1px solid rgba(34, 211, 238, .35);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
+  color: #dbe7ff;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  text-align: left;
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .15s;
+  z-index: 40;
+  pointer-events: none;
+}
+.help:hover::after, .help:focus::after { opacity: 1; visibility: visible; }
+
+/* Dropzone error state mirrors input-invalid. */
+.dropzone.input-invalid {
+  border-color: rgba(248, 113, 113, .7);
+  background: rgba(248, 113, 113, .07);
 }

@@ -21,9 +21,13 @@ class CorpusContractTest(unittest.TestCase):
         sanitized = analyze_fixture("dom-xss/sanitized-query.js")
         reachable_flows = reachable.get("dataflows", [])
         sanitized_flows = sanitized.get("dataflows", [])
-        self.assertTrue(any(flow.get("status") == "confirmed" for flow in reachable_flows))
+        # A static source->sink path is high confidence and "open" for triage,
+        # but the engine never auto-marks it "confirmed": exploitation is not
+        # proven. Only a demonstrated runtime effect may be confirmed.
+        self.assertTrue(any(flow.get("confidence") == "high" and flow.get("status") == "open" for flow in reachable_flows))
         self.assertTrue(any(flow.get("status") == "informational" for flow in sanitized_flows))
         self.assertFalse(any(flow.get("status") == "confirmed" for flow in sanitized_flows))
+        self.assertFalse(any(flow.get("status") == "confirmed" for flow in reachable_flows))
 
     def test_fixture_secrets_are_not_credible(self):
         fixture = analyze_fixture("secrets/fixture-token.js")
@@ -40,7 +44,10 @@ class CorpusContractTest(unittest.TestCase):
 
     def test_high_value_sources_and_sinks_are_tracked(self):
         redirect = analyze_fixture("open-redirect/query.js")
-        self.assertTrue(any(f.get("id") == "open_redirect" and f.get("status") == "confirmed" for f in redirect.get("dataflows", [])))
+        self.assertTrue(any(
+            f.get("id") == "open_redirect" and f.get("confidence") == "high" and f.get("status") == "open"
+            for f in redirect.get("dataflows", [])
+        ))
 
         candidate = analyze_fixture("data-exfiltration/candidate.js")
         candidates = data_exfiltration_candidates({"candidate.js": candidate}, page_url="https://example.com/")

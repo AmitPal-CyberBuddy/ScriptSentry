@@ -6,7 +6,7 @@
 
 ScriptSentry is kept as a JavaScript/client-side behavior intelligence tool rather than a generic web vulnerability scanner. Its primary output is an attributable script inventory and a manually verifiable account of capabilities, data flows, contacted destinations, dependencies, and security-relevant behavior.
 
-A dangerous API or DOM call without a source, reachability context, or impact is an observation. It is not automatically a confirmed vulnerability. Confirmed statuses are reserved for stronger source-to-sink, runtime, or equivalent evidence; coarse static patterns are marked `potential` or `needs_review`.
+A dangerous API or DOM call without a source, reachability context, or impact is an **observation**, not an automatically confirmed vulnerability. Severity (impact), confidence (evidence certainty), triage status, and analysis quality are independent axes. Coarse static/regex patterns are low-confidence observations; framework patterns and behavioral correlations are medium; a static source→sink path or a browser-runtime observation is high but stays **Open** for triage. The **Confirmed** status is reserved for deterministic proof, a *demonstrated* unsafe runtime effect (e.g. live `eval`), or explicit analyst confirmation. Findings carry an `analysis_quality` (high/medium/heuristic) plus explicit `limitations` rather than overclaiming.
 
 ## Architecture reviewed and improved
 
@@ -37,11 +37,50 @@ A dangerous API or DOM call without a source, reachability context, or impact is
 
 ## Verification performed
 
-- `python -m unittest discover -s tests -v` — **42 tests passed**.
+- `python -m unittest discover -s tests -v` — **77 tests passed**.
 - `python -m py_compile core/*.py ai/*.py main.py server.py tests/*.py` — passed.
 - `node --check webui/app.js` and `node --check webui/config.js` — passed.
 - Live local server smoke: static UI headers/assets, health, unauthenticated rejection, disallowed-origin rejection, authenticated code job, polling, result payload, and SARIF export — passed.
-- Existing analysis tests cover AST/profile, endpoint/attack-surface extraction, source-to-sink taint, sanitizer handling, framework/dependency signals, script inventory, runtime finding normalization, dashboard sections, and report exports.
+- Analysis tests cover AST/profile, endpoint/attack-surface extraction, source-to-sink taint, sanitizer handling, framework/dependency signals, script inventory, runtime finding normalization, dashboard sections, report exports, the layered module/bundler discovery, the explainable risk model, and the accuracy regression suite (TP/TN/known-FP/edge/minified/obfuscated).
+
+## Code map (for contributors)
+
+The user-facing overview lives in `README.md`; this is where the pieces sit:
+
+```
+webui/            single-page dashboard (index.html, app.js, styles.css, config.js)
+server.py         stdlib loopback HTTP server + /api (auth, routing, jobs, reports)
+core/
+  version.py            single source of engine version (mirrored in release.json)
+  analyzer_service.py   shared URL/code orchestration (CLI + dashboard)
+  scanner.py            regex/feature signal detection + risk-signal assembly
+  analysis_model.py     severity/confidence/status vocab, normalization, dedupe,
+                        finding identity, findings-vs-observations split
+  risk_model.py         evidence-weighted 0-100 score, contributors, priorities
+  module_discovery.py   layered AST + bundler-aware script/module reference discovery
+  taint.py              AST source→sink taint analysis + analysis quality/limitations
+  js_parser.py / ast_analyzer.py   optional esprima wrapper + AST profile
+  attack_surface.py     endpoint/API/realtime surface extraction
+  framework_rules.py    React/Angular/Vue/jQuery sink rules
+  script_intel.py       script inventory, behavior profiles, risk scoring, exfil correlation
+  runtime_evidence.py   optional Playwright capture + runtime finding builder
+  discovery.py / downloader.py / beautifier.py / source_maps.py / url_policy.py / jobs.py
+  reporter.py           report model + TXT/HTML/CSV/SARIF + dashboard payload
+analyzers/        additive analysis modules (secret, crypto, api, auth, storage, ...)
+ai/               optional AI summary
+config.py         profiles and detection/scan configuration
+tests/            unit tests + corpus/ accuracy fixtures
+release.json      machine-readable release metadata ; CHANGELOG.md is the history
+```
+
+### Data-count / scan-summary fields
+
+URL scans report explicit accounting (never silently drop assets):
+`total_discovered` (page entry points), `total_files` (unique files analyzed,
+including recursively found chunks), `skipped_files` + `skipped_reasons`,
+`bytes_scanned`, `total_bytes`, `runtime_status`, and the hard-cap flag. These
+feed both the dashboard **Scripts → Assets** detail and the JSON/dashboard
+payload under `__scan_summary__`.
 
 ## Follow-up review actions
 
@@ -51,9 +90,50 @@ The external review correctly emphasized false-positive discipline, first-class 
 - Script inventory entries now retain `loaded_by`, `pages_present`, and runtime requests attributed to a script where Chromium/CDP exposes an initiator stack.
 - Runtime network records now preserve bounded `initiated_by` script URLs, while messaging and storage-read evidence is exposed consistently to the dashboard.
 
+## v2.2 accuracy & triage follow-up
+
+Building on the review, the engine now:
+
+- Derives confidence from **evidence type** rather than severity; adds an
+  independent triage vocabulary (Open / Needs review / Confirmed / False
+  positive / Informational) and reserves Confirmed for deterministic proof or
+  a demonstrated runtime effect.
+- Reports **analysis quality + limitations** per flow (dynamic property
+  access, unmodeled calls, inter-procedural depth bound, regex fallback) and
+  fixes a latent `content_low` reference in the taint engine.
+- Splits findings into **actionable findings** vs **security observations** and
+  uses a stronger finding identity so distinct untrusted sources reaching one
+  sink stay distinguishable.
+- Adds an explainable evidence-weighted **0–100 risk score** with a contributor
+  breakdown and an investigate-first priority list (`core/risk_model.py`).
+- Adds **layered script discovery** — AST import/require/`import()` first,
+  bundler adapters (Webpack/Vite/Next/Parcel) second, regex fallback third
+  (`core/module_discovery.py`).
+- Reduces dashboard navigation from nine views to five and leads the Overview
+  with priorities and the score breakdown.
+- Adds a formal **accuracy regression suite** and tightens credible-secret
+  filtering (placeholders such as `YOUR_API_TOKEN_HERE` are not secrets).
+- Centralizes the engine version in `core/version.py` and adds `release.json`
+  and `CHANGELOG.md`.
+
 ## Deliberate limitations
 
-- Playwright is optional and Chromium is not installed in the current execution environment, so a real browser execution pass was not available during this audit. The disabled/missing-dependency path is tested; installing Chromium enables the runtime capture path described above.
-- Static JavaScript parsing remains intentionally conservative when the optional parser cannot handle a bundle. Unsupported syntax is retained as a warning rather than upgraded to a high-confidence vulnerability.
-- Cancellation is cooperative. An in-flight network request may finish at its bounded timeout before the analyzer observes cancellation; completed/canceled result state is not exposed as a successful report.
-- The pairing token is process-scoped. A publicly hosted backend still needs TLS, firewall/platform access controls, and a private deployment; the token must not be committed to `config.js` or a public repository.
+- Playwright is optional. When Chromium is unavailable ScriptSentry reports
+  `missing_dependency` and continues with static analysis; the
+  disabled/missing-dependency path is tested.
+- Static JavaScript parsing remains intentionally conservative when the
+  optional esprima parser cannot handle a bundle. Unsupported/unmodeled
+  constructs are surfaced as **limitations** and lower analysis quality rather
+  than being upgraded to a high-confidence vulnerability.
+- Cancellation is cooperative. An in-flight network request may finish at its
+  bounded timeout before the analyzer observes cancellation; completed/canceled
+  result state is not exposed as a successful report.
+- The pairing token is process-scoped. A publicly hosted backend still needs
+  TLS, firewall/platform access controls, and a private deployment; the token
+  must not be committed to `config.js` or a public repository.
+- `server.py` deliberately stays a dependency-free stdlib file. When the API
+  surface grows further it is planned to split into a small `api/` package
+  (`auth.py`, `cors.py`, `handlers.py`, `analysis_routes.py`, `report_routes.py`);
+  the handlers are already factored into discrete methods to make that mechanical.
+- Findings are deterministic triage signals, not proof of exploitation; always
+  validate with server-side behavior and manual review.

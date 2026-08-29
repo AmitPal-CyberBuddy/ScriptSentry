@@ -104,6 +104,58 @@ def analyze_content(code, filename="inline.js", progress_callback=None, cancel_c
     return results
 
 
+def _safe_local_filename(name, index):
+    """Turn an uploaded file name into a safe, unique per-scan result key.
+
+    Uploaded files are never written to disk; we only need a display-safe key
+    for the results dict. Path components and newlines are stripped so a file
+    named ``../../etc`` or ``a\\nb.js`` cannot confuse the UI.
+    """
+    base = os.path.basename(str(name or "").replace("\\", "/").strip())
+    base = "".join(ch for ch in base if ch not in "\x00\r\n/").strip()
+    if not base:
+        base = f"snippet-{index + 1}.js"
+    return base
+
+
+def analyze_files(files, progress_callback=None, cancel_check=None):
+    """Analyze several pasted/uploaded JavaScript documents in one scan.
+
+    ``files`` is an iterable of ``{"filename": str, "code": str}``. Documents
+    are analyzed locally and merged into one results dict, deduplicating
+    identical content (the same way URL scans dedupe mirrored bundles). Nothing
+    here is written to disk or sent anywhere; inputs come from the local UI.
+    """
+    files = [f for f in (files or []) if isinstance(f, dict)]
+    total = max(1, len(files))
+    _check_cancel(cancel_check)
+    _notify(progress_callback, phase="scan", current=0, total=total, message="Analyzing uploaded files")
+    results = {}
+    seen_hashes = set()
+    used_names = set()
+    for index, item in enumerate(files):
+        _check_cancel(cancel_check)
+        code = item.get("code") or ""
+        if not isinstance(code, str) or not code.strip():
+            continue
+        name = _safe_local_filename(item.get("filename"), index)
+        # Guarantee unique keys when two uploads share a basename.
+        unique = name
+        n = 2
+        while unique in used_names:
+            stem, ext = os.path.splitext(name)
+            unique = f"{stem}-{n}{ext or '.js'}"
+            n += 1
+        used_names.add(unique)
+        _merge_into(results, unique, code, seen_hashes=seen_hashes)
+        _notify(progress_callback, phase="scan", current=index + 1, total=total,
+                message=f"Analyzed {unique} ({index + 1}/{total})")
+    _notify(progress_callback, phase="done", current=total, total=total, percent=100,
+            message=f"Static analysis complete: {len(results)} file(s)")
+    return results
+
+
+
 def _is_chunk(path):
     return bool(path and ("chunk-" in path or ".chunk." in path) and path.endswith((".js", ".mjs")))
 
@@ -153,17 +205,34 @@ def _is_followable_ref(ref):
 def extract_script_refs(content):
     """Extract every script/module reference visible in a JS bundle.
 
-    Covers the common real-world patterns: static imports, dynamic
-    ``import(...)``, CommonJS ``require``, routed chunk files, ``/static/js``
-    and ``assets`` bundles, and absolute script URLs. Bare module references
-    from import/require are followed; arbitrary API paths are not.
+    Discovery is layered (see ``core.module_discovery``): exact
+    import/require sources from the AST first, then bundler-specific asset
+    signatures (Webpack chunk maps, Vite/Rollup/Next.js/Parcel assets), then
+    the legacy regex layer for environments without a parser. Only script-like
+    references are returned; arbitrary ``fetch``/API paths and JSON/CSS/font
+    imports are never followed.
     """
     refs = set()
+
+    # Layers 1+2: AST module understanding and bundler adapters.
+    try:
+        from core.module_discovery import discover_module_refs
+        for ref in discover_module_refs(content):
+            ref = ref.split("?")[0].split("#")[0]
+            if _is_followable_ref(ref) or ref.startswith(("./", "../")):
+                refs.add(ref)
+    except Exception:
+        pass
+
+    # Fallback layer: regex coverage, kept as a safety net when the AST layer
+    # is unavailable or cannot parse the dialect. Covers static imports,
+    # dynamic import(...), CommonJS require, routed chunk files, /static/js
+    # and assets bundles, and absolute script URLs.
     module_patterns = [
         r"""import\s*\(\s*['"]([^'"]+)['"]""",
         r"""require\s*\(\s*['"]([^'"]+)['"]""",
         r"""import\s+['"]([^'"]+)['"]""",
-        r"""import\s+[^'"]+?\s+from\s+['"]([^'"]+)['"]""",
+        r"""import\s+[^'"]+?\s+from\s*['"]([^'"]+)['"]""",
     ]
     asset_patterns = [
         r"""['"]([^'"]*chunk-[A-Za-z0-9]+\.js[^'"]*)['"]""",

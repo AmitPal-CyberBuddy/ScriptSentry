@@ -2,8 +2,10 @@ import html
 import itertools
 import os
 
-from core.analysis_model import deduplicate_findings
+from core.analysis_model import deduplicate_findings, split_findings
+from core.risk_model import overall_risk, top_priorities
 from core.script_intel import build_script_intel, data_exfiltration_candidates
+from core.version import ENGINE_NAME, RELEASE_STATUS, SARIF_TOOL_VERSION, __version__ as ENGINE_VERSION, is_dev_build
 
 
 def _basename_safe(value):
@@ -335,8 +337,16 @@ def build_report_model(results, ai_summary=None, metadata=None):
         "features": count("notable_features"),
     }
 
-    overall_risk = _overall_risk_label(total_score, max_file_score)
-    overall_color = SEVERITY_COLORS[overall_risk]
+    # Explainable evidence-weighted risk (0-100) with contributors.
+    risk = overall_risk(
+        findings=all_findings + all_flows,
+        script_inventory=script_inventory,
+        runtime=runtime_evidence,
+    )
+    overall_label = risk["label"]
+    overall_color = SEVERITY_COLORS[overall_label]
+    priorities = top_priorities(all_findings + all_flows, script_inventory, limit=6)
+    actionable_findings, observation_findings = split_findings(all_findings)
     all_signals = _dedupe_signals(all_signals)
     signal_severities = {}
     for signal in all_signals:
@@ -372,19 +382,28 @@ def build_report_model(results, ai_summary=None, metadata=None):
     return {
         "meta": {
             "generated_at": (metadata or {}).get("generated_at", ""),
-            "engine": "ScriptSentry Analyzer",
-            "engine_version": "2.1",
+            "engine": ENGINE_NAME,
+            "engine_version": ENGINE_VERSION,
+            "release_status": RELEASE_STATUS,
+            "dev_build": is_dev_build(),
             "source": (metadata or {}).get("source", ""),
             "mode": (metadata or {}).get("mode", "code"),
             "scan_summary": scan_summary,
         },
         "summary": {
             "total_files": len(files),
-            "total_score": total_score,
-            "risk_label": overall_risk,
+            "total_score": risk["score"],
+            "signal_score": total_score,
+            "risk_label": overall_label,
             "risk_color": overall_color,
+            "risk_contributors": risk["contributors"],
+            "risk_counts": risk["counts"],
+            "priorities": priorities,
+            "actionable_findings": actionable_findings,
+            "observations": observation_findings,
             "max_file_score": max_file_score,
-            "total_findings": len(all_findings),
+            "total_findings": risk["counts"]["findings"],
+            "total_observations": risk["counts"]["observations"],
             "categories": categories,
             "methods": sorted(all_methods),
             "transport": sorted(all_transport),
@@ -477,6 +496,8 @@ def generate_report(results, ai_summary=None):
     report.append(" SCRIPTSENTRY · JAVASCRIPT ANALYSIS REPORT")
     report.append("============================================================")
     report.append(f" Engine      : {model['meta']['engine']} v{model['meta']['engine_version']}")
+    if is_dev_build():
+        report.append(" Status      : UNDER DEVELOPMENT — pre-release, not a published/stable build")
     report.append(f" Source      : {model['meta']['source'] or 'inline snippet'}")
     report.append(f" Generated   : {model['meta']['generated_at'] or 'now'}")
     report.append(f" Files       : {summary['total_files']}")
@@ -504,8 +525,22 @@ def generate_report(results, ai_summary=None):
     for sig in top:
         report.append(f"  [{sig.get('severity','INFO')}] {sig.get('title','')} — {sig.get('file','')}")
         evidence = sig.get("evidence", [])
-        for item in evidence[:2]:
-            report.append(f"      • {safe_text(item)}")
+        if isinstance(evidence, str):
+            evidence = [evidence]
+        elif isinstance(evidence, (list, tuple)):
+            # Flatten nested lists (e.g. key-material pairs) without iterating
+            # a plain string character-by-character.
+            flat = []
+            for item in evidence:
+                if isinstance(item, (list, tuple)):
+                    flat.extend(str(x) for x in item)
+                else:
+                    flat.append(item)
+            evidence = flat
+        for item in list(evidence)[:2]:
+            text = safe_text(item)
+            if text.strip():
+                report.append(f"      • {text.strip()[:200]}")
 
     # Category summary
     report.append("\n========== FINDING COUNTS ==========")
@@ -890,7 +925,8 @@ def generate_html_report(results, ai_summary=None):
             html.append(f"<li>{esc(line)}</li>")
         html.append("</ul></div>")
 
-    html.append("</div><div class=\"foot\">ScriptSentry Analyzer v2.1 · deterministic regex + AST signals · this is a triage report, not a proof of exploitation.</div>")
+    dev_note = " · <b>UNDER DEVELOPMENT</b> — pre-release build" if is_dev_build() else ""
+    html.append(f"</div><div class=\"foot\">{ENGINE_NAME} v{ENGINE_VERSION}{dev_note} · deterministic regex + AST + taint signals · this is a triage report, not a proof of exploitation.</div>")
     html.append("</div></body></html>")
     return "\n".join(html)
 
@@ -912,13 +948,14 @@ def generate_csv_report(results, ai_summary=None):
     fields = [
         "id", "type", "severity", "confidence", "status", "file", "line",
         "source", "sink", "flow", "evidence", "sanitization_detected", "framework",
-        "evidence_type",
+        "evidence_type", "analysis_quality", "limitations", "observation",
     ]
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
     for f in findings:
         flow = " -> ".join(f.get("flow", []) or [])
+        limitations = "; ".join(str(x) for x in (f.get("limitations", []) or []))
         writer.writerow({
             "id": f.get("id", ""),
             "type": f.get("type", ""),
@@ -934,6 +971,9 @@ def generate_csv_report(results, ai_summary=None):
             "sanitization_detected": f.get("sanitization_detected", False),
             "framework": f.get("framework", ""),
             "evidence_type": f.get("evidence_type", ""),
+            "analysis_quality": f.get("analysis_quality", ""),
+            "limitations": limitations,
+            "observation": f.get("observation", False),
         })
     return buf.getvalue()
 
@@ -982,6 +1022,9 @@ def generate_sarif_report(results, ai_summary=None):
                 "sanitization_detected": f.get("sanitization_detected", False),
                 "evidence_type": f.get("evidence_type", ""),
                 "framework": f.get("framework", ""),
+                "analysis_quality": f.get("analysis_quality", ""),
+                "limitations": list(f.get("limitations", []) or []),
+                "observation": bool(f.get("observation", False)),
             },
         }
         results_out.append(result)
@@ -989,7 +1032,7 @@ def generate_sarif_report(results, ai_summary=None):
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
         "runs": [{
-            "tool": {"driver": {"name": "ScriptSentry", "version": "2.1",
+            "tool": {"driver": {"name": "ScriptSentry", "version": SARIF_TOOL_VERSION,
                                "informationUri": "https://github.com/AmitPal-CyberBuddy/ScriptSentry",
                                "rules": list(rules_map.values())}},
             "results": results_out,
@@ -1246,19 +1289,16 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
     all_signals = _dedupe_signals(all_signals)
     max_file_score = max((f["score"] for f in files), default=0)
 
-    # Overall risk label
-    if overall >= 18 or max_file_score >= 9:
-        risk_label = "CRITICAL"
-        risk_color = "#ff4d6d"
-    elif overall >= 8 or max_file_score >= 5:
-        risk_label = "HIGH"
-        risk_color = "#ff9f43"
-    elif overall >= 3 or max_file_score >= 3:
-        risk_label = "MEDIUM"
-        risk_color = "#ffd166"
-    else:
-        risk_label = "LOW"
-        risk_color = "#22d3ee"
+    # Explainable overall risk: a weighted, evidence-tiered 0-100 score plus
+    # the explicit "why" contributors and the top investigation priorities.
+    risk_model = overall_risk(
+        findings=all_findings,
+        script_inventory=script_inventory,
+        runtime=runtime_evidence,
+    )
+    risk_label = risk_model["label"]
+    risk_color = SEVERITY_COLORS.get(risk_label, "#22d3ee")
+    priorities = top_priorities(all_findings, script_inventory, limit=6)
 
     radar_values = []
     for key, label, color, icon in category_meta:
@@ -1280,8 +1320,10 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
     payload = {
         "meta": {
             "generated_at": metadata.get("generated_at", "") if metadata else "",
-            "engine": "ScriptSentry Analyzer",
-            "engine_version": "2.1",
+            "engine": ENGINE_NAME,
+            "engine_version": ENGINE_VERSION,
+            "release_status": RELEASE_STATUS,
+            "dev_build": is_dev_build(),
             "analysis_mode": metadata.get("mode", "code") if metadata else "code",
             "source": metadata.get("source", "") if metadata else "",
             "files": len(files),
@@ -1289,10 +1331,15 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
             "scan_summary": scan_summary,
         },
         "summary": {
-            "overall_score": overall,
+            "overall_score": risk_model["score"],
+            "signal_score": overall,
             "risk_label": risk_label,
             "risk_color": risk_color,
-            "total_findings": len(all_findings) or sum(totals.values()),
+            "risk_contributors": risk_model["contributors"],
+            "risk_counts": risk_model["counts"],
+            "priorities": priorities,
+            "total_findings": risk_model["counts"]["findings"],
+            "total_observations": risk_model["counts"]["observations"],
             "total_files": len(files),
             "skipped_files": scan_summary.get("skipped_files", 0),
             "bytes_scanned": scan_summary.get("bytes_scanned", 0),

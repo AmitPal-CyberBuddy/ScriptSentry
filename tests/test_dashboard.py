@@ -97,13 +97,30 @@ eval(userInput);
 '''
         results = analyze_content(code, filename="inline.js")
         model = build_report_model(results, metadata={"mode": "code", "source": "inline.js"})
-        self.assertEqual(model["summary"]["risk_label"], "CRITICAL")
-        self.assertGreaterEqual(model["summary"]["total_findings"], 1)
-        signal_ids = [s.get("id") for s in model["summary"]["signals"]]
+        summary = model["summary"]
+        self.assertIn(summary["risk_label"], ("LOW", "MEDIUM", "HIGH", "CRITICAL"))
+        self.assertGreaterEqual(summary["total_findings"], 1)
+        # The score is explainable: every contributor carries points.
+        self.assertTrue(summary["risk_contributors"])
+        self.assertTrue(all("points" in c and "label" in c for c in summary["risk_contributors"]))
+        explained = sum(c["points"] for c in summary["risk_contributors"])
+        self.assertEqual(summary["total_score"], max(0, min(100, round(explained))))
+        signal_ids = [s.get("id") for s in summary["signals"]]
         self.assertIn("sensitive_storage", signal_ids)
         self.assertIn("dom_injection", signal_ids)
         self.assertIn("api_surface", signal_ids)
         self.assertTrue(model["all_endpoints"])
+
+    def test_high_confidence_flow_drives_score_more_than_observation(self):
+        # A genuine source->sink DOM-XSS flow must outrank a mere observation.
+        strong = analyze_content(
+            "const q = new URLSearchParams(location.search).get('q');\n"
+            "document.getElementById('x').innerHTML = q;", filename="strong.js")
+        weak = analyze_content("fetch('/api/v1/ping');", filename="weak.js")
+        strong_model = build_report_model(strong)["summary"]
+        weak_model = build_report_model(weak)["summary"]
+        self.assertGreater(strong_model["total_score"], weak_model["total_score"])
+        self.assertTrue(strong_model["priorities"])
 
     def test_html_report_is_self_contained_and_has_sections(self):
         sample = {
@@ -134,8 +151,10 @@ eval(userInput);
         el.innerHTML = q;
         """
         flows = analyze_taint(code, "t.js")
-        confirmed = [x for x in flows if x.get("status") == "confirmed"]
-        self.assertTrue(any("innerHTML" in (x.get("sink") or "") for x in confirmed))
+        # High-confidence static flow -> actionable "open", never auto-confirmed.
+        actionable = [x for x in flows if x.get("confidence") == "high" and x.get("status") == "open"]
+        self.assertTrue(any("innerHTML" in (x.get("sink") or "") for x in actionable))
+        self.assertFalse(any(x.get("status") == "confirmed" for x in flows))
 
     def test_taint_sanitized_flow_is_informational(self):
         code = """
@@ -153,7 +172,10 @@ eval(userInput);
         window.location.href = q;
         """
         flows = analyze_taint(code, "t.js")
-        self.assertTrue(any(x.get("id") == "open_redirect" and x.get("status") == "confirmed" for x in flows))
+        self.assertTrue(any(
+            x.get("id") == "open_redirect" and x.get("confidence") == "high" and x.get("status") == "open"
+            for x in flows
+        ))
 
     def test_taint_postmessage_wildcard(self):
         code = "window.parent.postMessage(userData, '*');"
@@ -167,7 +189,11 @@ eval(userInput);
         setMsg(q);
         """
         flows = analyze_taint(code, "t.js")
-        self.assertTrue(any(x.get("status") == "confirmed" and "URL query" in x.get("source", "") for x in flows))
+        # Inter-procedural propagation resolves through the AST -> high/open.
+        self.assertTrue(any(
+            x.get("confidence") == "high" and x.get("status") == "open" and "URL query" in x.get("source", "")
+            for x in flows
+        ))
 
     def test_taint_object_property(self):
         code = """
@@ -175,7 +201,23 @@ eval(userInput);
         document.body.innerHTML = cfg.q;
         """
         flows = analyze_taint(code, "t.js")
-        self.assertTrue(any(x.get("status") == "confirmed" and "URL query" in x.get("source", "") for x in flows))
+        self.assertTrue(any(
+            x.get("confidence") == "high" and "URL query" in x.get("source", "")
+            for x in flows
+        ))
+
+    def test_taint_flow_reports_analysis_limitations(self):
+        # taint crossing an unmodeled helper call still surfaces, but with a
+        # limitation note and reduced quality instead of an overclaim.
+        code = """
+        function transform(x){ return mysteryLib(x); }
+        const q = location.search;
+        document.body.innerHTML = transform(q);
+        """
+        flows = analyze_taint(code, "t.js")
+        dom = [x for x in flows if x.get("id") == "dom_injection"]
+        self.assertTrue(dom)
+        self.assertTrue(any(x.get("limitations") for x in dom))
 
     def test_attack_surface_extracts_endpoints_and_flags(self):
         code = """
@@ -217,7 +259,7 @@ eval(userInput);
     def test_correlation_dedupes_and_preserves_evidence(self):
         flows = [{
             "id": "dom_injection", "type": "DOM injection", "severity": "HIGH",
-            "confidence": "high", "status": "confirmed", "file": "x.js", "line": 1,
+            "confidence": "high", "status": "open", "file": "x.js", "line": 1,
             "sink": "innerHTML", "flow": ["read location.search"], "evidence": "snippet",
         }]
         risk = [{"id": "dom_injection", "severity": "HIGH", "title": "DOM injection", "evidence": ["dom_risks"]}]
@@ -226,8 +268,27 @@ eval(userInput);
         self.assertEqual(out[0].get("evidence_type"), "source_to_sink")
         self.assertIn("read location.search", out[0].get("flow", []))
 
-        dupes = [flows[0], {**flows[0], "source": "URL query string", "flow": ["alias = location.search", "innerHTML = alias"]}]
-        self.assertEqual(len(deduplicate_findings(dupes)), 1)
+        # Identical flow merges to one record...
+        self.assertEqual(len(deduplicate_findings([flows[0], dict(flows[0])])), 1)
+
+        # ...but two *different untrusted sources* reaching the same sink/line
+        # must remain distinct so correlation can report "2 independent
+        # sources reach this sink" instead of collapsing them.
+        distinct_sources = [
+            {**flows[0], "source": "URL query string"},
+            {**flows[0], "source": "postMessage data", "flow": ["read event.data"]},
+        ]
+        self.assertEqual(len(deduplicate_findings(distinct_sources)), 2)
+
+    def test_severity_confidence_status_are_independent(self):
+        # A high-severity regex-only signal must NOT inherit high confidence.
+        from core.analysis_model import normalize_finding
+        obs = normalize_finding({"id": "x", "severity": "HIGH", "evidence_type": "static_pattern"})
+        self.assertEqual(obs["confidence"], "low")
+        self.assertNotEqual(obs["status"], "confirmed")
+        # Confidence never derives from severity.
+        low = normalize_finding({"id": "y", "severity": "CRITICAL", "confidence": "low"})
+        self.assertEqual(low["confidence"], "low")
 
     def test_local_engine_origin_allowlist(self):
         from server import DashboardHandler
