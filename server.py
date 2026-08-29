@@ -35,7 +35,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 from config import DEFAULT_PROFILE, SCAN_MAX_WORKERS, SCAN_PROFILES
-from core.analyzer_service import analyze_content, analyze_url
+from core.analyzer_service import analyze_content, analyze_files, analyze_url
 from core.jobs import jobs
 from core.runtime_evidence import playwright_available, runtime_evidence_enabled
 from core.url_policy import validate_public_url
@@ -49,8 +49,11 @@ from core.reporter import (
 )
 
 WEB_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webui")
-MAX_BODY = 4 * 1024 * 1024  # 4 MB
+MAX_BODY = 16 * 1024 * 1024  # 16 MB (local, authenticated; uploads included)
 MAX_URL_LENGTH = 2048
+MAX_UPLOAD_FILES = 20
+MAX_FILE_BYTES = 3 * 1024 * 1024  # per uploaded document
+ALLOWED_UPLOAD_EXT = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".map", ".json", ".txt")
 # A pairing token is deliberately process-scoped.  It is printed once at
 # startup and never returned by health or included in a report response.
 API_TOKEN = os.environ.get("SCRIPTSENTRY_API_TOKEN", "").strip() or secrets.token_urlsafe(32)
@@ -308,7 +311,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._send_error_json(f"Analysis failed: {exc}", 500)
             return
 
-        metadata = {"mode": str(body.get("mode", "code")), "source": str(body.get("url", body.get("filename", "")))}
+        source = str(body.get("url", body.get("filename", "")))
+        if not source and isinstance(body.get("files"), list) and body["files"]:
+            source = f"{len(body['files'])} uploaded file(s)"
+        metadata = {"mode": str(body.get("mode", "code")), "source": source}
         if report_format == "txt":
             text = generate_report(results)
             data = text.encode("utf-8")
@@ -359,6 +365,39 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    @staticmethod
+    def _extract_uploads(body):
+        """Validate the optional local file-upload list (read in the browser).
+
+        Returns a list of {"filename", "code"} or raises ValueError. Files are
+        supplied as text by the hosted/local UI and analyzed entirely by the
+        local engine; nothing is sent to a cloud.
+        """
+        files = body.get("files")
+        if files is None:
+            return None
+        if not isinstance(files, list) or not files:
+            raise ValueError("No files were provided")
+        if len(files) > MAX_UPLOAD_FILES:
+            raise ValueError(f"Too many files (limit {MAX_UPLOAD_FILES})")
+        cleaned = []
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+            code = item.get("code")
+            if not isinstance(code, str) or not code.strip():
+                continue
+            name = str(item.get("filename", "")).strip()
+            if len(code.encode("utf-8", errors="ignore")) > MAX_FILE_BYTES:
+                raise ValueError(f"File {name or '(unnamed)'} exceeds the {MAX_FILE_BYTES // (1024*1024)}-MB per-file limit")
+            # Keep a JS-ish extension; unknown uploads are still analyzed as JS.
+            if name and not name.lower().endswith(ALLOWED_UPLOAD_EXT):
+                raise ValueError(f"Unsupported file type: {name}")
+            cleaned.append({"filename": name or f"upload-{len(cleaned)+1}.js", "code": code})
+        if not cleaned:
+            raise ValueError("Uploaded files were empty")
+        return cleaned
+
     def _run_analysis(self, body):
         mode = str(body.get("mode", "code")).strip().lower()
         if mode == "url":
@@ -379,6 +418,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 url, max_depth=max_depth, timeout=timeout,
                 max_files=max_files, max_workers=max_workers,
             )
+        uploads = self._extract_uploads(body)
+        if uploads:
+            return analyze_files(uploads)
         code = body.get("code")
         if not isinstance(code, str) or not code.strip():
             raise ValueError("Paste some JavaScript to analyze")
@@ -422,28 +464,49 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 cancel_check=job.cancel_event.is_set,
             )
         else:
-            code = body.get("code")
-            if not isinstance(code, str) or not code.strip():
-                self._send_error_json("Paste some JavaScript to analyze", 400)
-                return
-            if len(code.encode("utf-8", errors="ignore")) > 3 * 1024 * 1024:
-                self._send_error_json("JavaScript input is limited to 3 MB", 413)
-                return
-            filename = str(body.get("filename", "inline.js")).strip() or "inline.js"
-            filename = filename.replace("\\x00", "")[:240]
             try:
-                job = jobs.create(mode="code", source=filename, max_files=1)
-            except RuntimeError as exc:
-                self._send_error_json(str(exc), 429)
-                return
-            jobs.start(
-                job.id,
-                analyze_content,
-                code,
-                filename=filename,
-                progress_callback=lambda **kw: job.update(**kw),
-                cancel_check=job.cancel_event.is_set,
-            )
+                uploads = self._extract_uploads(body)
+            except ValueError as exc:
+                uploads = None
+                upload_error = str(exc)
+            else:
+                upload_error = ""
+            if uploads:
+                try:
+                    job = jobs.create(mode="code", source=f"{len(uploads)} file(s)", max_files=len(uploads))
+                except RuntimeError as exc:
+                    self._send_error_json(str(exc), 429)
+                    return
+                jobs.start(
+                    job.id,
+                    analyze_files,
+                    uploads,
+                    progress_callback=lambda **kw: job.update(**kw),
+                    cancel_check=job.cancel_event.is_set,
+                )
+            else:
+                code = body.get("code")
+                if not isinstance(code, str) or not code.strip():
+                    self._send_error_json(upload_error or "Paste some JavaScript to analyze", 400)
+                    return
+                if len(code.encode("utf-8", errors="ignore")) > MAX_FILE_BYTES:
+                    self._send_error_json(f"JavaScript input is limited to {MAX_FILE_BYTES // (1024*1024)} MB", 413)
+                    return
+                filename = str(body.get("filename", "inline.js")).strip() or "inline.js"
+                filename = filename.replace("\\x00", "")[:240]
+                try:
+                    job = jobs.create(mode="code", source=filename, max_files=1)
+                except RuntimeError as exc:
+                    self._send_error_json(str(exc), 429)
+                    return
+                jobs.start(
+                    job.id,
+                    analyze_content,
+                    code,
+                    filename=filename,
+                    progress_callback=lambda **kw: job.update(**kw),
+                    cancel_check=job.cancel_event.is_set,
+                )
 
         self._send_json({"ok": True, "job_id": job.id, "job": job.snapshot()})
 

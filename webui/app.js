@@ -507,6 +507,130 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
   }
 
 
+  /* ---------------- Local file upload ---------------- */
+
+  let pendingFiles = [];
+
+  const JS_EXT = /\.(js|mjs|cjs|jsx|ts|map|txt)$/i;
+
+  function updateFileList() {
+    const list = $("#file-list");
+    if (!list) return;
+    setFieldError("#dropzone", "#file-error", "");
+    if (!pendingFiles.length) {
+      list.innerHTML = "";
+      return;
+    }
+    list.innerHTML = pendingFiles.map((f, i) => `<div class="file-item">
+      <span>📄</span>
+      <span class="fname">${escapeHtml(f.name)}</span>
+      <span class="fsize">${formatBytes(f.size)}</span>
+      <button class="fremove" data-i="${i}" title="Remove" type="button">✖</button>
+    </div>`).join("");
+    list.querySelectorAll(".fremove").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        pendingFiles.splice(parseInt(btn.dataset.i, 10), 1);
+        updateFileList();
+      });
+    });
+  }
+
+  function addFiles(fileList) {
+    const files = Array.from(fileList || []);
+    const rejected = [];
+    for (const file of files) {
+      const okExt = JS_EXT.test(file.name) || /javascript/i.test(file.type);
+      if (!okExt) {
+        rejected.push(file.name);
+        continue;
+      }
+      if (file.size > 3 * 1024 * 1024) {
+        rejected.push(`${file.name} (over 3 MB)`);
+        continue;
+      }
+      // De-dupe by name+size.
+      if (!pendingFiles.some((f) => f.name === file.name && f.size === file.size)) {
+        pendingFiles.push({ name: file.name, size: file.size, handle: file });
+      }
+    }
+    if (rejected.length) {
+      setFieldError("#dropzone", "#file-error",
+        "Skipped: " + rejected.slice(0, 4).map(escapeHtml).join(", ") +
+        (rejected.length > 4 ? ` (and ${rejected.length - 4} more)` : "") +
+        ". Supported: .js / .mjs / .cjs / .jsx / .ts, max 3 MB each.");
+    }
+    updateFileList();
+  }
+
+  function initUpload() {
+    const input = $("#file-input");
+    const zone = $("#dropzone");
+    if (input) {
+      input.addEventListener("change", () => addFiles(input.files));
+    }
+    if (zone) {
+      ["dragenter", "dragover"].forEach((ev) =>
+        zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add("dragover"); }));
+      ["dragleave", "drop"].forEach((ev) =>
+        zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.remove("dragover"); }));
+      zone.addEventListener("drop", (e) => {
+        if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files);
+      });
+    }
+    const clearBtn = $("#clear-files");
+    if (clearBtn) {
+      clearBtn.addEventListener("click", () => {
+        pendingFiles = [];
+        if (input) input.value = "";
+        setFieldError("#dropzone", "#file-error", "");
+        updateFileList();
+      });
+    }
+    const analyzeBtn = $("#analyze-files");
+    if (analyzeBtn) analyzeBtn.addEventListener("click", analyzeFiles);
+  }
+
+  async function analyzeFiles() {
+    setFieldError("#dropzone", "#file-error", "");
+    if (!pendingFiles.length) {
+      setFieldError("#dropzone", "#file-error", "Choose at least one JavaScript file to analyze.");
+      return;
+    }
+    if (!(await ensureBackend())) return;
+    // Read files locally in the browser; only the text content is sent to the
+    // local engine (same authenticated channel as paste — nothing is uploaded
+    // to a cloud).
+    const payloadFiles = [];
+    for (const f of pendingFiles) {
+      if (!f.handle) continue;
+      try {
+        const text = await f.handle.text();
+        if (text && text.trim()) payloadFiles.push({ filename: f.name, code: text });
+      } catch {
+        setFieldError("#dropzone", "#file-error", `Could not read ${f.name}.`);
+        return;
+      }
+    }
+    if (!payloadFiles.length) {
+      setFieldError("#dropzone", "#file-error", "Could not read the selected files.");
+      return;
+    }
+    showLoading(`Analyzing ${payloadFiles.length} local file(s)…`);
+    try {
+      const query = { mode: "code", files: payloadFiles };
+      lastQuery = query;
+      const data = await postJSON("/api/analyze", query);
+      lastJobId = data.job_id;
+      renderProgress(data.job || { percent: 0, message: "Starting…" });
+      await pollJob(data.job_id);
+      await finishJob(data.job_id);
+    } catch (err) {
+      await handleAnalysisError(err, { urlMode: false });
+    } finally {
+      hideLoading();
+    }
+  }
+
   /* ---------------- Report export ---------------- */
 
   async function exportReport(format) {
@@ -1351,6 +1475,19 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     initParticles();
     initTabs();
     initViews();
+    initUpload();
+
+    // Paste / Upload sub-tab toggle inside the Paste Code pane.
+    $$(".inline-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        $$(".inline-tab").forEach((t) => t.classList.remove("active"));
+        tab.classList.add("active");
+        const which = tab.dataset.input;
+        $$('[data-input-pane]').forEach((pane) => {
+          pane.hidden = pane.dataset.inputPane !== which;
+        });
+      });
+    });
     $("#code-input").value = SAMPLE;
     $("#analyze-code").addEventListener("click", analyzeCode);
     $("#analyze-url").addEventListener("click", analyzeUrl);

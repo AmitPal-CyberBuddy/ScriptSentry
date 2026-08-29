@@ -61,6 +61,14 @@ release yet.
   with TP / TN / known-FP / framework-edge / minified / obfuscated fixtures.
 
 ### Onboarding & UX
+- **Local file upload**: the Paste Code tab now has a "📁 Upload files" mode —
+  drag & drop or browse multiple `.js` / `.mjs` / `.cjs` / `.jsx` / `.ts` files
+  and analyze them in one scan with per-file attribution. Files are read in the
+  browser and sent only to the paired local engine (nothing goes to a cloud);
+  the server enforces an extension allow-list, a 20-file cap and a 3 MB/file
+  limit. Content duplicates are deduped and path-like names sanitized.
+- Scan controls (profile, max depth, max files, workers) now have inline **?**
+  tooltips explaining what each one does.
 - New one-file launcher `scriptsentry.py`: download a single file and run it;
   on first run it downloads the pinned engine from the official GitHub repo,
   installs dependencies and starts the dashboard (cached for later runs).

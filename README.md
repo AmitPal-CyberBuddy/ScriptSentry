@@ -114,11 +114,18 @@ server prints a one-time **engine pairing token** — paste it into the page's
 privacy modal when prompted. The token stays in that browser tab only and is
 sent as an `X-ScriptSentry-Token` header.
 
-You can then either:
+You can analyze JavaScript three ways:
 
-- **Paste JavaScript** into the editor and hit **Analyze Code**, or
+- **Paste JavaScript** into the editor and hit **Analyze Code**,
+- **Upload files** — switch the editor to **📁 Upload files** and drag & drop one
+  or more local `.js` / `.mjs` / `.cjs` / `.jsx` / `.ts` files; they're analyzed
+  together with per-file attribution. Files are read in your browser and sent
+  only to the local engine over the paired channel — nothing is uploaded to a
+  cloud, or
 - **Enter a target URL** and choose a profile (Fast / Balanced / Strict),
-  recursion depth, and file cap, then hit **Analyze Target**.
+  recursion depth, file cap, and worker count, then hit **Analyze Target**.
+  Hover the **?** next to each option for a one-line explanation of what it
+  controls.
 
 ### Command line
 

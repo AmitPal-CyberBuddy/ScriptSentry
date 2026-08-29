@@ -19,7 +19,9 @@
     "Dashboard navigation reduced from nine views to five (Overview, Findings, Scripts, Intelligence, Runtime).",
     "Formal accuracy regression suite covering true positives, true negatives, known false positives, edge, minified and obfuscated variants.",
     "One-file launcher (scriptsentry.py): download a single file and run it; on first run it bootstraps the engine from GitHub, installs dependencies and starts the server.",
-    "Dashboard setup modal offers a download button for the launcher vs. git clone, plus inline input validation (no more browser alert popups) and an authorized-testing notice."
+    "Dashboard setup modal offers a download button for the launcher vs. git clone, plus inline input validation (no more browser alert popups) and an authorized-testing notice.",
+    "Local file upload: drag & drop or browse one or more .js/.mjs/.ts files to analyze together with per-file attribution (read in the browser, analyzed only by the local engine); extension and size limits enforced.",
+    "Scan options (profile, depth, file cap, workers) now have inline ? tooltips explaining each control."
   ],
   "compatibility": {
     "python": ">=3.8",

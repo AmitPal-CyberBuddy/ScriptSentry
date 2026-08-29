@@ -78,13 +78,37 @@
 
       <div class="console-body">
         <div class="pane active" id="pane-code">
-          <label class="field-label" for="code-input">JavaScript source</label>
-          <textarea id="code-input" spellcheck="false" placeholder="// Paste your JavaScript here..."></textarea>
-          <p class="field-error" id="code-error" role="alert" hidden></p>
-          <div class="row">
-            <button class="btn" id="analyze-code">⚡ Analyze Code</button>
-            <button class="btn ghost" id="load-sample">✨ Try a sample</button>
-            <input id="filename-input" type="text" value="inline.js" placeholder="filename.js" style="max-width:220px" />
+          <div class="inline-tabs" role="tablist">
+            <button class="inline-tab active" data-input="paste" role="tab">📋 Paste code</button>
+            <button class="inline-tab" data-input="upload" role="tab">📁 Upload files</button>
+          </div>
+
+          <div data-input-pane="paste">
+            <label class="field-label" for="code-input">JavaScript source</label>
+            <textarea id="code-input" spellcheck="false" placeholder="// Paste your JavaScript here..."></textarea>
+            <p class="field-error" id="code-error" role="alert" hidden></p>
+            <div class="row">
+              <button class="btn" id="analyze-code">⚡ Analyze Code</button>
+              <button class="btn ghost" id="load-sample">✨ Try a sample</button>
+              <input id="filename-input" type="text" value="inline.js" placeholder="filename.js" style="max-width:220px" />
+            </div>
+          </div>
+
+          <div data-input-pane="upload" hidden>
+            <label class="field-label">JavaScript files</label>
+            <label class="dropzone" id="dropzone" for="file-input">
+              <input id="file-input" type="file" multiple
+                     accept=".js,.mjs,.cjs,.jsx,.ts,.map,.txt,text/javascript,application/javascript" hidden />
+              <div class="dropzone-ico">📄</div>
+              <div><b>Click to browse</b> or drag &amp; drop <code>.js</code> / <code>.mjs</code> files</div>
+              <div class="dropzone-sub">Files are read in your browser and analyzed by the local engine only — nothing is uploaded to a cloud.</div>
+            </label>
+            <div id="file-list" class="file-list"></div>
+            <p class="field-error" id="file-error" role="alert" hidden></p>
+            <div class="row">
+              <button class="btn" id="analyze-files">⚡ Analyze Files</button>
+              <button class="btn ghost" id="clear-files">✖ Clear</button>
+            </div>
           </div>
         </div>
 
@@ -96,7 +120,7 @@
           <p class="field-hint">Only public <code>http(s)</code> URLs are scanned — locally, by your own engine. Private/loopback addresses and credentials in the URL are rejected.</p>
           <div class="config-row">
             <div class="config-block">
-              <label class="field-label" for="profile">Profile</label>
+              <label class="field-label" for="profile">Profile <span class="help" tabindex="0" data-tip="Scan intensity. Fast: shallow &amp; quick. Balanced: good default. Strict: deeper recursion, longer timeouts, more files.">?</span></label>
               <select id="profile">
                 <option value="fast">⚡ Fast</option>
                 <option value="balanced" selected>⚖️ Balanced</option>
@@ -104,7 +128,7 @@
               </select>
             </div>
             <div class="config-block">
-              <label class="field-label" for="max-depth">Max depth</label>
+              <label class="field-label" for="max-depth">Max depth <span class="help" tabindex="0" data-tip="How many levels of scripts loading scripts are followed (imports/chunks). 3 = entry scripts only, 5–7 = full bundle graphs.">?</span></label>
               <select id="max-depth">
                 <option value="3">3</option>
                 <option value="5" selected>5</option>
@@ -113,7 +137,7 @@
               </select>
             </div>
             <div class="config-block">
-              <label class="field-label" for="max-files">Max files</label>
+              <label class="field-label" for="max-files">Max files <span class="help" tabindex="0" data-tip="Cap on how many JavaScript files are analyzed. Prevents huge sites from running too long. Skipped files are reported in the Assets view.">?</span></label>
               <select id="max-files">
                 <option value="25">25</option>
                 <option value="50" selected>50</option>
@@ -124,7 +148,7 @@
               </select>
             </div>
             <div class="config-block">
-              <label class="field-label" for="workers">Workers</label>
+              <label class="field-label" for="workers">Workers <span class="help" tabindex="0" data-tip="Parallel analyzer threads. Higher = faster on a powerful machine; lower it if you're low on RAM.">?</span></label>
               <select id="workers">
                 <option value="2">2</option>
                 <option value="4">4</option>
