@@ -1,23 +1,92 @@
 import importlib
+import math
 import re
 import tempfile
 import os
 
-from config import CRYPTO_KEYWORDS, SECRET_REGEX
+from config import SECRET_REGEX
 from core.analysis_model import correlate_findings
 from core.ast_analyzer import analyze_ast
 from core.attack_surface import extract_attack_surface
 from core.crypto import looks_like_url_or_path
+from core.js_patterns import crypto_markers_in
 from core.decoder import decode_candidate_strings, extract_hidden_values
 from core.framework_rules import analyze_framework
 from core.taint import analyze_taint
 from core.source_maps import source_map_reference
 
 
+# Keys that are *designed* to ship inside a browser bundle.  They identify a
+# project rather than authenticate it (they are restricted by referrer/domain),
+# so reporting them as HIGH hardcoded secrets is a guaranteed false positive.
+# Endpoints where the URL itself is the secret (anyone holding it can post).
+CREDENTIAL_URL_RE = re.compile(
+    r"hooks\.slack\.com|discord(?:app)?\.com/api/webhooks|hooks\.zapier\.com"
+    r"|maker\.ifttt\.com|oauth/token|/webhooks?/",
+    re.I,
+)
+
+PUBLIC_CLIENT_KEY_RE = re.compile(
+    r"(?:AIza[0-9A-Za-z_\-]{35}"          # Google / Firebase browser API key
+    r"|(?:pk|rk)_(?:live|test)_[0-9A-Za-z]{8,}"   # Stripe publishable key
+    r"|GOCSPX-[0-9A-Za-z_\-]+"             # Google OAuth client secret (public)
+    r"|1\/[0-9A-Za-z_\-]{20,})"           # legacy Google client id
+)
+
+
+def _secret_value(text):
+    """Return the assigned value from a matched secret expression.
+
+    A match like ``apiKey: "AIza..."`` yields ``AIza...`` so overlapping
+    patterns can be deduplicated on what was actually assigned rather than on
+    the exact slice of text each regex captured.
+    """
+    match = re.search(r"""['"]([^'"]{4,})['"]""", str(text or ""))
+    return match.group(1) if match else str(text or "").strip()
+
+
+def _shannon_entropy(value):
+    """Bits of entropy per character -- catches short but random API keys."""
+    text = str(value or "")
+    if not text:
+        return 0.0
+    counts = {}
+    for char in text:
+        counts[char] = counts.get(char, 0) + 1
+    length = float(len(text))
+    return -sum((c / length) * math.log2(c / length) for c in counts.values())
+
+
+def _secret_context(content, secret, before=120, after=180):
+    """Code surrounding ``secret``, or "" when it is not literally present.
+
+    The previous version sliced with the raw result of ``content.find(s)``.
+    When the value had been normalized, reconstructed or deduplicated the
+    lookup returned -1 and the slice became ``content[0:180]`` -- the top of
+    the file, quoted back as the "context" of the secret.
+    """
+    if not secret:
+        return ""
+    candidates = [secret]
+    # Entries look like `apiKey = "abc"`; the quoted value survives
+    # minification and whitespace differences that the full match does not.
+    for value in re.findall(r"""['"]([^'"]{4,})['"]""", secret):
+        candidates.append(value)
+    for candidate in candidates:
+        idx = content.find(candidate)
+        if idx >= 0:
+            return content[max(0, idx - before):idx + after].strip()
+    return ""
+
+
 def _credible_secret(candidate):
     """Filter obvious fixtures/labels before raising a secret risk signal."""
     text = str(candidate or "")
     lower = text.lower()
+
+    # Public-by-design client identifiers are inventory, not credentials.
+    if PUBLIC_CLIENT_KEY_RE.search(_secret_value(text)):
+        return False
     if any(marker in lower for marker in (
         "example", "sample", "placeholder", "changeme", "dummy", "test123",
         "your_", "_here", "xxx", "todo", "fixme", "redact", "lorem",
@@ -33,10 +102,22 @@ def _credible_secret(candidate):
     value = match.group(1) if match else text
     if len(value) < 10 or value.lower() in {"password", "secret", "token", "abc123", "abc"}:
         return False
-    # Real credentials generally have both character classes or high entropy;
-    # natural-language strings should not become high-severity findings.
+    # Real credentials generally have mixed character classes or high entropy;
+    # natural-language strings should not become high-severity findings.  The
+    # old rule required >= 16 characters, which silently dropped perfectly real
+    # 12-character API keys.
     classes = sum(bool(re.search(pattern, value)) for pattern in (r"[a-z]", r"[A-Z]", r"\d", r"[^A-Za-z0-9]"))
-    return len(value) >= 16 and classes >= 2
+    # A webhook URL *is* the credential, so keep those while still discarding
+    # ordinary endpoints and asset paths.
+    if (looks_like_url_or_path(value)
+            and not CREDENTIAL_URL_RE.search(value)
+            and not re.search(r"(token|key|secret|password|bearer|sig|signature)", value, re.I)):
+        return False
+    if len(value) >= 20 and classes >= 2:
+        return True
+    if len(value) >= 12 and classes >= 3:
+        return True
+    return len(value) >= 10 and _shannon_entropy(value) >= 3.2 and classes >= 2
 
 
 def _run_additional_analyzers(content, results):
@@ -72,6 +153,7 @@ def scan_file(file_path, content=None):
     results = {
         "secrets": [],
         "credible_secrets": [],
+        "public_client_keys": [],
         "crypto": [],
         "endpoints": [],
         "headers": [],
@@ -130,38 +212,70 @@ def scan_file(file_path, content=None):
     secret_patterns = list(SECRET_REGEX) + [
         r'(?i)(?:api|access|refresh|client|private|public)[_-]?(?:key|token|secret)\s*[:=]\s*["\'][^"\']+["\']',
         r'(?i)(?:password|passwd|pwd)\s*[:=]\s*["\'][^"\']+["\']',
-        r'(?i)(?:username|user|email)\s*[:=]\s*["\'][^"\']+["\']',
         r'(?i)(?:authorization|bearer|token)\s*[:=]\s*["\'][^"\']+["\']',
         r'(?i)(?:secret|token|key|password)\s*[:=]\s*[^,;\n]{6,}',
         r'eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+',
-        r'(?i)(?:aws|github|slack|firebase|google)[^\s"\']{10,}',
+        # Provider-scoped credentials only.  The previous rule matched any long
+        # word merely *containing* a vendor name, so `githubOrgName = "acme-…"`
+        # and `googleAnalyticsLoaded` were reported as secrets.
+        r'(?i)\b(?:aws|amazon|github|gitlab|slack|firebase|google|gcp|azure|stripe|twilio|sendgrid|mailgun)[_-]?'
+        r'(?:secret|access[_-]?key|api[_-]?key|token|webhook|key)\b\s*[:=]\s*["\']([^"\']{8,})["\']',
+        # Credentials recognised by *value shape*, so a badly named variable
+        # (`const sk = "sk_live_..."`) is still caught.
+        r'(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}',
+        r'\bgh[pousr]_[A-Za-z0-9]{20,}',
+        r'\bxox[baprs]-[A-Za-z0-9-]{10,}',
+        r'\bAKIA[0-9A-Z]{16}\b',
+        r'https://hooks\.slack\.com/services/[A-Za-z0-9/_]+',
+        r'https://discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_\-]+',
     ]
 
-    secrets = []
+    raw_secrets = []
     for pattern in secret_patterns:
-        secrets.extend(re.findall(pattern, content, re.I))
+        raw_secrets.extend(re.findall(pattern, content, re.I))
 
-    secrets = list(dict.fromkeys(secrets))
-    # Drop endpoint/asset noise while retaining credential-looking strings
+    # Deduplicate on the *assigned value* rather than the matched text: three
+    # overlapping patterns can match different slices of one assignment
+    # (`apiKey: "x`, `apiKey: "x"`, `Key: "x"`), which used to inflate the
+    # secrets panel, the per-file score and the overall risk score.
+    by_value = {}
+    for candidate in raw_secrets:
+        text = str(candidate).strip()
+        if not text:
+            continue
+        value = _secret_value(text)
+        # Two patterns capture the same value with and without its closing
+        # quote, so key on the longest credential-shaped token inside it.
+        tokens = re.findall(r"[A-Za-z0-9+/=_\-]{8,}", value)
+        key = re.sub(r"\s+", "", (max(tokens, key=len) if tokens else value).lower())
+        if not key:
+            continue
+        previous = by_value.get(key)
+        if previous is None or len(text) > len(previous):
+            by_value[key] = text
+    secrets = list(by_value.values())
+
+    # Drop endpoint/asset noise while retaining credential-looking strings, and
+    # split out keys that are meant to be public.
     cleaned = []
+    public_keys = []
     for s in secrets:
         text = str(s)
-        matched = re.search(r'["\']([^"\']{6,})["\']', text)
-        value = matched.group(1) if matched else text
-        if looks_like_url_or_path(value) and not re.search(r'(token|key|secret|password|bearer|authorization|api)', text, re.I):
+        value = _secret_value(text)
+        if PUBLIC_CLIENT_KEY_RE.search(value):
+            public_keys.append(text.strip())
+            continue
+        if looks_like_url_or_path(value) and not re.search(r'(token|key|secret|password|bearer|authorization|api|webhook|hooks\.)', text, re.I):
             continue
         cleaned.append(text.strip())
     results["secrets"] = cleaned[:25]
     results["credible_secrets"] = [item for item in results["secrets"] if _credible_secret(item)][:25]
+    results["public_client_keys"] = list(dict.fromkeys(public_keys))[:10]
 
     for s in secrets[:8]:
-        try:
-            idx = content.find(s)
-            context = content[max(0, idx - 120):idx + 180]
-            if context.strip():
-                results["secret_context"].append(context.strip())
-        except Exception:
-            pass
+        context = _secret_context(content, s)
+        if context:
+            results["secret_context"].append(context)
 
     # =========================================
     # 🔐 HARD-CODED CONFIG OBJECTS
@@ -185,9 +299,13 @@ def scan_file(file_path, content=None):
     # =========================================
     # 🔐 CRYPTO KEYWORDS
     # =========================================
-    for keyword in CRYPTO_KEYWORDS:
-        if keyword.lower() in content.lower():
-            results["crypto"].append(keyword)
+    # Word-bounded, shared catalogue (core.js_patterns).  The old loop was a
+    # plain substring test over config.CRYPTO_KEYWORDS, so "DES" matched
+    # "desktop", "Hex" matched "hexagon" and every design token or
+    # desktop-theme helper became a crypto finding.
+    for marker in crypto_markers_in(content):
+        if marker["name"] not in results["crypto"]:
+            results["crypto"].append(marker["name"])
     results["crypto"] = list(dict.fromkeys(results["crypto"]))
 
     # =========================================
@@ -238,10 +356,22 @@ def scan_file(file_path, content=None):
                 text = match
             if text not in results["storage"]:
                 results["storage"].append(text)
-    results["sensitive_storage"] = bool(re.search(
-        r"(?:localStorage|sessionStorage)\s*\.\s*(?:getItem|setItem)\s*\(\s*['\"](?:token|auth|secret|password|session|credential|jwt)[^'\"]*['\"]",
-        content, re.I,
-    ) or re.search(r"document\.cookie\b", content, re.I))
+    # "Sensitive" used to mean "mentions document.cookie anywhere" (or, via the
+    # check below, "uses sessionStorage" -- 'session' is a substring of it).
+    # Both flagged ordinary analytics helpers as HIGH.  Sensitivity now
+    # requires a sensitive *key name* or a sensitive value written to a cookie.
+    results["sensitive_storage"] = bool(
+        re.search(
+            r"(?:localStorage|sessionStorage)\s*\.\s*(?:getItem|setItem)\s*\(\s*['\"]"
+            r"(?:token|auth|secret|password|session|credential|jwt)[^'\"]*['\"]",
+            content, re.I,
+        )
+        or re.search(
+            r"document\s*\.\s*cookie\s*(?:\+?=(?!=))[^;]{0,160}"
+            r"(?:token|auth|secret|password|session|credential|jwt)",
+            content, re.I,
+        )
+    )
 
     # =========================================
     # 🔄 DATA FLOW CLUES
@@ -499,7 +629,10 @@ def scan_file(file_path, content=None):
         _signal("client_side_crypto", "MEDIUM", "Client-side cryptographic flow detected", crypto_names or ["crypto library/operation present"])
     if results.get("storage"):
         storage_text = " ".join(map(str, results["storage"])).lower()
-        sensitive = bool(results.get("sensitive_storage")) or any(t in storage_text for t in ("token", "auth", "secret", "password", "session"))
+        # storage_text holds API names only ("localStorage.setItem"), so
+        # substring tests against it were meaningless -- "session" matched
+        # "sessionStorage" and marked every cached UI state as sensitive.
+        sensitive = bool(results.get("sensitive_storage"))
         _signal(
             "sensitive_storage", "HIGH" if sensitive else "MEDIUM",
             "Client storage used" + (" for sensitive data" if sensitive else ""),

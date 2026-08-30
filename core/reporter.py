@@ -2,6 +2,7 @@ import html
 import itertools
 import os
 
+from core.js_parser import parser_status
 from core.analysis_model import deduplicate_findings, split_findings
 from core.risk_model import overall_risk, top_priorities
 from core.script_intel import build_script_intel, data_exfiltration_candidates
@@ -123,6 +124,26 @@ def _crypto_flow_text(flows):
     return out
 
 
+def _flow_summary_text(items):
+    """Render the structured flow summary as readable strings.
+
+    ``flow_analyzer`` returns ``[{stage, description}]`` records; reports and the
+    dashboard need a one-line form.  Plain strings are passed through so older
+    payloads and hand-built fixtures still work.
+    """
+    out = []
+    for item in items or []:
+        if isinstance(item, dict):
+            stage = safe_text(item.get("stage", "")).strip()
+            description = safe_text(item.get("description", "")).strip()
+            text = f"{stage} ({description})" if stage and description else (stage or description)
+        else:
+            text = safe_text(item).strip()
+        if text:
+            out.append(text)
+    return out
+
+
 def _normalize_data(file_name, data):
     """Return a copy of a scan result normalized for report-friendly rendering."""
     return {
@@ -154,7 +175,7 @@ def _normalize_data(file_name, data):
         "storage_analysis": data.get("storage_analysis", []),
         "config_summary": data.get("config_summary", []),
         "technology_stack": data.get("technology_stack", []),
-        "data_flow_summary": data.get("data_flow_summary", []),
+        "data_flow_summary": _flow_summary_text(data.get("data_flow_summary", [])),
         "obfuscation_analysis": data.get("obfuscation_analysis", {}),
         "secret_analysis": data.get("secret_analysis", []),
         "risk_signals": data.get("risk_signals", []),
@@ -1076,7 +1097,7 @@ def _clean_list(items, limit=8):
     for item in items or []:
         if isinstance(item, dict):
             text = safe_text(
-                item.get("value", item.get("name", item.get("signal", item.get("endpoint", item.get("storage", "")))))
+                item.get("value", item.get("name", item.get("signal", item.get("stage", item.get("endpoint", item.get("storage", ""))))))
             ).strip()
         else:
             text = safe_text(item).strip()
@@ -1158,7 +1179,7 @@ def _file_diagnostic(file_name, data):
         "decoded": _clean_list(data.get("decoded_strings", []), 8),
         "tech": _clean_list(data.get("technology_stack", []), 8),
         "features": _clean_list(data.get("notable_features", []), 10),
-        "data_flow": _clean_list(data.get("data_flow_summary", []), 8),
+        "data_flow": _clean_list(_flow_summary_text(data.get("data_flow_summary", [])), 8),
         "auth": _clean_list(data.get("auth_summary", []), 8),
         "obfuscation": _clean_list(data.get("obfuscation_analysis", {}).get("evidence", []), 8),
         "source_map": data.get("source_map", {}) or {},
@@ -1325,6 +1346,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
             "release_status": RELEASE_STATUS,
             "dev_build": is_dev_build(),
             "analysis_mode": metadata.get("mode", "code") if metadata else "code",
+            "ast_parser": parser_status(),
             "source": metadata.get("source", "") if metadata else "",
             "files": len(files),
             "runtime_evidence": bool(runtime_evidence.get("captured")),

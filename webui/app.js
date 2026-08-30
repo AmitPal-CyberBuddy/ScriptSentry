@@ -122,6 +122,27 @@
     }
   }
 
+  /* The engine is often started *after* this page is opened, so keep
+   * re-checking while it is unreachable (and stop once it answers). */
+  let enginePollTimer = null;
+
+  function stopEnginePoll() {
+    if (enginePollTimer) {
+      clearInterval(enginePollTimer);
+      enginePollTimer = null;
+    }
+  }
+
+  function scheduleEnginePoll() {
+    stopEnginePoll();
+    if (backendConnected) return;
+    enginePollTimer = setInterval(async () => {
+      if (document.hidden || backendConnected) return;
+      await checkBackend();
+      if (backendConnected) stopEnginePoll();
+    }, 8000);
+  }
+
   async function ensureBackend() {
     if (backendChecked && backendConnected) return true;
     const ok = await checkBackend();
@@ -331,6 +352,7 @@
     });
     if (!byId.size) return;
 
+    const current = $("#nav-current");
     const setActive = (link) => {
       links.forEach((l) => {
         const on = l === link;
@@ -338,7 +360,10 @@
         if (on) l.setAttribute("aria-current", "true");
         else l.removeAttribute("aria-current");
       });
+      // "You are here" label for narrow screens, where the nav is collapsed.
+      if (current) current.textContent = link ? link.textContent.trim() : "Overview";
     };
+    if (current) current.textContent = "Overview";
 
     const observer = new IntersectionObserver((entries) => {
       const visible = entries
@@ -389,6 +414,45 @@
     initReveal();
     initScrollProgress();
     initNavSpy();
+    initMobileNav();
+  }
+
+  /* Below 1040px the section links collapse behind a menu button. Without
+   * this a phone visitor could not reach any other part of the page. */
+  function initMobileNav() {
+    const header = $("#site-header");
+    const toggle = $("#nav-toggle");
+    const nav = $("#site-nav");
+    if (!header || !toggle || !nav) return;
+
+    const setOpen = (open) => {
+      header.classList.toggle("nav-open", open);
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      toggle.setAttribute("aria-label", open ? "Close Navigation Menu" : "Open Navigation Menu");
+    };
+
+    toggle.addEventListener("click", () => setOpen(!header.classList.contains("nav-open")));
+
+    // Tapping a section link should navigate and get the menu out of the way.
+    nav.addEventListener("click", (event) => {
+      if (event.target.closest("a")) setOpen(false);
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && header.classList.contains("nav-open")) {
+        setOpen(false);
+        toggle.focus();
+      }
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!header.contains(event.target)) setOpen(false);
+    });
+
+    // Leaving the collapsed layout with the menu open would strand it open.
+    window.addEventListener("resize", () => {
+      if (window.innerWidth > 1040) setOpen(false);
+    });
   }
 
   async function retryBackend() {
@@ -907,10 +971,60 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
   /* ---------------- Rendering ---------------- */
 
+  function renderEngineNotes() {
+    const node = $("#engine-notes");
+    if (!node || !payload) return;
+    const notes = [];
+    const parser = (payload.meta || {}).ast_parser || {};
+    if (parser.available === false) {
+      notes.push(
+        `<b>Reduced-depth analysis:</b> the optional JavaScript parser (<code>${escapeHtml(parser.name || "esprima")}</code>) `
+        + "is not installed, so this scan used the line-based fallback. Install it for full AST taint analysis: "
+        + `<code>${escapeHtml(parser.install_hint || "pip install esprima")}</code>.`,
+      );
+    }
+    const warnings = new Set();
+    (payload.files || []).forEach((f) => (f.analysis_warnings || []).forEach((w) => warnings.add(w)));
+    warnings.forEach((w) => notes.push(escapeHtml(w)));
+    node.innerHTML = notes.length
+      ? notes.map((n) => `<div class="engine-note">⚠️ ${n}</div>`).join("")
+      : "";
+    node.hidden = !notes.length;
+  }
+
+  /* Keep the last result for the lifetime of this tab: a reload or an
+   * accidental navigation should not cost you another scan. */
+  const STORE_KEY = "scriptsentry_last_result";
+  const STORE_LIMIT = 2 * 1024 * 1024;  // sessionStorage is typically ~5 MB
+
+  function persistPayload() {
+    try {
+      const text = JSON.stringify(payload);
+      if (!text || text.length > STORE_LIMIT) return;
+      sessionStorage.setItem(STORE_KEY, text);
+    } catch {
+      /* storage unavailable or full -- a re-scan is always possible */
+    }
+  }
+
+  function restorePayload() {
+    try {
+      const text = sessionStorage.getItem(STORE_KEY);
+      if (!text) return false;
+      const parsed = JSON.parse(text);
+      if (!parsed || !parsed.summary) return false;
+      payload = parsed;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function renderDashboard() {
     if (!payload) return;
     const results = $("#results");
     results.classList.add("show");
+    renderEngineNotes();
     $("#result-meta").textContent = `${payload.meta.engine} · ${payload.meta.analysis_mode === "url" ? "Remote URL" : "Source snippet"} · ${payload.meta.generated_at || ""}`;
     renderSummary();
     renderPriorities();
@@ -927,6 +1041,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     renderRuntime();
     renderScanSummary();
     renderFiles();
+    persistPayload();
   }
 
   const SEV_COLOR = { CRITICAL: "#ff4d6d", HIGH: "#ff9f43", MEDIUM: "#ffd166", LOW: "#22d3ee", INFO: "#a78bfa" };
@@ -1285,17 +1400,46 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       const st = getStatus(f);
       return !(OBSERVATION_STATUSES.has(st) || (f.observation && st !== "open" && st !== "confirmed" && st !== "false_positive"));
     });
+    // Severity counts drive the filter chips so you can see the shape of the
+    // scan before clicking anything.
+    const sevCounts = {};
+    findings.forEach((f) => {
+      const sev = String(f.severity || "MEDIUM").toUpperCase();
+      sevCounts[sev] = (sevCounts[sev] || 0) + 1;
+    });
+    const sevButtons = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+      .filter((sev) => sevCounts[sev])
+      .map((sev) => `<button class="file-tab" data-sev="${sev}" title="Filter by ${sev} severity">`
+        + `${sev} <b>${sevCounts[sev]}</b></button>`)
+      .join("");
+
     $("#finding-filters").innerHTML = [
+      `<input id="finding-search" class="finding-search" type="search" placeholder="Filter by type, file, source or sink…"
+              value="${escapeHtml(window.__findingSearch || "")}" aria-label="Search findings" />`,
       ["all", "All"],
       ["open", "Open"],
       ["needs_review", "Needs review"],
       ["confirmed", "Confirmed"],
       ["false_positive", "False positive"],
       ["informational", "Info"],
-    ].map(([v, label]) => `<button class="file-tab ${v === "all" ? "active" : ""}" data-f="${v}">${label}</button>`).join("");
+    ].map((entry) => (typeof entry === "string"
+      ? entry
+      : `<button class="file-tab ${entry[0] === "all" ? "active" : ""}" data-f="${entry[0]}">${entry[1]}</button>`)).join("")
+      + sevButtons;
 
     const filter = (window.__findingFilter || "all");
-    const list = findings.filter((f) => filter === "all" || getStatus(f) === filter);
+    const severity = window.__findingSeverity || "";
+    const term = String(window.__findingSearch || "").trim().toLowerCase();
+    const matches = (f) => {
+      if (filter !== "all" && getStatus(f) !== filter) return false;
+      if (severity && String(f.severity || "").toUpperCase() !== severity) return false;
+      if (!term) return true;
+      return [f.type, f.id, f.file, f.source, f.sink, f.evidence]
+        .map((v) => String(Array.isArray(v) ? v.join(" ") : (v == null ? "" : v)).toLowerCase())
+        .join(" ").includes(term);
+    };
+    const list = findings.filter(matches);
+
     $("#unified-findings").innerHTML = list.length
       ? list.slice(0, 80).map((f, i) => {
           const sev = f.severity || "MEDIUM";
@@ -1311,7 +1455,9 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
             ${quality}${limits}
             <button class="status-chip status-${st}" data-key="${encodeURIComponent(findingKey(f))}" title="Click to cycle triage status">${escapeHtml(STATUS_LABEL[st] || st)}</button></span>
           </li>`;
-        }).join("")
+        }).join("") + (list.length > 80
+          ? `<li class="truncation-note">Showing the first <b>80</b> of <b>${list.length}</b> matching findings — narrow the filters to see the rest.</li>`
+          : "")
       : `<li><span class="risk-dot" style="color:#34d399"></span><span>No actionable findings for this filter. See <b>Security Observations</b> for capability signals.</span></li>`;
 
     $("#unified-findings").querySelectorAll(".status-chip").forEach((btn) => {
@@ -1324,16 +1470,45 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
     const filters = $("#finding-filters");
     filters.querySelectorAll(".file-tab").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.f === filter);
+      const isStatus = !!btn.dataset.f;
+      btn.classList.toggle("active", isStatus ? btn.dataset.f === filter : btn.dataset.sev === severity);
       btn.onclick = () => {
-        window.__findingFilter = btn.dataset.f;
+        if (isStatus) {
+          window.__findingFilter = btn.dataset.f;
+        } else {
+          // Clicking the active severity chip again clears the filter.
+          window.__findingSeverity = btn.dataset.sev === severity ? "" : btn.dataset.sev;
+        }
         renderUnifiedFindings();
       };
     });
+
+    const search = $("#finding-search");
+    if (search) {
+      let debounce = null;
+      search.addEventListener("input", () => {
+        clearTimeout(debounce);
+        debounce = setTimeout(() => {
+          window.__findingSearch = search.value;
+          renderUnifiedFindings();
+        }, 180);
+      });
+      // Keep focus and caret position while re-rendering on each keystroke.
+      if (document.activeElement === search) {
+        const caret = search.value.length;
+        search.focus();
+        try { search.setSelectionRange(caret, caret); } catch { /* not supported */ }
+      }
+    }
   }
 
   function activateView(view) {
-    $$(".view-tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
+    $$(".view-tab").forEach((t) => {
+      const on = t.dataset.view === view;
+      t.classList.toggle("active", on);
+      t.setAttribute("aria-selected", on ? "true" : "false");
+      t.tabIndex = on ? 0 : -1;
+    });
     $$(".view-group").forEach((group) => {
       group.style.display = group.dataset.view === view ? "" : "none";
     });
@@ -1713,7 +1888,13 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     initParticles();
     initChrome();
     if (isToolPage()) initTool();
-    checkBackend();
+    checkBackend().then(scheduleEnginePoll);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && !backendConnected) checkBackend();
+    });
+    window.addEventListener("focus", () => {
+      if (!backendConnected) checkBackend();
+    });
   }
 
   function initTool() {
@@ -1781,6 +1962,26 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
         });
       });
     });
+    // Arrow-key navigation between the analysis views.
+    const viewTabs = $$(".view-tab");
+    viewTabs.forEach((tab, index) => {
+      tab.addEventListener("keydown", (event) => {
+        const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+        if (!step) return;
+        event.preventDefault();
+        const next = viewTabs[(index + step + viewTabs.length) % viewTabs.length];
+        activateView(next.dataset.view);
+        next.focus();
+      });
+    });
+
+    // Restore the previous result of this tab, if there is one.
+    if (restorePayload()) {
+      renderDashboard();
+      const meta = $("#result-meta");
+      if (meta) meta.textContent += " · restored from this tab (reload cleared nothing, no re-scan needed)";
+    }
+
     // Ctrl/Cmd+Enter runs the analysis for whichever pane is active.
     document.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {

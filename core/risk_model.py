@@ -51,6 +51,11 @@ def _finding_severity_weight(finding: Dict[str, Any]) -> int:
 # "weak hint of a mild thing".
 _TIER_MULTIPLIER = {3: 1.0, 2: 0.75, 1: 0.45, 0: 0.2}
 
+# Hard ceiling on the combined contribution of non-vulnerability observations
+# (API surface, obfuscation, inventory).  One point each, capped as a group, so
+# inventory volume can never outrank actual findings.
+OBSERVATION_CAP = 15
+
 
 def overall_risk(
     findings: Optional[List[Dict[str, Any]]] = None,
@@ -82,7 +87,15 @@ def overall_risk(
         "third_party_risky": 0,
         "third_party_exfil": 0,
         "runtime_effects": 0,
+        "high_or_critical": 0,
     }
+
+    # Observations are posture information, not vulnerabilities.  Each one adds
+    # a point, but the whole bucket is capped so a large application with a big
+    # API surface cannot inflate the score to CRITICAL on inventory volume
+    # alone.  Without this cap 120 endpoints scored 100/CRITICAL while a single
+    # high-confidence DOM injection scored 14 -- exactly backwards.
+    observation_points = 0
 
     # ---- Per-finding contributions ------------------------------------
     seen = set()
@@ -104,32 +117,44 @@ def overall_risk(
 
         if observation:
             counts["observations"] += 1
-            # Observations contribute a small capped amount: they inform
-            # posture but are not vulnerabilities.
-            add("Security observations (API surface, obfuscation, inventory)", 1, tier=0)
+            # Observations inform posture but are not vulnerabilities, so the
+            # whole bucket is capped (see OBSERVATION_CAP below).
+            observation_points = min(OBSERVATION_CAP, observation_points + 1)
             continue
 
         counts["findings"] += 1
+        if SEVERITY_RANK.get(str(f.get("severity", "")).upper(), 1) >= SEVERITY_RANK["HIGH"]:
+            # A HIGH/CRITICAL finding is never "LOW" overall, even when the
+            # evidence tier caps its numeric contribution.
+            counts["high_or_critical"] += 1
         base = sev_weight * _TIER_MULTIPLIER.get(tier, 0.2) * 2.0
 
         if status == "confirmed" or evidence == "runtime_effect":
             counts["confirmed"] += 1
             counts["runtime_effects"] += 1 if "runtime" in evidence else 0
-            add("Confirmed/demonstrated dangerous behavior", int(round(base)) + 6, tier=3)
+            add("Confirmed/demonstrated dangerous behavior", int(round(base)) + 10, tier=3)
         elif tier >= 2:
             if fid in ("dom_injection", "open_redirect", "data_exfiltration_flow", "dangerous_dynamic_code") or evidence == "source_to_sink":
                 counts["high_confidence_flows"] += 1
-                add("High-confidence source-to-sink flow", int(round(base)) + 4, tier=2)
+                add("High-confidence source-to-sink flow", int(round(base)) + 8, tier=2)
             elif "runtime" in evidence:
-                add("High-confidence runtime observation", int(round(base)) + 2, tier=2)
+                add("High-confidence runtime observation", int(round(base)) + 4, tier=2)
             else:
-                add("High-confidence finding", int(round(base)) + 2, tier=2)
+                add("High-confidence finding", int(round(base)) + 4, tier=2)
         elif fid in ("data_exfiltration_candidate",) or evidence == "behavioral_correlation":
-            add("Sensitive data → external destination correlation", int(round(base)) + 3, tier=1)
+            add("Sensitive data → external destination correlation", int(round(base)) + 5, tier=1)
         elif tier == 1:
-            add("Needs-review finding (medium confidence)", int(round(base)) + 1, tier=1)
+            add("Needs-review finding (medium confidence)", int(round(base)) + 2, tier=1)
         else:
-            add("Low-confidence signal on a high-impact pattern", max(2, int(round(base))), tier=0)
+            add("Low-confidence signal on a high-impact pattern", max(3, int(round(base))), tier=0)
+
+    if observation_points:
+        add(
+            "Security observations (API surface, obfuscation, inventory)",
+            observation_points,
+            count=counts["observations"],
+            tier=0,
+        )
 
     # ---- Script intelligence contributions -----------------------------
     for script in script_inventory:
@@ -160,15 +185,21 @@ def overall_risk(
     raw = sum(c["points"] for c in contributors)
     score = max(0, min(100, int(round(raw))))
 
+    # Labels are driven by evidence quality first and raw score second: two
+    # independent high-confidence flows, or any demonstrated effect, is HIGH
+    # even when the numeric score is modest.
     if score >= 75 or counts["confirmed"] >= 2:
         label = "CRITICAL"
-    elif score >= 55 or counts["confirmed"] >= 1:
+    elif score >= 50 or counts["confirmed"] >= 1 or counts["high_confidence_flows"] >= 2:
         label = "HIGH"
-    elif score >= 30 or counts["high_confidence_flows"] >= 1 or counts["findings"] >= 3:
+    elif (score >= 25 or counts["high_confidence_flows"] >= 1
+          or counts["findings"] >= 3 or counts["high_or_critical"] >= 1):
         label = "MEDIUM"
     else:
         label = "LOW"
 
+    counts["observation_points"] = observation_points
+    counts["observation_cap"] = OBSERVATION_CAP
     return {
         "score": score,
         "label": label,

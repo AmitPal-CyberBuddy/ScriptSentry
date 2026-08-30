@@ -16,9 +16,20 @@ auto-confirmed).
 from pathlib import Path
 import unittest
 
+from core.js_parser import parser_available
+
 from core.analyzer_service import analyze_content
 from core.analysis_model import is_observation, split_findings
 from core.taint import analyze_taint
+
+# These contracts assert AST-layer behaviour.  Without the optional esprima parser the
+# engine falls back to line-based analysis, which cannot satisfy them -- skip instead of
+# reporting a false regression.
+requires_ast_parser = unittest.skipUnless(
+    parser_available(),
+    "needs the optional esprima AST parser (pip install esprima)",
+)
+
 
 CORPUS = Path(__file__).parent / "corpus"
 
@@ -38,6 +49,7 @@ def flow_ids(result, flow_id=None):
 
 class AccuracyContractTest(unittest.TestCase):
     # ---- DOM XSS -------------------------------------------------------
+    @requires_ast_parser
     def test_dom_xss_tp_direct_is_high_confidence_open_not_confirmed(self):
         r = analyze("dom-xss/reachable-query.js")
         dom = flow_ids(r, "dom_injection")
@@ -47,6 +59,7 @@ class AccuracyContractTest(unittest.TestCase):
         self.assertFalse(any(f.get("status") == "confirmed" for f in dom))
         self.assertTrue(any(f.get("status") == "open" for f in dom))
 
+    @requires_ast_parser
     def test_dom_xss_tp_interprocedural(self):
         r = analyze("dom-xss/tp-interprocedural.js")
         dom = flow_ids(r, "dom_injection")
@@ -96,6 +109,7 @@ class AccuracyContractTest(unittest.TestCase):
         self.assertGreaterEqual(len(sources), 1, "expected at least one source->sink flow")
 
     # ---- Open redirect --------------------------------------------------
+    @requires_ast_parser
     def test_open_redirect_tp(self):
         r = analyze("open-redirect/query.js")
         redirects = flow_ids(r, "open_redirect")

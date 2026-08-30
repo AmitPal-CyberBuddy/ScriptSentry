@@ -2455,9 +2455,56 @@ main.wrap {
 /* ---------------- Responsive ---------------- */
 
 @media (max-width: 1040px) {
+  /* The header nav collapses into a menu instead of vanishing: without this
+     a narrow screen had no way to reach any section of the page. */
+  .header-inner {
+    position: relative;
+  }
+
+  .nav-toggle {
+    display: inline-flex;
+  }
+
   .site-nav {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin: 0;
+    padding: 8px 14px 16px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    background: rgba(6, 11, 24, 0.97);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+    box-shadow: 0 18px 40px rgba(2, 6, 18, 0.55);
+    opacity: 0;
+    transform: translateY(-10px);
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+  }
+
+  .site-header.nav-open .site-nav {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  .site-nav a {
+    padding: 12px;
+    border-radius: 10px;
+    font-size: 14px;
+  }
+
+  .site-nav a::after {
     display: none;
   }
+
+  .site-nav a.is-active {
+    background: rgba(34, 211, 238, 0.12);
+    color: #7dd3fc;
+  }
+
   .footer-inner {
     grid-template-columns: 1fr 1fr;
   }
@@ -2627,4 +2674,231 @@ main.wrap {
   margin: 0;
   font-size: 16px;
   letter-spacing: -0.01em;
+}
+
+/* ============================================================
+   Analysis-console ergonomics & accessibility
+   ============================================================ */
+
+/* "You are here" label, visible where the nav collapses. */
+.nav-current {
+  display: none;
+  margin-left: auto;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  background: rgba(34, 211, 238, 0.08);
+  color: #7dd3fc;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* Engine warnings: degraded parser, per-file analysis warnings. */
+.engine-notes {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.engine-notes[hidden] {
+  display: none;
+}
+
+.engine-note {
+  padding: 11px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.08);
+  color: #fde68a;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.engine-note b {
+  color: #fff7db;
+}
+
+.engine-note code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(251, 191, 36, 0.14);
+  color: #fcd34d;
+  font-family: "JetBrains Mono", monospace;
+}
+
+/* Findings search box inside the filter row. */
+.finding-search {
+  flex: 1 1 240px;
+  min-width: 180px;
+  max-width: 320px;
+  padding: 9px 14px;
+  border-radius: 11px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(3, 7, 18, 0.8);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.finding-search::placeholder {
+  color: #5b6b86;
+}
+
+.finding-search:focus {
+  border-color: rgba(34, 211, 238, 0.6);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.12);
+}
+
+.file-tabs {
+  align-items: center;
+}
+
+.file-tabs .file-tab b {
+  margin-left: 5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.16);
+  font-size: 11px;
+}
+
+.truncation-note {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 11px;
+  border: 1px dashed rgba(148, 163, 184, 0.3);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* Keyboard focus is meaningful now that the view tabs manage tabindex. */
+.view-tab:focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.7);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1040px) {
+  .nav-current {
+    display: inline-block;
+  }
+}
+
+/* ============================================================
+   Keyboard access, mobile navigation, motion preferences
+   ============================================================ */
+
+/* Anchor targets must clear the sticky header when jumped to. */
+section[id],
+main[id] {
+  scroll-margin-top: 96px;
+}
+
+/* Skip link: off-screen until focused, then pinned to the top. */
+.skip-link {
+  position: fixed;
+  top: -60px;
+  left: 16px;
+  z-index: 200;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: #22d3ee;
+  color: #04121f;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: top 0.2s ease;
+}
+
+.skip-link:focus {
+  top: 14px;
+  outline: 2px solid #a78bfa;
+  outline-offset: 2px;
+}
+
+/* Menu toggle -- only shown where the nav collapses. */
+.nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 38px;
+  padding: 0;
+  border-radius: 11px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(9, 16, 32, 0.8);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.nav-toggle:hover,
+.nav-toggle:focus-visible {
+  border-color: rgba(34, 211, 238, 0.55);
+  background: rgba(34, 211, 238, 0.1);
+  outline: none;
+}
+
+.nav-toggle-bars,
+.nav-toggle-bars::before,
+.nav-toggle-bars::after {
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.nav-toggle-bars {
+  position: relative;
+}
+
+.nav-toggle-bars::before,
+.nav-toggle-bars::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  transition: transform 0.2s ease, top 0.2s ease;
+}
+
+.nav-toggle-bars::before {
+  top: -6px;
+}
+
+.nav-toggle-bars::after {
+  top: 6px;
+}
+
+.nav-toggle[aria-expanded="true"] .nav-toggle-bars {
+  background: transparent;
+}
+
+.nav-toggle[aria-expanded="true"] .nav-toggle-bars::before {
+  top: 0;
+  transform: rotate(45deg);
+}
+
+.nav-toggle[aria-expanded="true"] .nav-toggle-bars::after {
+  top: 0;
+  transform: rotate(-45deg);
+}
+
+/* Honour the visitor's motion preference: reveal animations, pulses and
+   smooth scrolling are decoration, and they make some people ill. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .fade-up {
+    opacity: 1 !important;
+    transform: none !important;
+  }
 }

@@ -133,6 +133,52 @@ release yet.
   character-by-character; CSV/SARIF export quality/limitation fields.
 - Test count: **77+ passing**.
 
+
+### Audit follow-ups — detection quality
+- **One pattern catalogue.** `core/js_patterns.py` is now the single source of
+  truth for sources, sinks, crypto markers and transport calls; `core/taint.py`
+  and the `analyzers/*` modules import from it instead of keeping private
+  copies that could disagree.
+- **Secrets.** Deduped by longest credential token (one Firebase key is now one
+  finding, not three); public-by-design client keys (Firebase `apiKey`,
+  Google/Stripe/Recaptcha publishable keys) are reported as inventory under
+  `public_client_keys` instead of as secrets; real provider credentials
+  (`sk_live_`, `ghp_`, `xox*-`, `AKIA…`, Slack/Discord webhooks) are matched by
+  value shape rather than by a minimum length.
+- **Sensitivity.** `sensitive_storage` no longer fires on any mention of
+  `document.cookie` or on `sessionStorage` at large — it requires a sensitive
+  key name or value, so ordinary theme/analytics storage is MEDIUM again.
+- **Secret context.** `content.find()` is checked for `-1` before slicing, so a
+  reconstructed value can no longer quote the top of the file as its context.
+- **Crypto.** Word-bounded, shared markers replace the old substring test that
+  found "DES" inside "desktopTheme" and "Hex" inside "hexagon".
+- **Taint.** New sources (`document.baseURI`, `history.state`, `window.name`)
+  and sinks (element `href`/`src` assignment, `setAttribute('href'|'src'|'srcdoc')`,
+  jQuery `.html()/.append()/.prepend()/.attr()`) on both the AST and the
+  line-fallback path; source markers are matched case-insensitively, which
+  previously hid every camelCase source from the AST path.
+- **Risk floor.** A single HIGH/CRITICAL severity forces at least MEDIUM
+  regardless of how much low-tier evidence a scan produced.
+- **Parser visibility.** `/api/health` and the dashboard payload now report
+  `ast_parser` (name / available / mode / install hint), the server prints the
+  parser state at startup, and the console warns when a scan ran in fallback
+  mode. Tests that require the AST layer skip cleanly when esprima is absent.
+
+### Audit follow-ups — web UI
+- Sticky header links are page sections with scroll-spy; below 1040px the nav
+  collapses into a real menu (it used to disappear entirely) and shows a
+  "you are here" label.
+- Findings gained severity chips with counts, a search box and a
+  "showing 80 of N" notice when a long list is truncated.
+- The engine is polled while unreachable, so starting it after the page is open
+  no longer needs a manual refresh. A scan result survives a reload of the tab.
+- Accessibility: real tab semantics on the analysis views with arrow-key
+  navigation, a skip link, visible focus rings and `prefers-reduced-motion`
+  support.
+- Copy is ScriptSentry's own voice, headings and tags are Title Case, and the
+  pre-release badge is gone from the hosted pages (it stays in the local engine
+  banner, the HTML/TXT report footer and `/api/health`).
+
 ## [2.1.0] — earlier release
 - Modular `webui` / `server.py` / `core` / `analyzers` architecture.
 - Script inventory & behavior intelligence, first/third-party attribution,

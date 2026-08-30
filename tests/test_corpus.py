@@ -1,8 +1,19 @@
 from pathlib import Path
 import unittest
 
+from core.js_parser import parser_available
+
 from core.analyzer_service import analyze_content
 from core.script_intel import data_exfiltration_candidates
+
+# These contracts assert AST-layer behaviour.  Without the optional esprima parser the
+# engine falls back to line-based analysis, which cannot satisfy them -- skip instead of
+# reporting a false regression.
+requires_ast_parser = unittest.skipUnless(
+    parser_available(),
+    "needs the optional esprima AST parser (pip install esprima)",
+)
+
 
 
 CORPUS = Path(__file__).parent / "corpus"
@@ -16,6 +27,7 @@ def analyze_fixture(relative_path):
 class CorpusContractTest(unittest.TestCase):
     """Accuracy contracts for representative behavior and false positives."""
 
+    @requires_ast_parser
     def test_reachable_dom_flow_is_stronger_than_sanitized_flow(self):
         reachable = analyze_fixture("dom-xss/reachable-query.js")
         sanitized = analyze_fixture("dom-xss/sanitized-query.js")
@@ -42,6 +54,7 @@ class CorpusContractTest(unittest.TestCase):
         self.assertTrue(secret_findings)
         self.assertTrue(all(f.get("status") != "confirmed" for f in secret_findings))
 
+    @requires_ast_parser
     def test_high_value_sources_and_sinks_are_tracked(self):
         redirect = analyze_fixture("open-redirect/query.js")
         self.assertTrue(any(

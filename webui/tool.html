@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ScriptSentry — JavaScript analysis console</title>
+  <title>ScriptSentry — JavaScript Security Console</title>
   <meta name="description" content="Analyze JavaScript for secrets, DOM XSS flows, attack surface, obfuscation and third-party behavior. Paste code, upload files or scan a URL — 100% locally." />
   <meta name="color-scheme" content="dark" />
   <meta name="theme-color" content="#060a13" />
@@ -35,6 +35,7 @@
   <script src="config.js"></script>
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to Content</a>
   <canvas id="particles" aria-hidden="true"></canvas>
   <div class="bg-glow bg-glow-1"></div>
   <div class="bg-glow bg-glow-2"></div>
@@ -66,12 +67,12 @@
           <span class="brand-name">ScriptSentry</span>
           <span class="sub">JS Intelligence Studio</span>
         </span>
-        <span class="dev-badge" title="Pre-release build — not a published/stable release">🚧 Dev</span>
       </a>
 
-      <nav class="site-nav" aria-label="Main">
-        <a href="index.html#features">What it finds</a>
-        <a href="index.html#how">How it works</a>
+      <div class="nav-current" id="nav-current" aria-hidden="true"></div>
+      <nav class="site-nav" id="site-nav" aria-label="Main">
+        <a href="index.html#features">What It Finds</a>
+        <a href="index.html#how">How It Works</a>
         <a href="index.html#trust">Trust</a>
         <a href="index.html#connect">Connect</a>
       </nav>
@@ -84,6 +85,10 @@
         </button>
         <a class="btn btn-sm ghost" href="index.html">🏠 Overview</a>
       </div>
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false"
+              aria-controls="site-nav" aria-label="Open Navigation Menu">
+        <span class="nav-toggle-bars" aria-hidden="true"></span>
+      </button>
     </div>
     <div class="scroll-progress" id="scroll-progress" aria-hidden="true"></div>
   </header>
@@ -91,10 +96,11 @@
   <main class="wrap" id="main">
     <section class="tool-hero" id="top">
       <span class="eyebrow">⚡ Private by default · analyzed on your machine</span>
-      <h1>JavaScript analysis console</h1>
+      <h1>JavaScript Security Console</h1>
       <p>
-        Paste a snippet, drop your bundle files, or scan a live URL. Every byte is analyzed by
-        <b>your own</b> local ScriptSentry engine — nothing is uploaded, no accounts, no cloud.
+        Paste a snippet, drop your bundle files, or point it at a live URL. Every byte is
+        analyzed by the engine running on <b>your</b> machine — nothing is uploaded, no account,
+        no cloud.
       </p>
       <div class="hero-cta">
         <a class="btn ghost" href="index.html">🏠 Back to overview</a>
@@ -232,15 +238,17 @@
           </div>
         </div>
 
-        <div class="view-tabs fade-up" id="view-tabs">
-          <button class="view-tab active" data-view="overview">📊 Overview</button>
-          <button class="view-tab" data-view="findings">🚦 Findings</button>
-          <button class="view-tab" data-view="scripts">📚 Scripts</button>
-          <button class="view-tab" data-view="intelligence">🧠 Intelligence</button>
-          <button class="view-tab" data-view="runtime">🖥️ Runtime</button>
+        <div class="engine-notes" id="engine-notes" role="status" aria-live="polite" hidden></div>
+
+      <div class="view-tabs fade-up" id="view-tabs" role="tablist" aria-label="Analysis views">
+          <button class="view-tab active" data-view="overview" role="tab" aria-selected="true" tabindex="0">📊 Overview</button>
+          <button class="view-tab" data-view="findings" role="tab" aria-selected="false" tabindex="-1">🚦 Findings</button>
+          <button class="view-tab" data-view="scripts" role="tab" aria-selected="false" tabindex="-1">📚 Scripts</button>
+          <button class="view-tab" data-view="intelligence" role="tab" aria-selected="false" tabindex="-1">🧠 Intelligence</button>
+          <button class="view-tab" data-view="runtime" role="tab" aria-selected="false" tabindex="-1">🖥️ Runtime</button>
         </div>
 
-        <div class="grid grid-2 view-group" data-view="overview">
+        <div class="grid grid-2 view-group" role="tabpanel" data-view="overview">
           <div class="card">
             <h3>Overall Risk</h3>
             <div class="gauge-wrap">
@@ -265,7 +273,7 @@
           </div>
         </div>
 
-        <div class="grid grid-2 view-group" style="margin-top:18px" data-view="overview">
+        <div class="grid grid-2 view-group" style="margin-top:18px" role="tabpanel" data-view="overview">
           <div class="card">
             <h3>Why this score?</h3>
             <p class="modal-note" style="margin:0 0 8px">Every point is explained by evidence. Demonstrated/high-confidence flows weigh far more than regex observations.</p>
@@ -277,9 +285,9 @@
           </div>
         </div>
 
-        <div class="grid grid-4 view-group" style="margin-top:18px" data-view="overview" id="metrics"></div>
+        <div class="grid grid-4 view-group" style="margin-top:18px" role="tabpanel" data-view="overview" id="metrics"></div>
 
-        <div class="grid grid-3 view-group" style="margin-top:18px" data-view="overview">
+        <div class="grid grid-3 view-group" style="margin-top:18px" role="tabpanel" data-view="overview">
           <div class="card chart-card">
             <h3>Finding Mix</h3>
             <svg class="chart" id="donut-chart" viewBox="0 0 220 220"></svg>
@@ -295,53 +303,53 @@
           </div>
         </div>
 
-        <div class="card view-group" style="margin-top:18px" data-view="scripts">
+        <div class="card view-group" style="margin-top:18px" role="tabpanel" data-view="scripts">
           <h3>📚 Script Inventory &amp; Behavior</h3>
           <p class="modal-note" style="margin:0 0 8px">Every discovered script gets a behavior profile: first/third-party attribution, sensitive reads, DOM/network writes, browser APIs, loading method, and a 0–100 script risk score.</p>
           <div id="script-panel"></div>
         </div>
 
-        <div class="card view-group" style="margin-top:18px" data-view="scripts">
+        <div class="card view-group" style="margin-top:18px" role="tabpanel" data-view="scripts">
           <h3>📁 JavaScript Assets</h3>
           <div class="finding-grid" id="scan-summary"></div>
           <div class="file-tabs" id="file-tabs"></div>
           <div id="file-panel"></div>
         </div>
 
-        <div class="card view-group" style="margin-top:18px" data-view="findings">
+        <div class="card view-group" style="margin-top:18px" role="tabpanel" data-view="findings">
           <h3>🛠️ Actionable Findings</h3>
           <p class="modal-note" style="margin:0 0 8px">Issues that require investigation or remediation. <b>Confirmed</b> is reserved for demonstrated/deterministic proof; static source→sink flows are high-confidence and open for triage. Click <b>status</b> to triage (stored in your browser only).</p>
           <div class="file-tabs" id="finding-filters"></div>
           <div class="find-list" id="unified-findings"></div>
         </div>
 
-        <div class="card view-group" style="margin-top:18px" data-view="findings">
+        <div class="card view-group" style="margin-top:18px" role="tabpanel" data-view="findings">
           <h3>👁️ Security Observations</h3>
           <p class="modal-note" style="margin:0 0 8px">Interesting behavior and capability signals that are <b>not</b> proven vulnerabilities — API surface, obfuscation, inventory, and patterns without an established source→sink path.</p>
           <div class="find-list" id="risk-signals"></div>
         </div>
 
-        <div class="card view-group" style="margin-top:18px" data-view="intelligence">
+        <div class="card view-group" style="margin-top:18px" role="tabpanel" data-view="intelligence">
           <h3>🔁 Source → Sink Data Flows</h3>
           <div class="find-list" id="flow-panel"></div>
         </div>
 
-        <div class="card view-group" style="margin-top:18px" data-view="intelligence">
+        <div class="card view-group" style="margin-top:18px" role="tabpanel" data-view="intelligence">
           <h3>🎯 Attack Surface</h3>
           <div class="finding-grid" id="attack-panel"></div>
         </div>
 
-        <div class="card view-group" style="margin-top:18px" data-view="intelligence">
+        <div class="card view-group" style="margin-top:18px" role="tabpanel" data-view="intelligence">
           <h3>🔐 Secrets &amp; Sensitive Data</h3>
           <div class="finding-grid" id="secrets-panel"></div>
         </div>
 
-        <div class="card view-group" style="margin-top:18px" data-view="intelligence">
+        <div class="card view-group" style="margin-top:18px" role="tabpanel" data-view="intelligence">
           <h3>🧰 Dependencies &amp; Transport</h3>
           <div class="finding-grid" id="dep-panel"></div>
         </div>
 
-        <div class="card view-group" style="margin-top:18px" data-view="runtime">
+        <div class="card view-group" style="margin-top:18px" role="tabpanel" data-view="runtime">
           <h3>🖥️ Runtime Evidence</h3>
           <p class="modal-note" style="margin:0 0 8px">
             Evidence is captured on your machine with a local headless browser. ScriptSentry keeps URLs, console
@@ -383,18 +391,17 @@
           </span>
         </a>
         <p>
-          Watch every line. Detect every risk. A privacy-first JavaScript security and
-          script-behavior intelligence tool that runs entirely on your machine.
+          Watch Every Line. Detect Every Risk. A privacy-first JavaScript security analyzer I
+          build for people who read other people’s code — running entirely on your machine.
         </p>
-        <span class="footer-badge">🚧 Pre-release · under active development</span>
-      </div>
+              </div>
 
       <nav class="footer-col" aria-label="Product">
         <h3>Product</h3>
         <a href="tool.html">⚡ Open the analyzer</a>
         <a href="index.html#features">🔎 What it finds</a>
         <a href="index.html#how">🧭 How it works</a>
-        <a href="index.html#setup">🛠️ Run your own engine</a>
+        <a href="index.html#setup">🛠️ Run Your Own Engine</a>
       </nav>
 
       <nav class="footer-col" aria-label="Project">
@@ -454,8 +461,8 @@
 
           <div class="setup-pane" data-setup-pane="easy">
             <p class="modal-note" style="margin:6px 0 10px">
-              Download <b>one file</b>. On first run it fetches the engine from the official
-              GitHub repo, installs dependencies, and starts — no clone needed.
+              One file, one command. On first run it fetches the engine from the official GitHub
+              repo, installs what it needs, and starts — no clone required.
             </p>
             <div class="setup-actions">
               <button class="btn js-download-launcher" type="button"

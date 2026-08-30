@@ -1,11 +1,23 @@
 """Tests for layered (AST + bundler adapter) module/script discovery."""
 import unittest
 
+from core.js_parser import parser_available
+
 from core.analyzer_service import extract_script_refs
 from core.module_discovery import discover_module_refs, _ast_module_refs, _bundler_refs, _is_script_ref
 
+# These contracts assert AST-layer behaviour.  Without the optional esprima parser the
+# engine falls back to line-based analysis, which cannot satisfy them -- skip instead of
+# reporting a false regression.
+requires_ast_parser = unittest.skipUnless(
+    parser_available(),
+    "needs the optional esprima AST parser (pip install esprima)",
+)
+
+
 
 class ModuleDiscoveryTest(unittest.TestCase):
+    @requires_ast_parser
     def test_ast_layer_finds_imports_requires_and_dynamic_import(self):
         content = """
         import x from "./a.js";
