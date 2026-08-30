@@ -2796,28 +2796,6 @@ main[id] {
   scroll-margin-top: 96px;
 }
 
-/* Skip link: off-screen until focused, then pinned to the top. */
-.skip-link {
-  position: fixed;
-  top: -60px;
-  left: 16px;
-  z-index: 200;
-  padding: 10px 16px;
-  border-radius: 10px;
-  background: #22d3ee;
-  color: #04121f;
-  font-size: 13px;
-  font-weight: 700;
-  text-decoration: none;
-  transition: top 0.2s ease;
-}
-
-.skip-link:focus {
-  top: 14px;
-  outline: 2px solid #a78bfa;
-  outline-offset: 2px;
-}
-
 /* Menu toggle -- only shown where the nav collapses. */
 .nav-toggle {
   display: none;

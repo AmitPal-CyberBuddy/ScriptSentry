@@ -35,12 +35,11 @@
   <script src="config.js"></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to Content</a>
   <canvas id="particles" aria-hidden="true"></canvas>
   <div class="bg-glow bg-glow-1"></div>
   <div class="bg-glow bg-glow-2"></div>
   <div class="bg-glow bg-glow-3"></div>
-  <a class="skip-link" href="#console">Skip to the analyzer</a>
+  <a class="skip-link" href="#console">Skip to the Analyzer</a>
 
   <!-- ============================ Header ============================ -->
   <header class="site-header" id="site-header">
@@ -104,7 +103,7 @@
       </p>
       <div class="hero-cta">
         <a class="btn ghost" href="index.html">🏠 Back to overview</a>
-        <button class="btn ghost" id="hero-setup" type="button">🛠️ Setup guide</button>
+        <button class="btn ghost" id="hero-setup" type="button">🛠️ Setup Guide</button>
       </div>
     </section>
 
@@ -147,7 +146,7 @@
                 <input id="file-input" type="file" multiple
                        accept=".js,.mjs,.cjs,.jsx,.ts,.map,.txt,text/javascript,application/javascript" hidden />
                 <div class="dropzone-ico">📄</div>
-                <div><b>Click to browse</b> or drag &amp; drop <code>.js</code> / <code>.mjs</code> files</div>
+                <div><b>Click to Browse</b> or drag &amp; drop <code>.js</code> / <code>.mjs</code> files</div>
                 <div class="dropzone-sub">Files are read in your browser and analyzed by the local engine only — nothing is uploaded to a cloud.</div>
               </label>
               <div id="file-list" class="file-list"></div>
@@ -398,16 +397,16 @@
 
       <nav class="footer-col" aria-label="Product">
         <h3>Product</h3>
-        <a href="tool.html">⚡ Open the analyzer</a>
-        <a href="index.html#features">🔎 What it finds</a>
-        <a href="index.html#how">🧭 How it works</a>
+        <a href="tool.html">⚡ Open the Analyzer</a>
+        <a href="index.html#features">🔎 What It Finds</a>
+        <a href="index.html#how">🧭 How It Works</a>
         <a href="index.html#setup">🛠️ Run Your Own Engine</a>
       </nav>
 
       <nav class="footer-col" aria-label="Project">
         <h3>Project</h3>
-        <a href="https://github.com/AmitPal-CyberBuddy/ScriptSentry" target="_blank" rel="noopener noreferrer">🐙 GitHub repository</a>
-        <a href="https://github.com/AmitPal-CyberBuddy/ScriptSentry/issues" target="_blank" rel="noopener noreferrer">🐞 Report an issue</a>
+        <a href="https://github.com/AmitPal-CyberBuddy/ScriptSentry" target="_blank" rel="noopener noreferrer">🐙 GitHub Repository</a>
+        <a href="https://github.com/AmitPal-CyberBuddy/ScriptSentry/issues" target="_blank" rel="noopener noreferrer">🐞 Report an Issue</a>
         <a href="https://github.com/AmitPal-CyberBuddy/ScriptSentry/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer">📜 Changelog</a>
         <a href="https://github.com/AmitPal-CyberBuddy/ScriptSentry/blob/main/README.md" target="_blank" rel="noopener noreferrer">📖 Documentation</a>
       </nav>
@@ -416,17 +415,17 @@
         <h3>Connect</h3>
         <a href="mailto:amitpal.secure@gmail.com">✉️ amitpal.secure@gmail.com</a>
         <a href="https://www.linkedin.com/in/amitpal-wb/" target="_blank" rel="noopener noreferrer">💼 LinkedIn</a>
-        <a href="index.html#connect">🤝 Feedback &amp; ideas</a>
-        <a href="index.html#connect">🧪 Next: bundle diffing</a>
+        <a href="index.html#connect">🤝 Feedback &amp; Ideas</a>
+        <a href="index.html#connect">🧪 Next: Bundle Diffing</a>
       </nav>
     </div>
 
     <div class="footer-legal">
       <p>
-        ⚖️ <b>Authorized testing only.</b> Only scan applications and systems you own or have
-        explicit written permission to test. You are responsible for complying with all
-        applicable laws and the target's terms of service. ScriptSentry provides triage signals,
-        not proof of exploitation — verify every finding.
+        ⚖️ <b>Authorized testing only.</b> Scan only what you own or have written permission
+        to test. ScriptSentry gives you triage signals, not proof — verify every finding before
+        you act on it. You are responsible for complying with all applicable laws and the
+        target's terms of service.
       </p>
       <p class="footer-meta">
         ScriptSentry · JS Intelligence Studio · <strong>private &amp; free</strong> ·
@@ -445,9 +444,9 @@
         <div>
           <h2 id="privacy-title">Run it locally — it's free &amp; private</h2>
           <p class="modal-head-sub">
-            You're viewing the <b>hosted interface</b>. For privacy, ScriptSentry never sends
-            your code to a cloud. Start the local engine, then this page connects to it
-            automatically. Pick the easiest option:
+            You're viewing the <b>hosted interface</b>. For privacy, I never see what you
+            analyze — the code stays on your machine. Start the local engine, and this
+            page connects to it automatically. Pick the easiest option:
           </p>
         </div>
       </div>
@@ -456,7 +455,7 @@
         <div class="modal-col">
           <div class="setup-toggle" role="tablist">
             <button class="setup-tab active" data-setup="easy" role="tab">⭐ Easiest: one file</button>
-            <button class="setup-tab" data-setup="clone" role="tab">🐙 Clone the repo</button>
+            <button class="setup-tab" data-setup="clone" role="tab">🐙 Clone the Repo</button>
           </div>
 
           <div class="setup-pane" data-setup-pane="easy">
@@ -490,7 +489,7 @@ python3 scriptsentry.py --port 8000</pre>
               <li><b>Open a terminal</b> inside the project folder.</li>
               <li><b>Install deps:</b> <code>pip install -r requirements.txt</code></li>
               <li><b>Start the server:</b> <code>python3 server.py --port 8000</code></li>
-              <li><b>Keep this page open</b> and press <em>Retry connection</em>.</li>
+              <li><b>Keep this page open</b> and press <em>Retry Connection</em>.</li>
             </ol>
             <div class="code-box">
               <pre id="setup-code-clone-modal">git clone https://github.com/AmitPal-CyberBuddy/ScriptSentry.git
@@ -532,7 +531,7 @@ python3 server.py --port 8000</pre>
 
           <div class="modal-actions">
             <button class="btn secondary" id="close-modal">Got it</button>
-            <button class="btn" id="retry-backend">🔄 Retry connection</button>
+            <button class="btn" id="retry-backend">🔄 Retry Connection</button>
           </div>
         </div>
       </div>
