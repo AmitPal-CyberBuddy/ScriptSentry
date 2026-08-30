@@ -164,6 +164,36 @@ release yet.
   parser state at startup, and the console warns when a scan ran in fallback
   mode. Tests that require the AST layer skip cleanly when esprima is absent.
 
+### Navigation and content cleanup
+- **The footer's "Project" column implied pages that do not exist.**
+  Separate "Changelog", "Documentation" and "Report an Issue" entries all
+  pointed at the same GitHub repo, each labelled as though it were its own
+  destination. They are now a single entry — "GitHub · source, docs &
+  changelog" — which is honest about where it goes.
+- **"Report an Issue" moved into Connect.** It no longer sits as its own
+  footer entry. The Connect section now leads with it: what to send, plus
+  the issue tracker alongside email and LinkedIn.
+- **Removed the "Next: Bundle Diffing" footer link.** It looked like a
+  roadmap page but only scrolled to the contact section. The roadmap is
+  real content and stays in the Connect card, clearly labelled as what is
+  next on the bench — it is not navigation.
+- **Removed the duplicated "Feedback & Ideas" footer link,** which the
+  header already covers.
+- **Footers are three columns** (Brand / Product / Connect) instead of
+  four, on both pages.
+- **Removed repeated copy.** The footer brand paragraph restated the hero
+  paragraph almost verbatim; it is now a single line. The Connect card's
+  heading repeated its own section introduction. And "authorized testing
+  only" appeared three times on the landing page — the setup dialog's copy
+  is gone, since the hero notice and the persistent footer already carry
+  it. The console page keeps its dialog notice because it has no hero
+  notice to rely on.
+- **Tests.** 11 new link-integrity tests: internal links resolve, in-page
+  and cross-page anchors have targets, assets exist, `target="_blank"`
+  carries `rel="noopener"`, no placeholder hrefs, and three guardrails on
+  footer quality (no dead-end links, no repeating one destination, no
+  sitemap-length footers). All mutation-tested.
+
 ### Responsive QA pass -- composition, not just fit
 - **Stat tiles were 360px boxes on a tablet.** The generic `.grid-4`
   ladder dropped the four metric tiles to two tracks between 640 and

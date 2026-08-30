@@ -2727,7 +2727,7 @@ main.wrap {
   /* minmax(0, ...) on every track: the brand column holds a long
      sentence and the link columns hold URLs, and a bare 1fr track
      refuses to shrink below its content. */
-  grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr));
   gap: var(--space-md);
 }
 
