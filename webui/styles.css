@@ -3582,3 +3582,186 @@ main[id] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ============================================================
+   CHANGELOG PAGE
+   ------------------------------------------------------------
+   A release log is a document, not a dashboard: one reading
+   column, real headings, and a rule between releases instead of
+   a card per entry. Nothing here invents a new colour or type
+   size -- it reuses the landing page's prose measure, the console
+   hero's H1 and the shared code/notice treatments, so the page
+   reads as part of the same product.
+
+   Responsiveness comes from the measure itself, not from
+   breakpoints: .wrap--prose caps the column at 72ch, so a phone,
+   a tablet and a 2560px display all get the same readable line
+   and simply differ in margin. The only width rule below is the
+   one for the two back-links, which are the only elements with an
+   intrinsic side-by-side layout.
+   ============================================================ */
+
+.changelog-intro {
+  max-width: 720px;
+  margin: var(--space-md) auto var(--space-lg);
+  text-align: center;
+}
+
+.changelog-intro h1 {
+  margin: 0;
+  font-size: clamp(1.9rem, 1.1rem + 3.4vw, 3.25rem);
+  line-height: 1.08;
+  letter-spacing: -0.035em;
+  font-weight: 900;
+  background: linear-gradient(90deg, #e6eefc 0%, #7dd3fc 45%, #c4b5fd 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Preamble: how to read this file, plus the pre-release notice. */
+.changelog > p {
+  margin: 0 0 var(--space-md);
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.75;
+  text-align: center;
+}
+
+.changelog > blockquote {
+  margin: 0 0 var(--space-lg);
+  padding: 16px 18px;
+  border-left: 3px solid rgba(255, 159, 67, 0.55);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: rgba(255, 159, 67, 0.07);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+}
+
+.changelog > blockquote strong {
+  color: var(--text);
+}
+
+/* One rule between releases: a divider reads as a timeline. A card
+   per release would turn a two-entry log into a wall of boxes. */
+.release {
+  margin-top: var(--space-lg);
+  padding-top: var(--space-md);
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.release:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.release h2,
+.release h3 {
+  scroll-margin-top: clamp(76px, 9vw, 104px);
+}
+
+.release h2 {
+  margin: 0 0 var(--space-sm);
+  font-size: clamp(1.3rem, 1.02rem + 1.2vw, 1.9rem);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.release h2 + p {
+  margin: 0 0 var(--space-sm);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+}
+
+.release h3 {
+  margin: var(--space-md) 0 var(--space-xs);
+  font-size: var(--fs-h4);
+  line-height: 1.35;
+  color: #dbe7ff;
+}
+
+.release ul {
+  margin: 0 0 var(--space-xs);
+  padding-left: 1.15em;
+}
+
+.release li {
+  margin-bottom: 12px;
+  color: var(--muted);
+  line-height: 1.75;
+  /* Long file paths and tokens wrap rather than pushing the reading
+     column wider than the viewport. */
+  overflow-wrap: break-word;
+}
+
+.release li:last-child {
+  margin-bottom: 0;
+}
+
+.release li::marker {
+  color: var(--primary);
+}
+
+.release strong {
+  color: #dbe7ff;
+  font-weight: 600;
+}
+
+.release code,
+.changelog > p code,
+.changelog > blockquote code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(34, 211, 238, 0.12);
+  color: #7dd3fc;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.88em;
+  overflow-wrap: anywhere;
+}
+
+.release a,
+.changelog > p a {
+  color: var(--primary-2);
+  text-decoration: underline;
+  text-decoration-color: rgba(56, 189, 248, 0.4);
+  text-underline-offset: 2px;
+}
+
+.changelog-back {
+  margin-top: var(--space-xl);
+  padding-top: var(--space-md);
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 2.2;
+  text-align: center;
+}
+
+.changelog-back a {
+  display: inline-block;
+  padding: 6px 4px;
+  color: var(--primary-2);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.changelog-back a:hover {
+  text-decoration: underline;
+}
+
+/* The two back-links share a line until the prose column is too
+   narrow for both, then they stack. */
+@media (max-width: 520px) {
+  .changelog-back {
+    line-height: 1.9;
+  }
+
+  .changelog-back a {
+    display: block;
+    padding: 4px 0;
+  }
+}

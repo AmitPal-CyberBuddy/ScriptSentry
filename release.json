@@ -4,7 +4,7 @@
   "release_type": "dev",
   "status": "under development",
   "published": false,
-  "date": "2026-08-29",
+  "date": "2026-08-30",
   "engine": "ScriptSentry Analyzer",
   "tagline": "Watch every line. Detect every risk.",
   "notice": "Under active development — not a published/stable release. Expect breaking changes; do not treat findings or scores as production-grade yet.",
@@ -30,7 +30,12 @@
     "Fixed the launcher download button: cross-origin `download` was ignored by browsers, so the file opened instead of downloading; it now saves via a same-origin blob URL (with a new-tab fallback).",
     "Engine status is an animated pulsing indicator (green/amber/red) instead of a static emoji, and clicking it opens the setup guide.",
     "Setup dialog is wider on large screens (two-column, 900px) and has an X close button, backdrop/Escape dismissal, scroll lock and focus handling.",
-    "Target URL and pairing-token inputs are now properly styled (they previously fell through the CSS and rendered unstyled)."
+    "Target URL and pairing-token inputs are now properly styled (they previously fell through the CSS and rendered unstyled).",
+    "Changelog is now a real hosted page (webui/changelog.html) generated from CHANGELOG.md, so the site can never drift from the file that gets edited.",
+    "Two guards keep the generated page honest: a test fails when the committed page is stale, and the Pages workflow regenerates it on every deploy.",
+    "The changelog page is styled as a document -- one 72ch reading column, a rule between releases, no new colours or type sizes, responsive from the measure itself.",
+    "README.md is visitor-facing: it leads with what ScriptSentry is and how to use it, rather than reading as developer notes.",
+    "Footer trimmed from nine links to six; the Product column no longer repeats sections the header nav already reaches."
   ],
   "compatibility": {
     "python": ">=3.8",

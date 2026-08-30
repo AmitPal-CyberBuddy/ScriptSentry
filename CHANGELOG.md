@@ -332,6 +332,30 @@ release yet.
   pre-release badge is gone from the hosted pages (it stays in the local engine
   banner, the HTML/TXT report footer and `/api/health`).
 
+### Changelog page, docs metadata and navigation cleanup
+- **The changelog is a real page now.** `Changelog` used to link into the
+  repository, which on a static site means a visitor lands on a file listing
+  instead of a page. `webui/changelog.html` is now generated from this file by
+  `tools/build_changelog.py`, so the hosted page cannot drift from the
+  changelog a person edits. The page reuses `index.html`'s head, header and
+  footer, so navigation and metadata changes land on it automatically.
+- **Two guards keep that honest.** `tests/test_docs.py` fails when the
+  committed page is out of date (verified by mutation testing), and the Pages
+  workflow regenerates it on every deploy as a safety net. The generated file
+  carries a "do not edit by hand" banner.
+- **The changelog page is styled as a document, not a dashboard**: one reading
+  column at the 72ch prose measure, a rule between releases instead of a card
+  per entry, and no new colours or type sizes. Responsiveness comes from the
+  measure itself — a phone, a tablet and a 2560px display all get the same
+  readable line — with a single width rule for the two back-links.
+- **The footer is a wayfinding list again, not a sitemap.** It had grown to
+  nine links, three of which repeated sections the header nav already reaches.
+  The Product column now carries only the two destinations the header does not
+  route to (the analyzer and the changelog) alongside Connect.
+- **`README.md` is visitor-facing.** It now leads with what ScriptSentry is and
+  how to use it, rather than reading as developer notes; internal detail moved
+  to the docs it belongs in.
+
 ## [2.1.0] — earlier release
 - Modular `webui` / `server.py` / `core` / `analyzers` architecture.
 - Script inventory & behavior intelligence, first/third-party attribution,
