@@ -415,6 +415,98 @@
     initScrollProgress();
     initNavSpy();
     initMobileNav();
+    initHelpTips();
+  }
+
+  /* ---------------- Help tooltips on touch ----------------
+   * The tips are CSS-only on hover, which no phone has. Tap, click,
+   * Enter and Space now toggle them, and a floating tip that would
+   * hang off the edge of the viewport is nudged back into view.
+   * (On touch/narrow screens CSS renders the tip inline instead, so
+   * there is nothing to nudge and nothing that can clip.) */
+  function initHelpTips() {
+    const tips = $$(".help");
+    if (!tips.length) return;
+
+    // Matches the inline-expansion media query in styles.css.
+    const inlineMode = window.matchMedia("(max-width: 700px), (pointer: coarse)");
+
+    const closeAll = (except) => {
+      tips.forEach((tip) => {
+        if (tip !== except) {
+          tip.classList.remove("is-open");
+          tip.setAttribute("aria-expanded", "false");
+        }
+      });
+    };
+
+    // Keep a floating tip inside the viewport by shifting it sideways.
+    const nudgeIntoView = (tip) => {
+      if (inlineMode.matches) {
+        tip.style.removeProperty("--tip-shift");
+        return;
+      }
+      const width = parseFloat(getComputedStyle(tip, "::after").width) || 0;
+      if (!width) return;
+      const rect = tip.getBoundingClientRect();
+      const center = rect.left + rect.width / 2;
+      const margin = 10;
+      const left = center - width / 2;
+      const right = center + width / 2;
+      let shift = 0;
+      if (left < margin) shift = margin - left;
+      else if (right > window.innerWidth - margin) shift = window.innerWidth - margin - right;
+      tip.style.setProperty("--tip-shift", `${Math.round(shift)}px`);
+    };
+
+    tips.forEach((tip) => {
+      // A disclosure, not a button-with-action, so the state is exposed.
+      tip.setAttribute("role", "button");
+      tip.setAttribute("aria-label", `What is this? ${tip.getAttribute("data-tip") || ""}`.trim());
+      tip.setAttribute("aria-expanded", "false");
+
+      const toggle = (event) => {
+        if (event) event.preventDefault();
+        const open = !tip.classList.contains("is-open");
+        closeAll(tip);
+        tip.classList.toggle("is-open", open);
+        tip.setAttribute("aria-expanded", open ? "true" : "false");
+        if (open) nudgeIntoView(tip);
+      };
+
+      tip.addEventListener("click", toggle);
+
+      // A <span> does not fire click for Enter/Space the way a button
+      // does, so keyboard activation is wired up explicitly.
+      tip.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+          toggle(event);
+        }
+      });
+
+      // Blur closes a focus-opened tip; a tapped one stays until dismissed.
+      tip.addEventListener("blur", () => {
+        tip.classList.remove("is-open");
+        tip.setAttribute("aria-expanded", "false");
+      });
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest(".help")) closeAll(null);
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeAll(null);
+    });
+
+    // A tip measured at one width is wrong at another.
+    window.addEventListener("resize", () => {
+      tips.forEach((tip) => {
+        tip.style.removeProperty("--tip-shift");
+        tip.classList.remove("is-open");
+        tip.setAttribute("aria-expanded", "false");
+      });
+    });
   }
 
   /* Below 1040px the section links collapse behind a menu button. Without
@@ -609,18 +701,37 @@
 
   function initParticles() {
     const canvas = $("#particles");
+    if (!canvas) return;
     const ctx = canvas.getContext("2d");
     const colors = ["#22d3ee", "#38bdf8", "#a78bfa", "#f472b6"];
     let particles = [];
     let raf = 0;
+    let w = 0;
+    let h = 0;
+    let dpr = 1;
 
-    function resize() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      const count = Math.min(90, Math.floor(window.innerWidth / 16));
+    // Fewer, slower particles on a phone: a 90-particle animation loop
+    // competes with the analyzer for the main thread on weak hardware.
+    const budget = () => {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return 0;
+      const narrow = window.innerWidth < 640;
+      return narrow ? 28 : 90;
+    };
+
+    function build() {
+      w = window.innerWidth;
+      h = window.innerHeight;
+      // Size the backing store in device pixels, or the field looks
+      // soft on every HiDPI phone and laptop screen.
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const count = Math.min(budget(), Math.floor(w / 16));
       particles = Array.from({ length: count }, () => ({
-        x: Math.random() * canvas.width,
-        y: Math.random() * canvas.height,
+        x: Math.random() * w,
+        y: Math.random() * h,
         r: Math.random() * 1.8 + 0.5,
         vx: (Math.random() - 0.5) * 0.28,
         vy: (Math.random() - 0.5) * 0.28,
@@ -630,7 +741,7 @@
     }
 
     function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, w, h);
       for (const p of particles) {
         ctx.beginPath();
         ctx.globalAlpha = p.a;
@@ -639,18 +750,51 @@
         ctx.fill();
         p.x += p.vx;
         p.y += p.vy;
-        if (p.x < 0) p.x = canvas.width;
-        if (p.x > canvas.width) p.x = 0;
-        if (p.y < 0) p.y = canvas.height;
-        if (p.y > canvas.height) p.y = 0;
+        if (p.x < 0) p.x = w;
+        if (p.x > w) p.x = 0;
+        if (p.y < 0) p.y = h;
+        if (p.y > h) p.y = 0;
       }
       ctx.globalAlpha = 1;
       raf = requestAnimationFrame(draw);
     }
 
-    resize();
-    window.addEventListener("resize", resize);
-    draw();
+    build();
+
+    /* Rebuilding the field on every resize event is both wasteful and
+     * visibly wrong on mobile: showing/hiding the URL bar fires resize
+     * continuously as the page scrolls, which used to scatter every
+     * particle back to a new random position. Width changes are the
+     * only ones that actually require a rebuild, and they are debounced
+     * so a drag-resize or a rotate settles first. */
+    let resizeTimer = 0;
+    let lastWidth = window.innerWidth;
+    window.addEventListener("resize", () => {
+      if (window.innerWidth === lastWidth) return; // height-only: URL bar
+      lastWidth = window.innerWidth;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(build, 180);
+    });
+
+    // Rotating a phone changes both axes and must not be debounced away
+    // into a stretched canvas.
+    window.addEventListener("orientationchange", () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(build, 260);
+    });
+
+    if (particles.length) draw();
+
+    // Pause the loop when the tab is hidden.
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      } else if (!raf && particles.length) {
+        draw();
+      }
+    });
+
     window.addEventListener("beforeunload", () => cancelAnimationFrame(raf));
   }
 
@@ -1668,24 +1812,88 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       .join("");
   }
 
+  /* The radar is a <canvas>: it has no intrinsic scaling, so its
+   * backing store has to be rebuilt whenever its box changes. It used
+   * to be drawn once and then stretched by CSS after a resize or a
+   * rotation — the grid and labels drifted out of alignment with the
+   * polygon. A ResizeObserver covers both cases that matter:
+   *   - the viewport changing width
+   *   - the Overview panel being hidden and re-shown by the view tabs
+   *     (a display:none canvas measures 0 and must be redrawn)      */
+  function initChartResponsiveness() {
+    const canvas = $("#radar-chart");
+    if (!canvas) return;
+
+    const redraw = () => {
+      if (canvas.clientWidth && payload && payload.radar) renderRadar();
+    };
+
+    if (typeof ResizeObserver !== "undefined") {
+      let raf = 0;
+      let lastWidth = 0;
+      const observer = new ResizeObserver((entries) => {
+        const width = Math.round(entries[0].contentRect.width);
+        if (!width || width === lastWidth) return;
+        lastWidth = width;
+        cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(redraw);
+      });
+      observer.observe(canvas);
+      return;
+    }
+
+    // Fallback for engines without ResizeObserver.
+    let timer = 0;
+    window.addEventListener("resize", () => {
+      clearTimeout(timer);
+      timer = setTimeout(redraw, 160);
+    });
+  }
+
   function renderRadar() {
     const canvas = $("#radar-chart");
     const ctx = canvas.getContext("2d");
-    const dpr = window.devicePixelRatio || 1;
+    // Cap DPR: a 3x backing store on a phone costs memory and fill rate
+    // for a chart that is 250px wide, with no visible gain.
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const width = canvas.clientWidth || 220;
     const height = canvas.clientHeight || 220;
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
-    ctx.scale(dpr, dpr);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const data = payload.radar;
     const labels = data.labels || [];
     const values = data.values || [];
-    const cx = width / 2;
-    const cy = height / 2;
-    const radius = Math.min(width, height) / 2 - 30;
     const n = labels.length;
     if (!n) return;
+
+    /* The radius used to be min(w,h)/2 - 30: a constant that assumed a
+     * roomy card. On a phone the labels are then drawn past the left
+     * and right edges of the canvas and sliced in half.
+     *
+     * The reserve is now measured from the longest label at the real
+     * font size, and it is budgeted per axis — a label at the top of
+     * the chart only needs vertical room for one line of text, not
+     * half its own width, so the plot does not shrink more than it
+     * has to. */
+    const labelFont = Math.max(9, Math.min(11, Math.round(Math.min(width, height) / 22)));
+    const labelText = labels.map((label) => String(label).slice(0, 14));
+
+    ctx.font = `${labelFont}px Inter, sans-serif`;
+    let widest = 0;
+    for (const text of labelText) widest = Math.max(widest, ctx.measureText(text).width);
+
+    const gap = 12;
+    const halfW = width / 2;
+    const halfH = height / 2;
+    const radius = Math.max(
+      20,
+      Math.min(halfW - widest / 2 - gap, halfH - labelFont - gap),
+    );
+
+    const cx = halfW;
+    const cy = halfH;
 
     ctx.clearRect(0, 0, width, height);
 
@@ -1716,13 +1924,13 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       ctx.strokeStyle = "rgba(142,162,193,0.16)";
       ctx.stroke();
 
-      const lx = cx + Math.cos(angle) * (radius + 18);
-      const ly = cy + Math.sin(angle) * (radius + 18);
+      const lx = cx + Math.cos(angle) * (radius + gap);
+      const ly = cy + Math.sin(angle) * (radius + gap);
       ctx.fillStyle = "#8ea2c1";
-      ctx.font = "10px Inter, sans-serif";
+      ctx.font = `${labelFont}px Inter, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(labels[i].slice(0, 14), lx, ly);
+      ctx.fillText(labelText[i], lx, ly);
     }
 
     // polygon
@@ -1918,6 +2126,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
   function init() {
     initParticles();
     initChrome();
+    initChartResponsiveness();
     if (isToolPage()) initTool();
     checkBackend().then(scheduleEnginePoll);
     document.addEventListener("visibilitychange", () => {

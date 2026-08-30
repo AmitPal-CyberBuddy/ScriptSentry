@@ -164,6 +164,55 @@ release yet.
   parser state at startup, and the console warns when a scan ran in fallback
   mode. Tests that require the AST layer skip cleanly when esprima is absent.
 
+### Responsive design system
+- **Mobile navigation was unreachable.** `.nav-toggle` is `display: none`
+  by default, and the override that reveals it below 1040px sat ~370 lines
+  *earlier* in the stylesheet. A media query is not a specificity bump, so
+  the base rule won and the menu button never rendered — below 1040px the
+  nav links were set to `opacity: 0` with nothing able to reveal them. The
+  collapsed-nav block now sits at the end of the file, where it belongs.
+- **A fluid design-token layer.** Gutters, vertical rhythm, radii,
+  container widths and a full type scale are now `clamp()`-based custom
+  properties, so 600px and 1200px are designed widths rather than sizes
+  the layout merely survives. Breakpoints now only appear where the
+  *architecture* changes (column counts, nav mode, modal → sheet).
+- **Grids can shrink.** Every `1fr` track is now `minmax(0, 1fr)`. A bare
+  `1fr` resolves to `minmax(auto, 1fr)` and refuses to shrink below its
+  content, which is what pushed the page into horizontal scroll.
+  `auto-fit` minimums are wrapped in `min(100%, Npx)` so a grid can never
+  demand a track wider than its container.
+- **Tooltips work on touch.** The `?` hints were 15×15px, hover-only, and
+  opened a fixed 230px popover centred on the dot — untappable, and
+  clipped off the right edge at any narrow width. They now have a 44px
+  hit area, open on tap / click / Enter / Space, are nudged back into the
+  viewport when a trigger sits near an edge, and on touch or narrow
+  screens expand inline under their label instead of floating.
+- **Charts follow their container.** The radar canvas was sized once from
+  `clientWidth` and never redrawn, so it stretched after a resize or a
+  rotation. A `ResizeObserver` now redraws it, which also covers the
+  Overview panel being hidden and re-shown by the view tabs. Its label
+  reserve is measured from the longest label instead of a fixed 30px, so
+  labels no longer slice off at phone widths.
+- **The particle field no longer thrashes.** It rebuilt every particle on
+  every resize event, and mobile browsers fire resize continuously as the
+  URL bar hides while scrolling. Width-only changes now matter, they are
+  debounced, and the canvas is DPR-aware.
+- **Modals become bottom sheets** on phones: full-width, thumb-reachable,
+  `dvh`-capped (with a `vh` fallback) so content is not hidden behind
+  browser chrome, with a 44px close button and safe-area padding.
+- **Touch targets.** On coarse pointers every tab, button, pill, select
+  and row control gets a 44px minimum, rather than asking a thumb to hit
+  a 31px target.
+- **Type is readable.** 23 declarations below 11.5px were raised onto the
+  fluid scale — the clamps lift small screens the most and move desktop by
+  at most ~1.5px. The base size moved from `<html>` to `<body>`: setting
+  it on the root redefines `rem`, which made every `clamp()` scale twice
+  over and overrode the visitor's own browser font size.
+- **Text no longer clipped.** 33 sub-12px labels raised onto the scale.
+- **Tests.** 15 new contract tests lock in the invariants above (grid
+  tracks, cascade order, viewport units, type floor, touch targets,
+  breakpoints), each verified by mutation testing.
+
 ### Scan pipeline, progress and reporting accuracy
 - **Explicit pipeline stages.** A scan is now modelled as Recon → Discover →
   Download → Normalize → Analyze → Correlate → Verify → Report
