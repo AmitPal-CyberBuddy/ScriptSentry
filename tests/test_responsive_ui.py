@@ -61,6 +61,74 @@ def line_of(needle):
     return None
 
 
+def _media_ranges():
+    out = []
+    for m in re.finditer(r"@media[^{]*\{", CSS_NC):
+        depth, i = 1, m.end()
+        while i < len(CSS_NC) and depth:
+            depth += CSS_NC[i] == "{"
+            depth -= CSS_NC[i] == "}"
+            i += 1
+        out.append((m.start(), i, CSS_NC[m.start():m.end()]))
+    return out
+
+
+MEDIA_RANGES = _media_ranges()
+
+
+def _media_cond_at(pos):
+    for start, end, head in MEDIA_RANGES:
+        if start <= pos < end:
+            return head
+    return None
+
+
+def _matches(cond, width):
+    if not cond:
+        return True
+    for part in re.split(r"\band\b", cond.replace("@media", "").strip().strip("{}()")):
+        part = part.strip().strip("()")
+        if part.startswith("prefers-") or part.startswith("pointer"):
+            return False
+        m = re.match(r"(min|max)-width:\s*([0-9]+)px", part)
+        if not m:
+            return False
+        kind, val = m.group(1), int(m.group(2))
+        if kind == "min" and width < val:
+            return False
+        if kind == "max" and width > val:
+            return False
+    return True
+
+
+def resolve_at(selector, prop, width):
+    """Cascade-last value of `prop` for `selector` at a viewport width."""
+    value = None
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", CSS_NC):
+        if any(a <= m.start() < b for a, b, _ in MEDIA_RANGES):
+            # inside some @media body -- check that block's condition
+            pass
+        sel = m.group(1).strip()
+        if sel.startswith("@"):
+            continue
+        if not _matches(_media_cond_at(m.start()), width):
+            continue
+        for part in [x.strip() for x in sel.split(",")]:
+            if part != selector:
+                continue
+            dm = re.search(r"(?:^|;)\s*" + re.escape(prop) + r"\s*:\s*([^;]+)",
+                           m.group(2))
+            if dm:
+                value = dm.group(1).strip()
+    return value
+
+
+def track_count(value):
+    m = re.match(r"repeat\(\s*(\d+)\s*,", value or "")
+    return int(m.group(1)) if m else (1 if value else 0)
+
+
+
 class GridTrackTest(unittest.TestCase):
     """Grid tracks must be able to shrink below their content width."""
 
@@ -91,6 +159,85 @@ class GridTrackTest(unittest.TestCase):
             [], offenders,
             "auto-fit tracks with a hard px minimum overflow any container "
             "narrower than that minimum. Wrap it: minmax(min(100%, Npx), 1fr).",
+        )
+
+
+class GridCompositionTest(unittest.TestCase):
+    """Item counts that do not divide by every track count need care."""
+
+    @staticmethod
+    def _rule_body(selector):
+        m = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", CSS_NC)
+        return m.group(1) if m else ""
+
+    def test_steps_never_land_on_three_tracks(self):
+        """Four step cards on three tracks leave one stranded alone."""
+        body = self._rule_body(".steps")
+        self.assertIn("grid-template-columns", body)
+        self.assertNotIn(
+            "auto-fit", body,
+            "auto-fit puts 4 steps on 3 tracks between ~880 and ~1170px, "
+            "stranding a single card on its own row. Use an explicit "
+            "4 / 2 / 1 ladder -- those are the counts 4 divides into.",
+        )
+        # The ladder itself: 4 tracks by default, 2 and 1 on the way down.
+        self.assertIn("@media (max-width: 880px)", CSS_NC)
+        self.assertIn("@media (max-width: 560px)", CSS_NC)
+
+    def test_feature_grid_is_capped_at_four_tracks(self):
+        """Eight feature cards on five tracks leave a lopsided 5 + 3."""
+        self.assertIn(
+            "@media (min-width: 1700px)", CSS_NC,
+            "auto-fit reaches 5 tracks on a wide monitor; cap it at 4 so "
+            "the eight cards form two even rows.",
+        )
+
+    def test_metric_tiles_stay_four_up_on_a_tablet(self):
+        """Four stat tiles on two tracks are 360px boxes -- mostly air."""
+        for width in (768, 820, 1024, 1280, 1440):
+            self.assertEqual(
+                4, track_count(resolve_at("#metrics.grid-4",
+                                          "grid-template-columns", width)),
+                f"#{width}px: stat tiles dropped below four across, which "
+                "leaves a 42px number adrift in a very wide card.",
+            )
+
+    def test_metric_tiles_go_two_up_on_a_phone(self):
+        for width in (320, 414, 600):
+            self.assertEqual(
+                2, track_count(resolve_at("#metrics.grid-4",
+                                          "grid-template-columns", width)),
+                f"#{width}px: four stat tiles do not fit across a phone.",
+            )
+
+    def test_grids_never_produce_a_single_track_wider_than_700px(self):
+        """Two-up cards stop reading as cards past ~700px.
+
+        Calibrated against the bug it guards: widening the console
+        container produced 750-830px tracks on a 1920px screen, which
+        turned the overview cards into letterboxes. Two-up at ~600px is
+        normal for a dashboard and passes.
+        """
+        for width in (768, 1024, 1280, 1920, 2560):
+            for selector in (".grid-2", ".grid-3"):
+                n = track_count(resolve_at(selector, "grid-template-columns", width))
+                if not n:
+                    continue
+                avail = min(width, 1440) - 2 * 40
+                self.assertLessEqual(
+                    (avail - (n - 1) * 18) / n, 700,
+                    f"{selector} at {width}px produces over-wide cards.",
+                )
+
+    def test_console_container_is_not_wider_than_the_content_column(self):
+        """A wider console only stretched the two-up overview cards."""
+        m = re.search(r"--container-wide:\s*([0-9]+)px", CSS_NC)
+        self.assertIsNotNone(m, "--container-wide must be defined")
+        self.assertLessEqual(
+            int(m.group(1)), 1400,
+            "Widening the console past the landing measure turned the "
+            "two-up overview cards into letterboxes; its density is "
+            "vertical (lists), not horizontal.",
         )
 
 

@@ -34,11 +34,18 @@
      keeps growing a little on very large screens so content never
      looks pasted onto an empty canvas. */
   --gutter: clamp(14px, 1vw + 10px, 40px);
-  --gutter-wide: clamp(16px, 2.2vw, 56px);
+  /* Only marginally larger than --gutter. The two containers are now
+     the same width, so a much wider console gutter read as an
+     inconsistency when moving between the two pages. */
+  --gutter-wide: clamp(16px, 1.2vw + 12px, 44px);
 
   /* ---- containers ---- */
   --container: 1280px;        /* editorial / landing content */
-  --container-wide: 1440px;   /* the console: dense, wants room */
+  /* The console's density is vertical -- long finding and script
+     lists -- not horizontal. Widening it past the landing measure
+     only stretched the two-up overview cards into letterboxes, so it
+     stays close to --container and keeps the two pages consistent. */
+  --container-wide: 1280px;
   --container-prose: 72ch;    /* long-form reading measure     */
 
   /* ---- fluid vertical rhythm ---- */
@@ -208,14 +215,14 @@ body {
 @media (min-width: 1600px) {
   :root {
     --container: 1360px;
-    --container-wide: 1520px;
+    --container-wide: 1340px;
   }
 }
 
 @media (min-width: 2200px) {
   :root {
     --container: 1440px;
-    --container-wide: 1680px;
+    --container-wide: 1400px;
   }
 }
 
@@ -662,7 +669,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  padding: var(--space-sm) var(--space-md);
   border-bottom: 1px solid var(--panel-border);
 }
 
@@ -710,7 +717,7 @@ body {
 }
 
 .console-body {
-  padding: 20px;
+  padding: var(--space-md);
 }
 
 .pane {
@@ -1127,7 +1134,7 @@ select {
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   box-shadow: var(--shadow);
-  padding: 20px;
+  padding: clamp(16px, 1.8vw, 22px);
   position: relative;
   overflow: hidden;
   transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
@@ -1190,13 +1197,19 @@ select {
 .gauge-wrap {
   display: flex;
   align-items: center;
-  gap: 22px;
+  justify-content: center;
+  gap: clamp(16px, 2vw, 26px);
 }
 
+/* The dial was a fixed 150px while its card grew to 600px+ on a
+   laptop and 750px on a wide monitor, leaving the gauge and its
+   caption huddled against the left edge with a third of the card
+   empty. The dial now grows with the space available and the pair is
+   centred, so the card reads as composed rather than half-filled. */
 .gauge {
   flex: 0 0 auto;
-  width: 150px;
-  height: 150px;
+  width: clamp(120px, 11vw, 180px);
+  height: clamp(120px, 11vw, 180px);
 }
 
 .gauge svg {
@@ -1386,6 +1399,44 @@ select {
   height: clamp(190px, 24vw, 240px);
 }
 
+/* A square SVG with `width: 100%` and a fixed height renders as a
+   centred square no wider than that height, so the donut sat in a
+   240px box with hundreds of pixels of dead space either side on a
+   wide card. Capping its width to the same value as its height keeps
+   it square and centred instead of stretched.
+
+   Whether the legend can sit *beside* the donut depends on how wide
+   the card is, not how wide the viewport is: at a 620px viewport the
+   charts are already two-up, so each card is only ~272px while at a
+   560px viewport it is the full 522px. That is a container query, not
+   a media query. Browsers without support simply keep the stacked
+   layout, which is a fine degradation. */
+.chart-card {
+  container-type: inline-size;
+}
+
+svg.chart {
+  max-width: clamp(190px, 24vw, 240px);
+  margin-inline: auto;
+}
+
+.chart-split {
+  display: grid;
+  gap: 4px;
+}
+
+@container (min-width: 340px) {
+  .chart-split {
+    grid-template-columns: minmax(0, 190px) minmax(0, 1fr);
+    align-items: center;
+    gap: clamp(14px, 2.4cqw, 24px);
+  }
+
+  .chart-split .legend {
+    margin-top: 0;
+  }
+}
+
 .legend {
   display: flex;
   flex-wrap: wrap;
@@ -1522,6 +1573,7 @@ select {
   .gauge-wrap {
     flex-direction: column;
     align-items: flex-start;
+    justify-content: flex-start;
   }
 }
 
@@ -1538,9 +1590,30 @@ select {
   }
 }
 
-/* Stat tiles stay two-up on a phone: they are small, scannable and
-   comparing two numbers side by side is the whole point. */
-@media (max-width: 620px) {
+/* Stat tiles hold one number and a short label, so they want a much
+   higher density than a content card. The generic .grid-4 ladder
+   dropped them to two ~360px boxes on a tablet -- a 42px number
+   adrift in a huge card. Four across stays legible down to ~640px
+   (170px tracks, which still fit "Actionable Findings" on one line).
+
+   Never three: four tiles in three columns leaves one orphan on its
+   own row, which reads as a mistake. */
+#metrics.grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 820px) {
+  #metrics.grid-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  /* Recover the label width lost to the narrower track. */
+  .metric {
+    padding: 16px;
+  }
+}
+
+@media (max-width: 640px) {
   #metrics.grid-4 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1581,7 +1654,7 @@ select {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  padding: 28px 18px;
+  padding: clamp(20px, 3vw, 28px) 18px;
   text-align: center;
   border: 1.5px dashed rgba(142, 162, 193, .35);
   border-radius: 14px;
@@ -1725,6 +1798,70 @@ select {
 /* Touch and narrow viewports: expand the tip inline under the label
    rather than floating it. .help goes static so the tip is laid out
    against the label and spans its full width. */
+/* Four export buttons plus a status line used to free-wrap into two
+   ragged rows of unequal buttons. Laid out as a 2x2 grid they become
+   one deliberate group with a consistent target size, and the status
+   line spans above them rather than being squeezed between buttons. */
+@media (max-width: 560px) {
+  .results-header .row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .results-header .meta {
+    grid-column: 1 / -1;
+  }
+
+  .results-header .row .btn {
+    justify-content: center;
+    text-align: center;
+  }
+}
+
+/* Five analysis views. Wrapping them freely left a short, ragged last
+   row; two columns with the fifth spanning the full width keeps every
+   view visible and the block rectangular. A horizontal scroller was
+   the alternative, but with only five short labels hiding two of them
+   off-screen costs more than the row is worth. */
+@media (max-width: 640px) {
+  .view-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .view-tab:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .view-tab {
+    width: 100%;
+    text-align: center;
+    padding: 11px 10px;
+  }
+}
+
+/* On a phone the Copy button competes with the code for the same row
+   and squeezed the snippet down to ~110px -- narrow enough that a
+   single long URL forced horizontal scrolling inside the <pre>. Stacked,
+   the snippet gets the full width and the button stays a normal
+   intrinsic-width control rather than a stretched one. */
+@media (max-width: 560px) {
+  .code-box {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .code-box > .btn {
+    align-self: flex-start;
+  }
+
+  .code-box pre {
+    font-size: var(--fs-xs);
+  }
+}
+
 @media (max-width: 700px), (pointer: coarse) {
   .field-label {
     position: relative;
@@ -2180,6 +2317,26 @@ main.wrap {
   font-size: 19px;
 }
 
+/* The two trust notices pair a 40px icon with a paragraph. In a 292px
+   card that left the text a ~198px column -- about 24 characters per
+   line, so a nine-line wall of text. Trimming the icon and the padding
+   buys back ~40px for the copy. */
+@media (max-width: 560px) {
+  .notice-card {
+    padding: 15px 16px;
+    gap: 12px;
+  }
+
+  .notice-ico {
+    flex: 0 0 32px;
+    width: 32px;
+    height: 32px;
+    font-size: 16px;
+    border-radius: 10px;
+  }
+}
+
+
 .notice-card.privacy {
   border-color: rgba(52, 211, 153, 0.28);
   background: linear-gradient(135deg, rgba(6, 44, 34, 0.55), rgba(10, 17, 34, 0.6));
@@ -2204,6 +2361,14 @@ main.wrap {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 255px), 1fr));
   gap: 16px;
+}
+
+/* Eight cards: at 1700px+ auto-fit would fit five tracks and leave a
+   lopsided 5 + 3. Four across makes two even rows of ~315px cards. */
+@media (min-width: 1700px) {
+  .feature-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 .feature-card {
@@ -2268,9 +2433,24 @@ main.wrap {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  /* Deliberately not auto-fit. Four steps divide cleanly only into 4,
+     2 or 1 columns; auto-fit lands on three between ~880 and ~1170px
+     and strands a single card on its own row. */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
   counter-reset: step;
+}
+
+@media (max-width: 880px) {
+  .steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .step-card {
@@ -2401,7 +2581,7 @@ main.wrap {
 
 .setup-card,
 .connect-card {
-  padding: 26px;
+  padding: clamp(18px, 2.4vw, 26px);
   border-radius: 20px;
   border: 1px solid var(--panel-border);
   background: linear-gradient(180deg, rgba(13, 22, 44, 0.78), rgba(8, 14, 30, 0.85));
@@ -2958,7 +3138,7 @@ main.wrap {
 
 .tool-hero {
   max-width: 760px;
-  margin: 26px auto 34px;
+  margin: var(--space-md) auto var(--space-lg);
   text-align: center;
 }
 

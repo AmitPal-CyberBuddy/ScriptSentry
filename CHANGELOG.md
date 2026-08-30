@@ -164,6 +164,50 @@ release yet.
   parser state at startup, and the console warns when a scan ran in fallback
   mode. Tests that require the AST layer skip cleanly when esprima is absent.
 
+### Responsive QA pass -- composition, not just fit
+- **Stat tiles were 360px boxes on a tablet.** The generic `.grid-4`
+  ladder dropped the four metric tiles to two tracks between 640 and
+  1000px, leaving a 42px number adrift in a huge card. They now hold
+  four across down to 640px (170px tracks, which still fit "Actionable
+  Findings" on one line) and drop to two on a phone. Never three: eight
+  would not be the issue, but four tiles on three tracks leaves an
+  orphan.
+- **The console container was over-widened.** It had been set to
+  1440-1680 on the theory that a dense tool wants more room, but the
+  console's density is vertical (long finding and script lists), not
+  horizontal. Widening only stretched the two-up overview cards into
+  750-830px letterboxes. It now tracks the landing measure.
+- **The gauge card left a third of itself empty.** The dial was a fixed
+  150px while its card grew past 600px, so the gauge and its caption
+  huddled against the left edge. The dial now scales with the space and
+  the pair is centred.
+- **The donut chart letterboxed.** A square viewBox with `width: 100%`
+  and a fixed height renders as a centred square no wider than that
+  height, so the donut sat in 240px with hundreds of pixels of dead
+  space either side. Its width is now capped to its height, and where
+  the card is wide enough the legend sits beside it rather than below.
+  That depends on the *card's* width, not the viewport's -- at a 620px
+  viewport the charts are already two-up and the card is only ~272px --
+  so it is a container query, degrading to stacked where unsupported.
+- **Two orphan-row defects.** Eight feature cards on `auto-fit` reached
+  five tracks on a wide monitor and left a lopsided 5 + 3; four step
+  cards reached three tracks between ~880 and ~1170px and stranded one
+  alone. Both now use explicit ladders whose counts divide the item
+  count evenly.
+- **Phone composition.** Four export buttons plus a status line
+  free-wrapped into ragged rows; they are now a 2x2 group with the
+  status spanning above. Five view tabs wrap to two columns with the
+  fifth spanning the full width, rather than leaving a short last line.
+  The Copy button no longer squeezes a code snippet into a ~110px
+  column, which forced horizontal scrolling for a single long URL.
+- **Spacing moved onto the fluid scale** for cards, the setup card, the
+  console head and body, the tool hero and the dropzone, so density
+  stays proportional instead of being tuned at each breakpoint. Fixed
+  26px and 20px paddings were proportionally heavy inside a 292px phone
+  card.
+- **Tests.** 6 new composition tests (grid ladders, stat density,
+  console containment, card-width ceiling), mutation-tested.
+
 ### Responsive design system
 - **Mobile navigation was unreachable.** `.nav-toggle` is `display: none`
   by default, and the override that reveals it below 1040px sat ~370 lines
