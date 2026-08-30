@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<!--
+  GENERATED FILE -- DO NOT EDIT BY HAND.
+  This page is generated from CHANGELOG.md by tools/build_changelog.py.
+  Edit the Markdown, then run: python3 tools/build_changelog.py
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Changelog — ScriptSentry</title>
+  <meta name="description" content="Every notable change to ScriptSentry, the privacy-first JavaScript security and script-behavior analyzer. Release history, accuracy improvements and dashboard updates." />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#060a13" />
+  <meta name="author" content="Amit Pal" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="robots" content="index, follow" />
+
+  <!-- Identity: favicons, app icon and social card -->
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="assets/icon-192.png" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+  <link rel="manifest" href="assets/site.webmanifest" />
+
+  <!-- Open Graph / Twitter -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="ScriptSentry" />
+  <meta property="og:title" content="ScriptSentry — Changelog" />
+  <meta property="og:description" content="Every notable change to ScriptSentry, the privacy-first JavaScript security and script-behavior analyzer. Release history, accuracy improvements and dashboard updates." />
+  <meta property="og:image" content="assets/og-card.png" />
+  <meta property="og:image:alt" content="ScriptSentry — privacy-first JavaScript security analyzer" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="ScriptSentry — Changelog" />
+  <meta name="twitter:description" content="Every notable change to ScriptSentry, the privacy-first JavaScript security and script-behavior analyzer. Release history, accuracy improvements and dashboard updates." />
+  <meta name="twitter:image" content="assets/og-card.png" />
+
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' blob: data: http://127.0.0.1:* http://localhost:* https:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none';" />
+  <link rel="canonical" href="changelog.html" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="config.js"></script>
+</head>
+<body>
+  <canvas id="particles" aria-hidden="true"></canvas>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <div class="bg-glow bg-glow-3"></div>
+  <a class="skip-link" href="#main">Skip to Content</a>
+
+<!-- ============================ Header ============================ -->
+  <header class="site-header" id="site-header">
+    <div class="header-inner">
+      <a class="brand" href="index.html" aria-label="ScriptSentry home">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" role="img" aria-hidden="true" focusable="false">
+            <defs>
+              <linearGradient id="ssMark" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#22d3ee" />
+                <stop offset="1" stop-color="#a78bfa" />
+              </linearGradient>
+            </defs>
+            <path d="M16 2.2 27.5 6v9.6c0 6.6-4.9 12.2-11.5 14.2C9.4 27.8 4.5 22.2 4.5 15.6V6z" fill="url(#ssMark)" opacity=".16" />
+            <path d="M16 2.2 27.5 6v9.6c0 6.6-4.9 12.2-11.5 14.2C9.4 27.8 4.5 22.2 4.5 15.6V6z" fill="none" stroke="url(#ssMark)" stroke-width="2.2" stroke-linejoin="round" />
+            <g fill="none" stroke="#eaf6ff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13.2 12.4 9.8 16l3.4 3.6" />
+              <path d="M18.8 12.4 22.2 16l-3.4 3.6" />
+              <path d="M17.3 11.2 14.7 20.8" />
+            </g>
+          </svg>
+        </span>
+        <span class="brand-text">
+          <span class="brand-name">ScriptSentry</span>
+          <span class="sub">JS Intelligence Studio</span>
+        </span>
+      </a>
+
+      <div class="nav-current" id="nav-current" aria-hidden="true"></div>
+      <nav class="site-nav" id="site-nav" aria-label="Main">
+        <a href="index.html#features">What It Finds</a>
+        <a href="index.html#how">How It Works</a>
+        <a href="index.html#trust">Trust</a>
+        
+        <a href="index.html#setup">Setup</a>
+        <a href="index.html#connect">Connect</a>
+      </nav>
+
+      <div class="header-actions">
+        <a class="btn btn-sm go-to-tool" href="tool.html">⚡ Go to tool</a>
+      </div>
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false"
+              aria-controls="site-nav" aria-label="Open Navigation Menu">
+        <span class="nav-toggle-bars" aria-hidden="true"></span>
+      </button>
+    </div>
+    <div class="scroll-progress" id="scroll-progress" aria-hidden="true"></div>
+  </header>
+
+  <main class="wrap wrap--prose" id="main">
+    <header class="changelog-intro">
+      <span class="section-kicker">What's new</span>
+      <h1>Changelog</h1>
+    </header>
+
+    <div class="changelog">
+        <p>All notable changes to ScriptSentry are documented here. The version number is defined in one place (<code>core/version.py</code>) and mirrored in <code>release.json</code>.</p>
+        <blockquote>🚧 <strong>Status: under active development — not yet published.</strong> The project is marked as a pre-release (<code>DEV_BUILD = True</code>, version suffix <code>-dev</code>) until the first stable release.</blockquote>
+      <section class="release" id="unreleased-2-2-0-dev">
+        <h2>[Unreleased] — 2.2.0-dev</h2>
+        <p>The 2.2.0 accuracy &amp; triage work below is in development and not a published release yet.</p>
+        <h3 id="accuracy-triage-model">Accuracy &amp; triage model</h3>
+        <ul>
+          <li>Severity, <strong>confidence</strong>, triage <strong>status</strong>, and <strong>analysis quality</strong> are now independent axes. Confidence is derived from the <em>evidence</em> (regex → low, framework/behavioral → medium, source-to-sink/runtime → high, demonstrated runtime effect → confirmed) and is never inferred from severity.</li>
+          <li>New triage vocabulary: <strong>Open · Needs review · Confirmed · False positive · Informational</strong>. Static source→sink flows are high confidence but stay <strong>Open</strong>; <strong>Confirmed</strong> is reserved for deterministic proof, a demonstrated unsafe runtime effect (e.g. live <code>eval</code>), or explicit analyst confirmation.</li>
+          <li>Runtime DOM-sink execution is high confidence / Open (exploitability not proven); WebSocket/API inventory and string timers are observations.</li>
+          <li>Findings now carry an <strong>analysis quality</strong> (<code>high</code> / <code>medium</code> / <code>heuristic</code>) plus explicit <strong>limitations</strong> (dynamic property access, unmodeled call, inter-procedural depth bound, regex fallback).</li>
+        </ul>
+        <h3 id="findings-vs-observations">Findings vs observations</h3>
+        <ul>
+          <li>Results are split into <strong>Actionable Findings</strong> (investigate/remediate) and <strong>Security Observations</strong> (interesting behavior that is not a proven vulnerability), surfaced as separate sections in the dashboard and reports.</li>
+          <li>Stronger finding identity (type + canonical source + sink + file + line + normalized flow signature) so two distinct untrusted sources reaching the same sink are no longer collapsed into one record.</li>
+        </ul>
+        <h3 id="risk-score">Risk score</h3>
+        <ul>
+          <li>New evidence-weighted <strong>0–100 risk score</strong> (<code>core/risk_model.py</code>) with a transparent <code>+points</code> contributor breakdown and an investigate-first <strong>priority list</strong>, replacing the previous unbounded category count.</li>
+        </ul>
+        <h3 id="script-discovery">Script discovery</h3>
+        <ul>
+          <li>New layered discovery (<code>core/module_discovery.py</code>): AST import/require/dynamic-<code>import()</code> first, bundler adapters (Webpack chunk maps, Vite/Rollup/Next.js/Parcel hashed assets) second, regex fallback third. Non-script references (API paths, JSON/CSS/font imports) are filtered out.</li>
+        </ul>
+        <h3 id="dashboard-ux">Dashboard UX</h3>
+        <ul>
+          <li>Primary navigation reduced from nine views to five: <strong>Overview · Findings · Scripts · Intelligence · Runtime</strong> (Assets lives under Scripts; Attack Surface / Data Flows / Secrets / Dependencies live under Intelligence).</li>
+          <li>Overview leads with "is it risky → why → what to investigate first" (priorities and score breakdown) above the charts.</li>
+          <li>Findings show confidence, analysis-quality chips, and analysis limits.</li>
+        </ul>
+        <h3 id="false-positive-discipline">False-positive discipline</h3>
+        <ul>
+          <li>Tightened credible-secret filtering (placeholders such as <code>YOUR_API_TOKEN_HERE</code>, template markers, and zeroed values are not credible).</li>
+          <li>Formal <strong>accuracy regression suite</strong> (<code>tests/test_accuracy_regression.py</code>) with TP / TN / known-FP / framework-edge / minified / obfuscated fixtures.</li>
+        </ul>
+        <h3 id="onboarding-ux">Onboarding &amp; UX</h3>
+        <ul>
+          <li><strong>Local file upload</strong>: the Paste Code tab now has a "📁 Upload files" mode — drag &amp; drop or browse multiple <code>.js</code> / <code>.mjs</code> / <code>.cjs</code> / <code>.jsx</code> / <code>.ts</code> files and analyze them in one scan with per-file attribution. Files are read in the browser and sent only to the paired local engine (nothing goes to a cloud); the server enforces an extension allow-list, a 20-file cap and a 3 MB/file limit. Content duplicates are deduped and path-like names sanitized.</li>
+          <li>Scan controls (profile, max depth, max files, workers) now have inline <strong>?</strong> tooltips explaining what each one does.</li>
+          <li>New one-file launcher <code>scriptsentry.py</code>: download a single file and run it; on first run it downloads the pinned engine from the official GitHub repo, installs dependencies and starts the dashboard (cached for later runs).</li>
+          <li>Setup modal now offers a <strong>Download scriptsentry.py</strong> button alongside the git-clone path. Native <code>alert()</code> popups are replaced with inline field validation and error messages (invalid/non-URL targets, rejected scans).</li>
+          <li>Added an <strong>authorized-testing-only</strong> notice to the page, the setup modal and the README.</li>
+        </ul>
+        <h3 id="brand-landing-page-front-end-fixes">Brand, landing page &amp; front-end fixes</h3>
+        <ul>
+          <li><strong>Two pages instead of one</strong>: <code>index.html</code> is now the overview/landing page (hero, what it finds, how it works, trust, setup, connect) and <code>tool.html</code> hosts the analysis console. Both share <code>app.js</code>, <code>styles.css</code> and <code>config.js</code>; the script detects which page it is on and only wires the analyzer when the console markup is present. <code>server.py</code> serves <code>/</code> → <code>tool.html</code> so a locally started engine opens the console, while GitHub Pages serves <code>index.html</code>.</li>
+          <li><strong>Scroll animations</strong>: sections, cards, steps and footer columns reveal as they enter the viewport (<code>IntersectionObserver</code>, staggered, unobserve after the first reveal), plus a scroll-progress bar under the sticky header and active-section highlighting in the nav. All of it is disabled under <code>prefers-reduced-motion</code>, and the hidden state is scoped to a <code>js-reveal</code> class set in <code>config.js</code> so a failed script can never blank the page.</li>
+          <li><strong>Proper headings</strong>: one <code>h1</code> per page ("Watch every line…" on the overview, "JavaScript analysis console" on the console page), <code>h2</code> per section, <code>h3</code> per card, plus a skip-to-content link and <code>aria-current</code> on the active nav link.</li>
+          <li><strong>Connect section is about ScriptSentry, not CyberBuddy.</strong> It now reads "Building ScriptSentry for analysts, with analysts" with a ScriptSentry roadmap item (build-over-build diffing and a CI gate) instead of the CyberBuddy / HAR Analyzer copy.</li>
+          <li><strong>Proper identity</strong>: real SVG logo (shield + <code>&lt;/&gt;</code> mark) rendered inline in the header and footer, plus <code>webui/assets/favicon.svg</code>, <code>favicon-32.png</code>, <code>icon-192.png</code>, <code>icon-512.png</code>, <code>apple-touch-icon.png</code>, a 1200×630 <code>og-card.png</code> and a <code>site.webmanifest</code>. The page now ships full favicon, Open Graph and Twitter card metadata instead of a bare title.</li>
+          <li><strong>Landing page</strong>: the dashboard is now a single scrollable site with a sticky header (nav + <strong>⚡ Go to tool</strong> button), hero with dual CTAs, "What it finds", "How it works", "Why it's trustworthy", "Run your own engine" and "Connect with me" sections, and a multi-column footer with legal notice.</li>
+          <li><strong>Fixed the launcher download.</strong> The setup dialog used <code>&lt;a href="raw.githubusercontent.com/…" download&gt;</code>, which browsers ignore for cross-origin targets — the file opened in a tab instead of downloading. The launcher is now fetched and saved through a same-origin blob URL, with a new-tab fallback and an inline status hint.</li>
+          <li><strong>Engine status is now an animated indicator.</strong> The header pill uses a pulsing core + expanding ring (green / amber / red) instead of a static 🟢/🔴 emoji, is clickable to open the setup guide, and is mirrored inside the setup dialog.</li>
+          <li><strong>Setup dialog</strong>: wider two-column layout on large screens (900 px), a proper <strong>× close button</strong> in the top-right, backdrop-click and Escape to dismiss, scroll lock, focus handling, and a dedicated "Pair the engine" column with the live engine state.</li>
+          <li><strong>Target URL input was unstyled</strong> (only <code>textarea</code> and <code>input[type=text]</code> were). All text/url/email/password inputs now share the themed field style, with a 🌐 prefixed URL field, a 🔑 prefixed token field, focus/hover states, placeholder colouring and a dark-mode autofill fix.</li>
+          <li><code>server.py</code> redirects the browser's automatic <code>/favicon.ico</code> probe to the real SVG asset instead of returning 404.</li>
+        </ul>
+        <h3 id="maintenance">Maintenance</h3>
+        <ul>
+          <li>Engine version centralized in <code>core/version.py</code>; added <code>release.json</code> and this changelog. TXT report no longer iterates string evidence character-by-character; CSV/SARIF export quality/limitation fields.</li>
+          <li>Test count: <strong>77+ passing</strong>.</li>
+        </ul>
+        <h3 id="audit-follow-ups-detection-quality">Audit follow-ups — detection quality</h3>
+        <ul>
+          <li><strong>One pattern catalogue.</strong> <code>core/js_patterns.py</code> is now the single source of truth for sources, sinks, crypto markers and transport calls; <code>core/taint.py</code> and the <code>analyzers/*</code> modules import from it instead of keeping private copies that could disagree.</li>
+          <li><strong>Secrets.</strong> Deduped by longest credential token (one Firebase key is now one finding, not three); public-by-design client keys (Firebase <code>apiKey</code>, Google/Stripe/Recaptcha publishable keys) are reported as inventory under <code>public_client_keys</code> instead of as secrets; real provider credentials (<code>sk_live_</code>, <code>ghp_</code>, <code>xox*-</code>, <code>AKIA…</code>, Slack/Discord webhooks) are matched by value shape rather than by a minimum length.</li>
+          <li><strong>Sensitivity.</strong> <code>sensitive_storage</code> no longer fires on any mention of <code>document.cookie</code> or on <code>sessionStorage</code> at large — it requires a sensitive key name or value, so ordinary theme/analytics storage is MEDIUM again.</li>
+          <li><strong>Secret context.</strong> <code>content.find()</code> is checked for <code>-1</code> before slicing, so a reconstructed value can no longer quote the top of the file as its context.</li>
+          <li><strong>Crypto.</strong> Word-bounded, shared markers replace the old substring test that found "DES" inside "desktopTheme" and "Hex" inside "hexagon".</li>
+          <li><strong>Taint.</strong> New sources (<code>document.baseURI</code>, <code>history.state</code>, <code>window.name</code>) and sinks (element <code>href</code>/<code>src</code> assignment, <code>setAttribute('href'|'src'|'srcdoc')</code>, jQuery <code>.html()/.append()/.prepend()/.attr()</code>) on both the AST and the line-fallback path; source markers are matched case-insensitively, which previously hid every camelCase source from the AST path.</li>
+          <li><strong>Risk floor.</strong> A single HIGH/CRITICAL severity forces at least MEDIUM regardless of how much low-tier evidence a scan produced.</li>
+          <li><strong>Parser visibility.</strong> <code>/api/health</code> and the dashboard payload now report <code>ast_parser</code> (name / available / mode / install hint), the server prints the parser state at startup, and the console warns when a scan ran in fallback mode. Tests that require the AST layer skip cleanly when esprima is absent.</li>
+        </ul>
+        <h3 id="navigation-and-content-cleanup">Navigation and content cleanup</h3>
+        <ul>
+          <li><strong>The footer's "Project" column implied pages that do not exist.</strong> Separate "Changelog", "Documentation" and "Report an Issue" entries all pointed at the same GitHub repo, each labelled as though it were its own destination. They are now a single entry — "GitHub · source, docs &amp; changelog" — which is honest about where it goes.</li>
+          <li><strong>"Report an Issue" moved into Connect.</strong> It no longer sits as its own footer entry. The Connect section now leads with it: what to send, plus the issue tracker alongside email and LinkedIn.</li>
+          <li><strong>Removed the "Next: Bundle Diffing" footer link.</strong> It looked like a roadmap page but only scrolled to the contact section. The roadmap is real content and stays in the Connect card, clearly labelled as what is next on the bench — it is not navigation.</li>
+          <li><strong>Removed the duplicated "Feedback &amp; Ideas" footer link,</strong> which the header already covers.</li>
+          <li><strong>Footers are three columns</strong> (Brand / Product / Connect) instead of four, on both pages.</li>
+          <li><strong>Removed repeated copy.</strong> The footer brand paragraph restated the hero paragraph almost verbatim; it is now a single line. The Connect card's heading repeated its own section introduction. And "authorized testing only" appeared three times on the landing page — the setup dialog's copy is gone, since the hero notice and the persistent footer already carry it. The console page keeps its dialog notice because it has no hero notice to rely on.</li>
+          <li><strong>Tests.</strong> 11 new link-integrity tests: internal links resolve, in-page and cross-page anchors have targets, assets exist, <code>target="_blank"</code> carries <code>rel="noopener"</code>, no placeholder hrefs, and three guardrails on footer quality (no dead-end links, no repeating one destination, no sitemap-length footers). All mutation-tested.</li>
+        </ul>
+        <h3 id="responsive-qa-pass-composition-not-just-fit">Responsive QA pass -- composition, not just fit</h3>
+        <ul>
+          <li><strong>Stat tiles were 360px boxes on a tablet.</strong> The generic <code>.grid-4</code> ladder dropped the four metric tiles to two tracks between 640 and 1000px, leaving a 42px number adrift in a huge card. They now hold four across down to 640px (170px tracks, which still fit "Actionable Findings" on one line) and drop to two on a phone. Never three: eight would not be the issue, but four tiles on three tracks leaves an orphan.</li>
+          <li><strong>The console container was over-widened.</strong> It had been set to 1440-1680 on the theory that a dense tool wants more room, but the console's density is vertical (long finding and script lists), not horizontal. Widening only stretched the two-up overview cards into 750-830px letterboxes. It now tracks the landing measure.</li>
+          <li><strong>The gauge card left a third of itself empty.</strong> The dial was a fixed 150px while its card grew past 600px, so the gauge and its caption huddled against the left edge. The dial now scales with the space and the pair is centred.</li>
+          <li><strong>The donut chart letterboxed.</strong> A square viewBox with <code>width: 100%</code> and a fixed height renders as a centred square no wider than that height, so the donut sat in 240px with hundreds of pixels of dead space either side. Its width is now capped to its height, and where the card is wide enough the legend sits beside it rather than below. That depends on the <em>card's</em> width, not the viewport's -- at a 620px viewport the charts are already two-up and the card is only ~272px -- so it is a container query, degrading to stacked where unsupported.</li>
+          <li><strong>Two orphan-row defects.</strong> Eight feature cards on <code>auto-fit</code> reached five tracks on a wide monitor and left a lopsided 5 + 3; four step cards reached three tracks between ~880 and ~1170px and stranded one alone. Both now use explicit ladders whose counts divide the item count evenly.</li>
+          <li><strong>Phone composition.</strong> Four export buttons plus a status line free-wrapped into ragged rows; they are now a 2x2 group with the status spanning above. Five view tabs wrap to two columns with the fifth spanning the full width, rather than leaving a short last line. The Copy button no longer squeezes a code snippet into a ~110px column, which forced horizontal scrolling for a single long URL.</li>
+          <li><strong>Spacing moved onto the fluid scale</strong> for cards, the setup card, the console head and body, the tool hero and the dropzone, so density stays proportional instead of being tuned at each breakpoint. Fixed 26px and 20px paddings were proportionally heavy inside a 292px phone card.</li>
+          <li><strong>Tests.</strong> 6 new composition tests (grid ladders, stat density, console containment, card-width ceiling), mutation-tested.</li>
+        </ul>
+        <h3 id="responsive-design-system">Responsive design system</h3>
+        <ul>
+          <li><strong>Mobile navigation was unreachable.</strong> <code>.nav-toggle</code> is <code>display: none</code> by default, and the override that reveals it below 1040px sat ~370 lines <em>earlier</em> in the stylesheet. A media query is not a specificity bump, so the base rule won and the menu button never rendered — below 1040px the nav links were set to <code>opacity: 0</code> with nothing able to reveal them. The collapsed-nav block now sits at the end of the file, where it belongs.</li>
+          <li><strong>A fluid design-token layer.</strong> Gutters, vertical rhythm, radii, container widths and a full type scale are now <code>clamp()</code>-based custom properties, so 600px and 1200px are designed widths rather than sizes the layout merely survives. Breakpoints now only appear where the <em>architecture</em> changes (column counts, nav mode, modal → sheet).</li>
+          <li><strong>Grids can shrink.</strong> Every <code>1fr</code> track is now <code>minmax(0, 1fr)</code>. A bare <code>1fr</code> resolves to <code>minmax(auto, 1fr)</code> and refuses to shrink below its content, which is what pushed the page into horizontal scroll. <code>auto-fit</code> minimums are wrapped in <code>min(100%, Npx)</code> so a grid can never demand a track wider than its container.</li>
+          <li><strong>Tooltips work on touch.</strong> The <code>?</code> hints were 15×15px, hover-only, and opened a fixed 230px popover centred on the dot — untappable, and clipped off the right edge at any narrow width. They now have a 44px hit area, open on tap / click / Enter / Space, are nudged back into the viewport when a trigger sits near an edge, and on touch or narrow screens expand inline under their label instead of floating.</li>
+          <li><strong>Charts follow their container.</strong> The radar canvas was sized once from <code>clientWidth</code> and never redrawn, so it stretched after a resize or a rotation. A <code>ResizeObserver</code> now redraws it, which also covers the Overview panel being hidden and re-shown by the view tabs. Its label reserve is measured from the longest label instead of a fixed 30px, so labels no longer slice off at phone widths.</li>
+          <li><strong>The particle field no longer thrashes.</strong> It rebuilt every particle on every resize event, and mobile browsers fire resize continuously as the URL bar hides while scrolling. Width-only changes now matter, they are debounced, and the canvas is DPR-aware.</li>
+          <li><strong>Modals become bottom sheets</strong> on phones: full-width, thumb-reachable, <code>dvh</code>-capped (with a <code>vh</code> fallback) so content is not hidden behind browser chrome, with a 44px close button and safe-area padding.</li>
+          <li><strong>Touch targets.</strong> On coarse pointers every tab, button, pill, select and row control gets a 44px minimum, rather than asking a thumb to hit a 31px target.</li>
+          <li><strong>Type is readable.</strong> 23 declarations below 11.5px were raised onto the fluid scale — the clamps lift small screens the most and move desktop by at most ~1.5px. The base size moved from <code>&lt;html&gt;</code> to <code>&lt;body&gt;</code>: setting it on the root redefines <code>rem</code>, which made every <code>clamp()</code> scale twice over and overrode the visitor's own browser font size.</li>
+          <li><strong>Text no longer clipped.</strong> 33 sub-12px labels raised onto the scale.</li>
+          <li><strong>Tests.</strong> 15 new contract tests lock in the invariants above (grid tracks, cascade order, viewport units, type floor, touch targets, breakpoints), each verified by mutation testing.</li>
+        </ul>
+        <h3 id="scan-pipeline-progress-and-reporting-accuracy">Scan pipeline, progress and reporting accuracy</h3>
+        <ul>
+          <li><strong>Explicit pipeline stages.</strong> A scan is now modelled as Recon → Discover → Download → Normalize → Analyze → Correlate → Verify → Report (<code>core/pipeline.py</code>). Each stage carries a cost weight, so the progress bar reflects where the time actually goes instead of crawling to 3% and then jumping. The console renders the stages with pending/active/done state; the fine-grained <code>phase</code> values existing consumers rely on are unchanged.</li>
+          <li><strong>Honest ETA.</strong> The old estimate was <code>elapsed x (100 - percent) / percent</code> over a percentage computed as "files done / file cap", which reported absurd numbers for small sites and swung wildly between polls. The ETA now measures the progress rate over a sliding window, smooths it with an EMA, damps upward jumps so a stall cannot explode the estimate, and reports a confidence value — the UI shows "estimating…" until it is meaningful.</li>
+          <li><strong>Provenance in every export.</strong> Findings now carry the URL the script came from. Previously a URL scan reported the temporary workspace path, which is deleted when the scan ends, so no finding could be traced back to an asset. CSV gained an <code>origin</code> column and SARIF points <code>artifactLocation</code> at it.</li>
+          <li><strong>SARIF accuracy.</strong> <code>rank</code> now carries confidence (25/50/75/100), <code>kind</code> carries the result state, <code>security-severity</code> is emitted for GitHub, and observations / false positives export as <code>note</code> + <code>informational</code> instead of <code>error</code> — they used to fail CI gates on findings the engine itself calls unproven.</li>
+          <li><strong>CSV accuracy.</strong> List-valued evidence (keys, IVs, secret candidates) is joined instead of written as a Python repr such as <code>['a', 'b']</code>.</li>
+          <li><strong>Coverage &amp; reliability block.</strong> TXT and HTML reports now state what was and was not analyzed: coverage, skipped assets and why, file-cap and depth limits, whether the AST parser or the line fallback ran, the runtime verification status, and the confidence mix. Reports that hide their own blind spots invite over-trust.</li>
+        </ul>
+        <h3 id="audit-follow-ups-web-ui">Audit follow-ups — web UI</h3>
+        <ul>
+          <li>Sticky header links are page sections with scroll-spy; below 1040px the nav collapses into a real menu (it used to disappear entirely) and shows a "you are here" label.</li>
+          <li>Findings gained severity chips with counts, a search box and a "showing 80 of N" notice when a long list is truncated.</li>
+          <li>The engine is polled while unreachable, so starting it after the page is open no longer needs a manual refresh. A scan result survives a reload of the tab.</li>
+          <li>Accessibility: real tab semantics on the analysis views with arrow-key navigation, a skip link, visible focus rings and <code>prefers-reduced-motion</code> support.</li>
+          <li>Copy is ScriptSentry's own voice, headings and tags are Title Case, and the pre-release badge is gone from the hosted pages (it stays in the local engine banner, the HTML/TXT report footer and <code>/api/health</code>).</li>
+        </ul>
+        <h3 id="changelog-page-docs-metadata-and-navigation-cleanup">Changelog page, docs metadata and navigation cleanup</h3>
+        <ul>
+          <li><strong>The changelog is a real page now.</strong> <code>Changelog</code> used to link into the repository, which on a static site means a visitor lands on a file listing instead of a page. <code>webui/changelog.html</code> is now generated from this file by <code>tools/build_changelog.py</code>, so the hosted page cannot drift from the changelog a person edits. The page reuses <code>index.html</code>'s head, header and footer, so navigation and metadata changes land on it automatically.</li>
+          <li><strong>Two guards keep that honest.</strong> <code>tests/test_docs.py</code> fails when the committed page is out of date (verified by mutation testing), and the Pages workflow regenerates it on every deploy as a safety net. The generated file carries a "do not edit by hand" banner.</li>
+          <li><strong>The changelog page is styled as a document, not a dashboard</strong>: one reading column at the 72ch prose measure, a rule between releases instead of a card per entry, and no new colours or type sizes. Responsiveness comes from the measure itself — a phone, a tablet and a 2560px display all get the same readable line — with a single width rule for the two back-links.</li>
+          <li><strong>The footer is a wayfinding list again, not a sitemap.</strong> It had grown to nine links, three of which repeated sections the header nav already reaches. The Product column now carries only the two destinations the header does not route to (the analyzer and the changelog) alongside Connect.</li>
+          <li><strong><code>README.md</code> is visitor-facing.</strong> It now leads with what ScriptSentry is and how to use it, rather than reading as developer notes; internal detail moved to the docs it belongs in.</li>
+        </ul>
+      </section>
+      <section class="release" id="2-1-0-earlier-release">
+        <h2>[2.1.0] — earlier release</h2>
+        <ul>
+          <li>Modular <code>webui</code> / <code>server.py</code> / <code>core</code> / <code>analyzers</code> architecture.</li>
+          <li>Script inventory &amp; behavior intelligence, first/third-party attribution, risk scoring, and static/runtime data-exfiltration correlation.</li>
+          <li>Local authenticated dashboard with pairing token, bounded jobs, Playwright runtime evidence, source-map awareness, and TXT/HTML/CSV/SARIF exports.</li>
+        </ul>
+      </section>
+    </div>
+
+    <p class="changelog-back">
+      <a href="index.html">← Back to the overview</a> ·
+      <a href="tool.html">Open the analyzer →</a>
+    </p>
+  </main>
+
+<!-- ============================ Footer ============================ -->
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <a class="brand footer-brand-row" href="index.html" aria-label="ScriptSentry home">
+          <span class="mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" role="img" aria-hidden="true" focusable="false">
+              <defs>
+                <linearGradient id="ssMark2" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#22d3ee" />
+                  <stop offset="1" stop-color="#a78bfa" />
+                </linearGradient>
+              </defs>
+              <path d="M16 2.2 27.5 6v9.6c0 6.6-4.9 12.2-11.5 14.2C9.4 27.8 4.5 22.2 4.5 15.6V6z" fill="url(#ssMark2)" opacity=".16" />
+              <path d="M16 2.2 27.5 6v9.6c0 6.6-4.9 12.2-11.5 14.2C9.4 27.8 4.5 22.2 4.5 15.6V6z" fill="none" stroke="url(#ssMark2)" stroke-width="2.2" stroke-linejoin="round" />
+              <g fill="none" stroke="#eaf6ff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13.2 12.4 9.8 16l3.4 3.6" />
+                <path d="M18.8 12.4 22.2 16l-3.4 3.6" />
+                <path d="M17.3 11.2 14.7 20.8" />
+              </g>
+            </svg>
+          </span>
+          <span class="brand-text">
+            <span class="brand-name">ScriptSentry</span>
+            <span class="sub">JS Intelligence Studio</span>
+          </span>
+        </a>
+        <p>
+          Local-first JavaScript security analysis — free, open source, and it runs on your
+          own machine.
+        </p>
+      </div>
+
+      <nav class="footer-col" aria-label="Product">
+        <h3>Product</h3>
+        <a href="tool.html">⚡ Open the Analyzer</a>
+        <a href="changelog.html" aria-current="page">📜 What's New</a>
+      </nav>
+
+      <nav class="footer-col" aria-label="Connect">
+        <h3>Connect</h3>
+        <a href="mailto:amitpal.secure@gmail.com">✉️ amitpal.secure@gmail.com</a>
+        <a href="https://www.linkedin.com/in/amitpal-wb/" target="_blank" rel="noopener noreferrer">💼 LinkedIn</a>
+        <a href="https://github.com/AmitPal-CyberBuddy/ScriptSentry" target="_blank" rel="noopener noreferrer">🐙 GitHub · source &amp; docs</a>
+      </nav>
+    </div>
+
+    <div class="footer-legal">
+      <p>
+        ⚖️ <b>Authorized testing only.</b> Scan only what you own or have written permission
+        to test. ScriptSentry gives you triage signals, not proof — verify every finding before
+        you act on it. You are responsible for complying with all applicable laws and the
+        target's terms of service.
+      </p>
+      <p class="footer-meta">
+        ScriptSentry · JS Intelligence Studio · <strong>private &amp; free</strong> ·
+        run <code>python3 server.py</code> · no telemetry, no accounts, no cloud.
+      </p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

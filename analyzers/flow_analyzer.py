@@ -1,14 +1,26 @@
+"""Structured data-flow summary.
+
+Replaces the old implementation, which returned a single prose string such as
+``"input -> api -> storage -> encryption"`` -- impossible to render, filter or
+test.  This returns one record per observed capability transition.
+"""
 import re
+
+STAGES = [
+    ("input", re.compile(r"\b(?:fetch|axios|XMLHttpRequest)\s*\("), "network request"),
+    ("storage", re.compile(
+        r"\b(?:localStorage|sessionStorage|document\s*\.\s*cookie|Cookies?)"
+        r"\s*\.\s*(?:setItem|getItem|set|remove)\b"
+    ), "client storage access"),
+    ("encryption", re.compile(r"\b(?:encrypt|decrypt|cipher|decipher)\s*\("), "crypto operation"),
+    ("dom_write", re.compile(r"\b(?:innerHTML|outerHTML|insertAdjacentHTML)\s*(?:=(?!=)|\+=|\()"), "DOM write"),
+]
 
 
 def analyze(content, previous=None):
+    content = content or ""
     flow = []
-    if re.search(r'\b(?:fetch|axios|XMLHttpRequest)\s*\(', content):
-        flow.append("input -> api")
-    if re.search(r'\b(localStorage|sessionStorage|document\.cookie|Cookies?)\.(?:setItem|getItem|set|remove)\b', content):
-        flow.append("storage")
-    if re.search(r'\b(?:encrypt|decrypt|cipher|decipher)\s*\(', content):
-        flow.append("encryption")
-    if flow:
-        return [" -> ".join(flow)]
-    return []
+    for name, pattern, description in STAGES:
+        if pattern.search(content):
+            flow.append({"stage": name, "description": description})
+    return flow

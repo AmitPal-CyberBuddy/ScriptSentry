@@ -17,62 +17,21 @@ from dataclasses import dataclass, field
 
 from core.js_parser import parse_raw
 
+# The source/sink catalogue lives in core.js_patterns so that the taint engine
+# and the analyzers can never disagree about what counts as a sink.  The names
+# are re-exported here because callers import them from core.taint.
+from core.js_patterns import (  # noqa: F401  (re-exported)
+    DANGEROUS_SINK_ASSIGN,
+    DANGEROUS_SINK_CALL_KEYWORDS,
+    DOM_SINK_PATTERNS,
+    SANITIZER_HINTS,
+    SENSITIVE_READ_RE,
+    SOURCE_PATTERNS,
+)
+
 # ---------------------------------------------------------------------------
 # Source / sink catalog
 # ---------------------------------------------------------------------------
-SOURCE_PATTERNS = {
-    "location.search": "URL query string",
-    "url.search": "URL query string",
-    "searchParams": "URL search params",
-    "location.hash": "URL fragment",
-    "url.hash": "URL fragment",
-    "location.href": "full URL",
-    "window.location": "full URL",
-    "document.referrer": "referrer",
-    "event.data": "postMessage/window message data",
-    "e.data": "postMessage/window message data",
-    "message.data": "postMessage/window message data",
-    "localStorage": "localStorage",
-    "sessionStorage": "sessionStorage",
-    "document.cookie": "document.cookie",
-    "window.name": "window.name",
-    "location": "location object",
-    "innerText": "DOM text content",
-    "value": "form/input value",
-}
-
-DANGEROUS_SINK_ASSIGN = {
-    "innerHTML",
-    "outerHTML",
-    "insertAdjacentHTML",
-    "srcdoc",
-    "href",
-    "src",
-}
-
-DANGEROUS_SINK_CALL_KEYWORDS = {
-    "eval",
-    "Function",
-    "setTimeout",
-    "setInterval",
-    "document.write",
-    "document.writeln",
-    "insertAdjacentHTML",
-    "replace",
-    "assign",
-    "open",
-    "postMessage",
-    "html",
-    "append",
-    "dangerouslySetInnerHTML",
-}
-
-SANITIZER_HINTS = (
-    "sanitize", "_sanitize", "escapehtml", "escape_html", "htmlencode",
-    "encodeuricomponent", "encodeuri", "textcontent", "createtextnode",
-    "dopurify", "stringreplace", "xss", "deburr", "striptags",
-)
-
 
 def _node_kind_str(node):
     return node.get("type") if isinstance(node, dict) else None
@@ -350,7 +309,10 @@ class TaintAnalyzer:
         if ntype in ("MemberExpression", "ChainExpression"):
             callee_txt = self._strip_calls(node).lower()
             for marker, source_label in SOURCE_PATTERNS.items():
-                if marker in callee_txt:
+                # callee_txt is lower-cased; the catalogue mixes case
+                # (localStorage, document.baseURI, history.state), so compare
+                # case-insensitively or those sources are never recognized.
+                if marker.lower() in callee_txt:
                     return _Taint([f"source:{source_label}"], False, [f"read {callee_txt}"], "high")
             # Track tainted object properties, e.g. `const cfg={q:location.search}; ...cfg.q`.
             obj = node.get("object") if ntype == "MemberExpression" else (node.get("expression") or {}).get("object")
@@ -516,8 +478,16 @@ class TaintAnalyzer:
                         "severity": "HIGH",
                     })
             return
-        callee = self._strip_calls(node.get("callee", {}))
+        callee_node = node.get("callee", {}) or {}
+        callee = self._strip_calls(callee_node)
         lower = callee.lower()
+        # The method name matters for jQuery-style sinks ($('#x').html(...)):
+        # the callee text there carries an argument list that hides it.
+        prop_name = None
+        if _node_kind_str(callee_node) == "MemberExpression":
+            prop = callee_node.get("property")
+            prop_name = _name(prop) if isinstance(prop, dict) else None
+        method = (prop_name or "").lower()
 
         # Network sinks are reported only when a tracked source reaches the
         # request URL, body, header, or send() payload.  A bare fetch is an
@@ -561,6 +531,21 @@ class TaintAnalyzer:
                 })
             return
 
+        # setAttribute('href'|'src'|'srcdoc', tainted) -- the DOM equivalent of
+        # an href/src assignment, and a common way to smuggle a javascript: URL.
+        if method == "setattribute":
+            args = node.get("arguments", []) or []
+            attr = str(self._node_simple_text(args[0]) if args else "").strip("'\"").lower()
+            taint = self._taint_of_expr(args[1]) if len(args) > 1 else None
+            if taint and attr in ("href", "src", "srcdoc"):
+                redirect = attr == "href"
+                self._record_sink("open_redirect" if redirect else "dom_injection", node, taint, {
+                    "id": "open_redirect" if redirect else "dom_injection",
+                    "type": "Client-side open redirect" if redirect else "DOM injection",
+                    "severity": "HIGH",
+                })
+            return
+
         # String-based dynamic execution / DOM sinks.
         # Keep this source-to-sink: a bare `eval("...")` is still a risky pattern
         # (the scanner's `unsafe_runtime` risk signal covers it), but a data flow
@@ -589,7 +574,8 @@ class TaintAnalyzer:
             })
             return
 
-        if "insertadjacenthtml" in lower or ".html(" in lower or ".append(" in lower:
+        if ("insertadjacenthtml" in lower or ".html(" in lower or ".append(" in lower
+                or method in ("html", "append", "prepend", "attr")):
             args = node.get("arguments", []) or []
             taint = self._taint_of_expr(args[-1] if args else {})
             self._record_sink("dom_injection", node, taint, {
@@ -619,6 +605,20 @@ class TaintAnalyzer:
         left_txt = self._strip_calls(left).lower()
         prop = left.get("property") if isinstance(left, dict) else None
         prop_name = _name(prop) if isinstance(prop, dict) else None
+
+        # Any element whose href/src is assigned from tainted data -- a poisoned
+        # <a href> is the classic "phishing link inside your own page" bug.
+        # (window.location.* is handled by the branch below.)
+        if prop_name and str(prop_name).lower() in ("href", "src") and "location" not in left_txt:
+            taint = self._taint_of_expr(right)
+            if taint:
+                redirect = str(prop_name).lower() == "href"
+                self._record_sink("open_redirect" if redirect else "dom_injection", node, taint, {
+                    "id": "open_redirect" if redirect else "dom_injection",
+                    "type": "Client-side open redirect" if redirect else "DOM injection",
+                    "severity": "HIGH",
+                })
+                return
 
         if any(k in left_txt for k in ("innerhtml", "outerhtml", "srcdoc", "document.write", "location.href", "location", "window.location", "document.domain", "dangerouslysetinnerhtml")):
             # open redirect assignment
@@ -896,11 +896,22 @@ class TaintAnalyzer:
             (r"location\.hash|url\.hash", "URL fragment"),
             (r"location\.href|window\.location", "full URL"),
             (r"document\.referrer", "referrer"),
+            (r"document\.baseURI", "document base URL"),
+            (r"history\.state|history\.pushState\s*\(", "history state"),
+            (r"window\.name", "window.name"),
             (r"(?:event|e|msg|message)\.data", "postMessage/window message data"),
             (r"(?:localStorage|sessionStorage)\.getItem\s*\(", "browser storage"),
             (r"document\.cookie", "document.cookie"),
             (r"(?:document\.querySelector|document\.getElementById)\s*\([^)]*\)\s*\.value", "form/input value"),
         ]
+
+        # Reads whose value leaving the page would matter.  Broader than the
+        # module-level SENSITIVE_READ_RE on purpose: for an exfiltration
+        # heuristic a false lead costs a review, a missed lead costs data.
+        EXFIL_READ_RE = re.compile(
+            r"cookie|localStorage|sessionStorage|storage|token|password|credential|session",
+            re.I,
+        )
 
         def source_for(expr):
             for pattern, label in source_specs:
@@ -914,10 +925,18 @@ class TaintAnalyzer:
                       for m in re.finditer(r"[^;\n]+", text) if m.group(0).strip()]
 
         for line_no, statement in statements:
-            assignment = re.match(
-                r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(.+)$",
+            # `search` (not `match`) so assignments nested inside an expression
+            # are still tracked -- a minified bundle puts several of them on one
+            # line.  The lookbehind/lookahead keep member assignments
+            # (`el.innerHTML = …`) and comparisons (`a == b`) out of the taint
+            # table; member expressions are handled as sinks below.
+            assignment = re.search(
+                r"(?<![.\w$])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=(?![=>])\s*(.+)$",
                 statement, re.I | re.S,
-            ) or re.match(r"([A-Za-z_$][\w$]*)\s*=\s*(.+)$", statement, re.I | re.S)
+            ) or re.search(
+                r"(?<![.\w$!=<>])([A-Za-z_$][\w$]*)\s*=(?![=>])\s*(.+)$",
+                statement, re.I | re.S,
+            )
             if not assignment:
                 continue
             name, expr = assignment.groups()
@@ -969,6 +988,25 @@ class TaintAnalyzer:
                 confidence = _max_confidence(confidence, value["confidence"])
             return {"sources": sources, "path": path, "sanitized": sanitized, "confidence": confidence}
 
+        def inline_sources(expr):
+            """Taint from a source used *directly* in a sink expression.
+
+            Without this the fallback only recognised previously assigned
+            variables, so `document.write(document.referrer)` and
+            `eval(location.hash)` -- both textbook flows -- were missed
+            entirely whenever the AST parser was unavailable.
+            """
+            values = []
+            for pattern, label in source_specs:
+                if re.search(pattern, expr, re.I):
+                    values.append({
+                        "sources": [f"source:{label}"],
+                        "sanitized": any(h in expr.lower() for h in SANITIZER_HINTS),
+                        "path": [f"read {label}"],
+                        "confidence": "high",
+                    })
+            return values
+
         def taints_in(expr):
             values = []
             for name, value in tainted.items():
@@ -977,17 +1015,26 @@ class TaintAnalyzer:
             for key, value in properties.items():
                 if re.search(rf"\b{re.escape(key)}\b", expr):
                     values.append(value)
+            values.extend(inline_sources(expr))
             return values
 
         for line_no, statement in statements:
             sink = re.search(
-                r"(?:innerHTML|outerHTML|srcdoc)\s*=|insertAdjacentHTML\s*\(|"
-                r"document\.(?:write|writeln)\s*\(|\beval\s*\(|new\s+Function\s*\(",
+                r"(?:innerHTML|outerHTML|srcdoc)\s*(?:=|\+=)|insertAdjacentHTML\s*\(|"
+                r"document\.(?:write|writeln)\s*\(|\beval\s*\(|new\s+Function\s*\(|"
+                # jQuery-style sinks: $('#x').html(...) / .append(...)
+                r"\.\s*html\s*\(|\$\s*\([^)]*\)\s*\.\s*(?:append|prepend|attr)\s*\(|"
+                # redirect / script URL sinks via setAttribute
+                r"setAttribute\s*\(\s*['\"](?:href|src|srcdoc)['\"]",
                 statement, re.I,
             )
             if sink:
                 flow = combine(taints_in(statement[sink.end():]))
-                is_dom = bool(re.search(r"innerHTML|outerHTML|srcdoc|insertAdjacentHTML|document\.", statement, re.I))
+                is_dom = bool(re.search(
+                    r"innerHTML|outerHTML|srcdoc|insertAdjacentHTML|document\."
+                    r"|\.\s*html\s*\(|setAttribute\s*\(\s*['\"](?:href|src|srcdoc)",
+                    statement, re.I,
+                ))
                 if flow:
                     heuristic_note = "Line-based heuristic flow; statement-level aliasing may over- or under-approximate taint."
                     self._record({
@@ -1018,7 +1065,15 @@ class TaintAnalyzer:
                         "observation": True,
                     })
 
-            redirect = re.search(r"\blocation\.(?:href|assign|replace)\s*(?:=|\()", statement, re.I)
+            # Redirect sinks: location.href/assign/replace, and any element
+            # whose href is assigned from data (a tainted <a href> is the
+            # classic "phishing link inside your own page" primitive).
+            redirect = re.search(
+                r"\blocation\s*\.\s*(?:href|assign|replace)\s*(?:=|\()"
+                r"|\.href\s*(?:=(?!=)|\+=)"
+                r"|\.\s*(?:assign|replace)\s*\(",
+                statement, re.I,
+            )
             if redirect:
                 flow = combine(taints_in(statement[redirect.end():]))
                 if flow:
@@ -1033,6 +1088,40 @@ class TaintAnalyzer:
                         "evidence_type": "source_to_sink", "analysis_quality": "heuristic",
                         "limitations": ["Line-based heuristic flow; statement-level aliasing may over- or under-approximate taint."],
                         "observation": bool(flow["sanitized"]),
+                    })
+
+            # Exfiltration heuristic: a sensitive read reaching an outbound
+            # transport.  Reported as a *candidate* (medium confidence,
+            # behavioural correlation) because the fallback cannot establish
+            # that the destination is external or attacker-controlled.
+            outbound = re.search(
+                r"\b(?:fetch|axios|XMLHttpRequest|sendBeacon)\s*\("
+                r"|\.\s*(?:send|post)\s*\(|new\s+WebSocket\s*\(",
+                statement, re.I,
+            )
+            if outbound:
+                flow = combine(taints_in(statement))
+                sensitive = [src for src in (flow or {}).get("sources", [])
+                             if EXFIL_READ_RE.search(src)]
+                if flow and sensitive:
+                    self._record({
+                        "id": "data_exfiltration_candidate",
+                        "type": "Sensitive data sent to an outbound destination",
+                        "severity": "MEDIUM" if flow["sanitized"] else "HIGH",
+                        "confidence": min_confidence(flow["confidence"]),
+                        "status": "needs_review",
+                        "file": self.filename, "line": line_no,
+                        "source": " → ".join(s.replace("source:", "") for s in flow["sources"]),
+                        "sink": statement[:160], "flow": flow["path"][:8],
+                        "sanitization_detected": flow["sanitized"],
+                        "evidence": statement[:240],
+                        "evidence_type": "behavioral_correlation",
+                        "analysis_quality": "heuristic",
+                        "limitations": [
+                            "Line-based heuristic: the destination is not proven to be external, "
+                            "and the payload is not proven to contain the sensitive value."
+                        ],
+                        "observation": False,
                     })
 
             if re.search(r"postMessage\s*\([^)]*,\s*['\"]\*['\"]", statement, re.I):

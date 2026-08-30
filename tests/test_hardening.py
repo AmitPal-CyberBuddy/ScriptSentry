@@ -158,16 +158,44 @@ class APISecuritySmokeTest(unittest.TestCase):
 
 
 class WebUICompletenessTest(unittest.TestCase):
-    def test_ui_uses_local_assets_and_exposes_pairing_controls(self):
+    """The dashboard is two static pages sharing one stylesheet and script.
+
+    ``index.html`` is the landing page, ``tool.html`` hosts the analysis
+    console. Both must stay self-contained: local assets only, a CSP, no
+    third-party font/CDN dependencies.
+    """
+
+    def _read(self, name):
         root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "webui")
-        with open(os.path.join(root, "index.html"), encoding="utf-8") as handle:
-            html = handle.read()
-        self.assertIn('href="styles.css"', html)
-        self.assertIn('src="app.js"', html)
+        with open(os.path.join(root, name), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_pages_use_local_assets_and_declare_a_csp(self):
+        for page in ("index.html", "tool.html"):
+            with self.subTest(page=page):
+                html = self._read(page)
+                self.assertIn('href="styles.css"', html)
+                self.assertIn('src="app.js"', html)
+                self.assertIn('src="config.js"', html)
+                self.assertIn("Content-Security-Policy", html)
+                self.assertNotIn("fonts.googleapis.com", html)
+
+    def test_console_page_exposes_pairing_and_scan_controls(self):
+        html = self._read("tool.html")
         self.assertIn('id="engine-token"', html)
         self.assertIn('id="cancel-scan"', html)
-        self.assertIn("Content-Security-Policy", html)
-        self.assertNotIn("fonts.googleapis.com", html)
+        self.assertIn('id="code-input"', html)
+        self.assertIn('id="url-input"', html)
+
+    def test_landing_page_links_to_the_console(self):
+        html = self._read("index.html")
+        self.assertIn('href="tool.html"', html)
+        # Brand assets referenced by <link rel="icon"> must exist on disk.
+        root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "webui")
+        for asset in ("assets/favicon.svg", "assets/site.webmanifest", "assets/og-card.png"):
+            with self.subTest(asset=asset):
+                self.assertIn(asset, html)
+                self.assertTrue(os.path.isfile(os.path.join(root, asset)))
 
 
 if __name__ == "__main__":

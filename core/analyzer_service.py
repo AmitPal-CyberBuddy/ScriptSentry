@@ -21,6 +21,7 @@ from core.downloader import download_js, download_file, get_safe_filename
 from core.url_policy import read_response_text, safe_get, validate_public_url
 from core.source_maps import inspect_source_map
 from core.runtime_evidence import attach_runtime_evidence, capture_runtime_evidence, runtime_evidence_enabled
+from core.pipeline import ProgressModel, stage_plan
 from core.scanner import scan_file
 
 # Compatibility references keep older integrations that patch the two legacy
@@ -96,11 +97,24 @@ def _merge_into(results, path, content, seen_hashes=None, source_url=""):
 def analyze_content(code, filename="inline.js", progress_callback=None, cancel_check=None):
     """Analyze pasted JavaScript and return raw per-file results."""
     _check_cancel(cancel_check)
-    _notify(progress_callback, phase="scan", current=0, total=1, message="Analyzing pasted JavaScript")
+    progress = ProgressModel(stage_plan(mode="code"))
+
+    def notify(phase, message, current=None, total=None):
+        progress.set_stage(phase, current=0 if current is None else current,
+                           total=0 if total is None else total)
+        _notify(progress_callback, phase=phase, stage=progress.stage,
+                stages=progress.stage_states(), current=progress.current,
+                total=progress.total, percent=progress.percent, message=message)
+
+    notify("analyze", "Analyzing pasted JavaScript", current=0, total=1)
     results = {}
     _merge_into(results, filename, code)
     _check_cancel(cancel_check)
-    _notify(progress_callback, phase="done", current=1, total=1, percent=100, message="Static analysis complete")
+    notify("correlate", "Correlating findings", current=1, total=1)
+    progress.complete_stage()
+    # "done" is the terminal phase the existing consumers watch for; the
+    # canonical stage behind it is "report".
+    notify("done", "Static analysis complete", current=1, total=1)
     return results
 
 
@@ -129,7 +143,16 @@ def analyze_files(files, progress_callback=None, cancel_check=None):
     files = [f for f in (files or []) if isinstance(f, dict)]
     total = max(1, len(files))
     _check_cancel(cancel_check)
-    _notify(progress_callback, phase="scan", current=0, total=total, message="Analyzing uploaded files")
+    progress = ProgressModel(stage_plan(mode="files"))
+
+    def notify(phase, message, current=None, total=None):
+        progress.set_stage(phase, current=0 if current is None else current,
+                           total=0 if total is None else total)
+        _notify(progress_callback, phase=phase, stage=progress.stage,
+                stages=progress.stage_states(), current=progress.current,
+                total=progress.total, percent=progress.percent, message=message)
+
+    notify("analyze", "Analyzing uploaded files", current=0, total=total)
     results = {}
     seen_hashes = set()
     used_names = set()
@@ -148,10 +171,13 @@ def analyze_files(files, progress_callback=None, cancel_check=None):
             n += 1
         used_names.add(unique)
         _merge_into(results, unique, code, seen_hashes=seen_hashes)
-        _notify(progress_callback, phase="scan", current=index + 1, total=total,
-                message=f"Analyzed {unique} ({index + 1}/{total})")
-    _notify(progress_callback, phase="done", current=total, total=total, percent=100,
-            message=f"Static analysis complete: {len(results)} file(s)")
+        notify("analyze", f"Analyzed {unique} ({index + 1}/{total})",
+               current=index + 1, total=total)
+    progress.complete_stage()
+    notify("correlate", "Correlating findings", current=total, total=total)
+    progress.complete_stage()
+    notify("done", f"Static analysis complete: {len(results)} file(s)",
+           current=total, total=total)
     return results
 
 
@@ -366,11 +392,21 @@ def _notify(callback, **kwargs):
             pass
 
 
-def _attach_runtime(results, url, timeout=15, max_files=50, progress_callback=None, cancel_check=None):
+def _attach_runtime(results, url, timeout=15, max_files=50, progress_callback=None, cancel_check=None, progress=None):
     """Load the page in a local headless browser and merge its evidence."""
     _check_cancel(cancel_check)
+
+    def notify(phase, message, current=0, total=1):
+        if progress is not None:
+            progress.set_stage(phase, current=current, total=total)
+            _notify(progress_callback, phase=phase, stage=progress.stage,
+                    stages=progress.stage_states(), current=current, total=total,
+                    percent=progress.percent, message=message)
+        else:
+            _notify(progress_callback, phase=phase, current=current, total=total, message=message)
+
     if not runtime_evidence_enabled():
-        _notify(progress_callback, phase="runtime", current=0, total=1, message="Runtime evidence disabled")
+        notify("verify", "Runtime evidence disabled", current=0, total=1)
         runtime = {
             "enabled": False,
             "available": False,
@@ -381,7 +417,7 @@ def _attach_runtime(results, url, timeout=15, max_files=50, progress_callback=No
         }
         return attach_runtime_evidence(results, runtime, target_url=url)
 
-    _notify(progress_callback, phase="runtime", current=0, total=1, message="Executing page in local headless browser")
+    notify("verify", "Executing page in local headless browser", current=0, total=1)
     runtime = capture_runtime_evidence(
         url,
         timeout_ms=max(2_000, int(float(timeout or 15) * 1000)),
@@ -403,7 +439,9 @@ def _attach_runtime(results, url, timeout=15, max_files=50, progress_callback=No
         data = _scan_document(path, script_content, source_url=script_url)
         results[path] = data
         seen.add(digest)
-    _notify(progress_callback, phase="runtime", current=1, total=1, message="Runtime evidence captured")
+    notify("verify", "Runtime evidence captured", current=1, total=1)
+    if progress is not None:
+        progress.complete_stage()
     return attach_runtime_evidence(results, runtime, target_url=url)
 
 
@@ -467,6 +505,29 @@ def analyze_url(
     visited_urls = set()
     known_paths = set()
 
+    # Weighted, monotonic progress across the pipeline stages. Without this the
+    # bar is "files done / file cap", which sits at 3% for a small site and
+    # makes any ETA derived from it meaningless.
+    progress = ProgressModel(stage_plan(mode="url", runtime_enabled=runtime_evidence_enabled()))
+    total_bytes = 0
+
+    def notify(phase, message, current=None, total=None):
+        progress.set_stage(phase,
+                           current=0 if current is None else int(current),
+                           total=0 if total is None else int(total))
+        _notify(
+            progress_callback,
+            phase=phase,
+            stage=progress.stage,
+            stages=progress.stage_states(),
+            current=progress.current,
+            total=progress.total,
+            percent=progress.percent,
+            scanned_bytes=scanned_bytes(),
+            total_bytes=max(1, total_bytes),
+            message=message,
+        )
+
     def record_skip(reason):
         with lock:
             state["skipped_files"] += 1
@@ -477,17 +538,13 @@ def analyze_url(
             return sum(data.get("file_size", 0) for data in results.values())
 
     def scan_progress(phase, message):
-        _notify(
-            progress_callback,
-            phase=phase,
-            current=len(results),
-            total=max_files,
-            scanned_bytes=scanned_bytes(),
-            total_bytes=max(1, total_bytes),
-            message=message,
-        )
+        # `max_files` is a *cap*, not the expected work; dividing by it makes a
+        # 4-script site report 4%. Estimate the real workload instead: at least
+        # the entry scripts, at most the cap, and never below what is done.
+        expected = max(len(initial_tasks), len(results), 1)
+        notify(phase, message, current=len(results), total=min(int(max_files), expected))
 
-    _notify(progress_callback, phase="recon", current=0, total=1, message="Reading page and extracting script references")
+    notify("recon", "Reading page and extracting script references", current=0, total=1)
     _check_cancel(cancel_check)
     # Keep the two compatibility entry points (older callers patch these),
     # while discovery itself reuses its bounded page fetch cache.
@@ -514,6 +571,7 @@ def analyze_url(
             total_discovered=0,
             total_bytes=0,
             cancel_check=cancel_check,
+            progress=progress,
         )
 
     state["script_urls"].extend(discovered[:max_files])
@@ -521,13 +579,11 @@ def analyze_url(
         {"from": url, "to": link, "kind": "html_script", "depth": 0}
         for link in discovered[:max_files]
     )
-    _notify(
-        progress_callback,
-        phase="download",
-        current=0,
-        total=len(discovered) or 1,
-        message=f"Discovered {len(discovered)} external scripts and {len(inline_scripts)} inline script(s)",
-    )
+    notify("discover",
+           f"Discovered {len(discovered)} external scripts and {len(inline_scripts)} inline script(s)",
+           current=0, total=len(discovered) or 1)
+    notify("download", f"Downloading {len(discovered[:max_files])} script(s)",
+           current=0, total=len(discovered[:max_files]) or 1)
     downloads = download_js(
         discovered[:max_files],
         progress_callback=progress_callback,
@@ -538,8 +594,9 @@ def analyze_url(
     _check_cancel(cancel_check)
     beautified = []
     if downloads:
-        _notify(progress_callback, phase="beautify", current=0, total=len(downloads), message="Normalizing downloaded bundles")
+        notify("normalize", "Normalizing downloaded bundles", current=0, total=len(downloads))
         beautified = beautify(downloads, output_dir=scan_beautify_dir)
+        progress.complete_stage()
 
     _check_cancel(cancel_check)
     total_bytes = sum((os.path.getsize(path) if os.path.isfile(path) else 0) for path in beautified)
@@ -676,6 +733,10 @@ def analyze_url(
         "script_edges": list(state.get("script_edges", []))[:200],
         "analysis_warnings": list(state.get("skipped_reasons", [])),
         "page": state.get("page_metadata", {}),
+        # Local artifact path -> the URL it came from. Without this a report
+        # names a temporary file that is deleted when the scan ends, and no
+        # finding can be traced back to the asset that produced it.
+        "path_to_url": dict(state.get("path_to_url", {})),
     }
     return _finish_scan(
         results,
@@ -688,6 +749,7 @@ def analyze_url(
         total_discovered=len(discovered) + len(inline_scripts),
         total_bytes=total_bytes,
         cancel_check=cancel_check,
+        progress=progress,
     )
 
 
@@ -702,6 +764,7 @@ def _finish_scan(
     total_discovered=0,
     total_bytes=0,
     cancel_check=None,
+    progress=None,
 ):
     """Attach the scan summary and runtime pass to a finished URL scan."""
     state = state or {}
@@ -718,15 +781,21 @@ def _finish_scan(
         "script_edges": list(state.get("script_edges", []))[:200],
         "analysis_warnings": list(state.get("skipped_reasons", [])),
         "page": state.get("page_metadata", {}),
+        "path_to_url": dict(state.get("path_to_url", {})),
     }
     results["__scan_summary__"] = summary
 
+    if progress is not None:
+        progress.complete_stage()
+        progress.set_stage("report", current=1, total=1)
     _notify(
         progress_callback,
         phase="done",
+        stage="report",
+        stages=progress.stage_states() if progress is not None else None,
         current=len(results),
         total=len(results) or 1,
-        percent=100,
+        percent=max(progress.percent if progress is not None else 0, 0),
         scanned_bytes=summary.get("bytes_scanned", 0),
         total_bytes=max(1, summary.get("total_bytes", 0)),
         message=f"Static analysis complete: {len(results)} unique script(s)",
@@ -734,6 +803,7 @@ def _finish_scan(
     runtime_results = _attach_runtime(
         results, url, timeout=timeout, max_files=max_files,
         progress_callback=progress_callback, cancel_check=cancel_check,
+        progress=progress,
     )
     runtime = runtime_results.get("__runtime_evidence__") or {}
     runtime_summary = runtime_results.get("__scan_summary__") or summary

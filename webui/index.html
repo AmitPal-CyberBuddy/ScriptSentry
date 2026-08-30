@@ -3,9 +3,34 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ScriptSentry — JavaScript Analyzer</title>
+  <title>ScriptSentry — Privacy-First JavaScript Security & Behavior Intelligence</title>
+  <meta name="description" content="ScriptSentry is a free, privacy-first JavaScript security analyzer. Paste code, upload files or scan a URL and explore secrets, DOM XSS flows, attack surface, obfuscation and third-party behavior — 100% locally, on your own machine." />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#060a13" />
+  <meta name="author" content="Amit Pal" />
   <meta name="referrer" content="no-referrer" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* https:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none';" />
+  <meta name="robots" content="index, follow" />
+
+  <!-- Identity: favicons, app icon and social card -->
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="assets/icon-192.png" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+  <link rel="manifest" href="assets/site.webmanifest" />
+
+  <!-- Open Graph / Twitter -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="ScriptSentry" />
+  <meta property="og:title" content="ScriptSentry — Watch every line. Detect every risk." />
+  <meta property="og:description" content="Free, privacy-first JavaScript security &amp; script-behavior intelligence. Runs locally — your code never leaves your machine." />
+  <meta property="og:image" content="assets/og-card.png" />
+  <meta property="og:image:alt" content="ScriptSentry — privacy-first JavaScript security analyzer" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="ScriptSentry — Watch every line. Detect every risk." />
+  <meta name="twitter:description" content="Free, privacy-first JavaScript security &amp; script-behavior intelligence. Runs locally — your code never leaves your machine." />
+  <meta name="twitter:image" content="assets/og-card.png" />
+
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' blob: data: http://127.0.0.1:* http://localhost:* https:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none';" />
   <link rel="stylesheet" href="styles.css" />
   <script src="config.js"></script>
 </head>
@@ -14,373 +39,476 @@
   <div class="bg-glow bg-glow-1"></div>
   <div class="bg-glow bg-glow-2"></div>
   <div class="bg-glow bg-glow-3"></div>
+  <a class="skip-link" href="#main">Skip to Content</a>
 
-  <div class="wrap">
-    <header class="topbar fade-up">
-      <div class="brand">
-        <span class="mark">🛡️</span>
-        <span>
-          ScriptSentry
-          <div class="sub">JS Intelligence Studio</div>
+  <!-- ============================ Header ============================ -->
+  <header class="site-header" id="site-header">
+    <div class="header-inner">
+      <a class="brand" href="#top" aria-label="ScriptSentry home">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" role="img" aria-hidden="true" focusable="false">
+            <defs>
+              <linearGradient id="ssMark" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#22d3ee" />
+                <stop offset="1" stop-color="#a78bfa" />
+              </linearGradient>
+            </defs>
+            <path d="M16 2.2 27.5 6v9.6c0 6.6-4.9 12.2-11.5 14.2C9.4 27.8 4.5 22.2 4.5 15.6V6z" fill="url(#ssMark)" opacity=".16" />
+            <path d="M16 2.2 27.5 6v9.6c0 6.6-4.9 12.2-11.5 14.2C9.4 27.8 4.5 22.2 4.5 15.6V6z" fill="none" stroke="url(#ssMark)" stroke-width="2.2" stroke-linejoin="round" />
+            <g fill="none" stroke="#eaf6ff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13.2 12.4 9.8 16l3.4 3.6" />
+              <path d="M18.8 12.4 22.2 16l-3.4 3.6" />
+              <path d="M17.3 11.2 14.7 20.8" />
+            </g>
+          </svg>
         </span>
-        <span class="dev-badge" title="Pre-release build — not a published/stable release">🚧 Under development</span>
-      </div>
-      <div class="status" id="engine-status">
-        <span class="dot" id="engine-dot"></span>
-        <span id="engine-status-text">Checking local engine…</span>
-      </div>
-    </header>
+        <span class="brand-text">
+          <span class="brand-name">ScriptSentry</span>
+          <span class="sub">JS Intelligence Studio</span>
+        </span>
+      </a>
 
-    <section class="hero">
-      <h1>Watch every line.<br />Detect every risk.</h1>
+      <div class="nav-current" id="nav-current" aria-hidden="true"></div>
+      <nav class="site-nav" id="site-nav" aria-label="Main">
+        <a href="#features">What It Finds</a>
+        <a href="#how">How It Works</a>
+        <a href="#trust">Trust</a>
+        <a href="#connect">Connect</a>
+      </nav>
+
+      <div class="header-actions">
+        <button class="engine-pill" id="engine-status" type="button"
+                title="Local engine status — click to open the setup guide">
+          <span class="pulse-dot" id="engine-dot" aria-hidden="true"></span>
+          <span class="engine-text" id="engine-status-text">Checking local engine…</span>
+        </button>
+        <a class="btn btn-sm go-to-tool" href="tool.html">⚡ Go to tool</a>
+      </div>
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false"
+              aria-controls="site-nav" aria-label="Open Navigation Menu">
+        <span class="nav-toggle-bars" aria-hidden="true"></span>
+      </button>
+    </div>
+    <div class="scroll-progress" id="scroll-progress" aria-hidden="true"></div>
+  </header>
+
+  <main class="wrap" id="main">
+    <!-- ============================ Hero ============================ -->
+    <section class="hero" id="top">
+      <span class="eyebrow">🛡️ Free · Open source · Runs on your machine</span>
+      <h1>Watch Every Line.<br />Detect Every Risk.</h1>
       <p>
-        A visual JavaScript security &amp; intelligence analyzer. Paste a snippet or scan a live URL,
-        then explore secrets, crypto keys, APIs, storage, DOM risks, obfuscation and data flows
-        through a motion-rich dashboard.
+        A privacy-first JavaScript security analyzer I built for people who read other
+        people’s bundles. Paste a snippet, drop your files, or point it at a live URL —
+        then explore the secrets, crypto keys, API calls, storage, DOM risks, obfuscation
+        and data flows it hides. All of it runs on your machine.
       </p>
+      <div class="hero-cta">
+        <a class="btn btn-lg" href="tool.html">⚡ Open the Analyzer</a>
+        <button class="btn btn-lg ghost" id="hero-setup" type="button">🛠️ Setup Guide</button>
+      </div>
       <div class="badges">
         <span class="badge">🔒 100% local analysis</span>
         <span class="badge">🆓 Free &amp; open source</span>
-        <span class="badge">⚡ Real-time analysis</span>
+        <span class="badge">⚖️ Evidence-weighted scoring</span>
         <span class="badge">🔐 Crypto &amp; key hunts</span>
         <span class="badge">🌐 API surface mapping</span>
       </div>
 
-      <div class="privacy-banner fade-up">
-        <div class="privacy-ico">🔒</div>
-        <div>
-          <b>Private by design.</b> This hosted page is just the interface. Your JavaScript
-          never leaves your computer — it is analyzed on <code>localhost</code> by
-          <b>ScriptSentry&nbsp;server.py</b>. No code uploads, no clouds, no accounts.
+      <div class="notice-grid">
+        <div class="notice-card privacy fade-up">
+          <div class="notice-ico">🔒</div>
+          <div>
+            <b>Private by design.</b> This page is only the interface. I never see what you
+            analyze — the work happens on <b>your</b> machine, by <code>server.py</code> listening
+            on <code>localhost</code>. No uploads, no cloud, no account.
+          </div>
         </div>
-      </div>
-
-      <div class="authorized-banner fade-up">
-        <div class="authorized-ico">⚖️</div>
-        <div>
-          <b>Authorized testing only.</b> Only scan applications and systems you own or have
-          explicit written permission to test. You are responsible for complying with all
-          applicable laws and the target's terms of service. ScriptSentry provides triage
-          signals, not proof of exploitation — always verify findings and never use them to
-          access systems without authorization.
+        <div class="notice-card legal fade-up">
+          <div class="notice-ico">⚖️</div>
+          <div>
+            <b>Authorized testing only.</b> Scan only what you own or have written permission to
+            test. ScriptSentry gives you triage signals, not proof — verify every finding before
+            you act on it.
+          </div>
         </div>
       </div>
     </section>
 
-    <section class="console fade-up">
-      <div class="console-head">
-        <div class="console-title">🔎 Analysis Console</div>
-        <div class="tabs" role="tablist">
-          <button class="tab active" data-pane="code" role="tab">Paste Code</button>
-          <button class="tab" data-pane="url" role="tab">Scan URL</button>
-        </div>
-      </div>
-
-      <div class="console-body">
-        <div class="pane active" id="pane-code">
-          <div class="inline-tabs" role="tablist">
-            <button class="inline-tab active" data-input="paste" role="tab">📋 Paste code</button>
-            <button class="inline-tab" data-input="upload" role="tab">📁 Upload files</button>
-          </div>
-
-          <div data-input-pane="paste">
-            <label class="field-label" for="code-input">JavaScript source</label>
-            <textarea id="code-input" spellcheck="false" placeholder="// Paste your JavaScript here..."></textarea>
-            <p class="field-error" id="code-error" role="alert" hidden></p>
-            <div class="row">
-              <button class="btn" id="analyze-code">⚡ Analyze Code</button>
-              <button class="btn ghost" id="load-sample">✨ Try a sample</button>
-              <input id="filename-input" type="text" value="inline.js" placeholder="filename.js" style="max-width:220px" />
-            </div>
-          </div>
-
-          <div data-input-pane="upload" hidden>
-            <label class="field-label">JavaScript files</label>
-            <label class="dropzone" id="dropzone" for="file-input">
-              <input id="file-input" type="file" multiple
-                     accept=".js,.mjs,.cjs,.jsx,.ts,.map,.txt,text/javascript,application/javascript" hidden />
-              <div class="dropzone-ico">📄</div>
-              <div><b>Click to browse</b> or drag &amp; drop <code>.js</code> / <code>.mjs</code> files</div>
-              <div class="dropzone-sub">Files are read in your browser and analyzed by the local engine only — nothing is uploaded to a cloud.</div>
-            </label>
-            <div id="file-list" class="file-list"></div>
-            <p class="field-error" id="file-error" role="alert" hidden></p>
-            <div class="row">
-              <button class="btn" id="analyze-files">⚡ Analyze Files</button>
-              <button class="btn ghost" id="clear-files">✖ Clear</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="pane" id="pane-url">
-          <label class="field-label" for="url-input">Target URL</label>
-          <input id="url-input" type="url" inputmode="url" autocapitalize="off" spellcheck="false"
-                 placeholder="https://example.com/app.js or https://example.com" />
-          <p class="field-error" id="url-error" role="alert" hidden></p>
-          <p class="field-hint">Only public <code>http(s)</code> URLs are scanned — locally, by your own engine. Private/loopback addresses and credentials in the URL are rejected.</p>
-          <div class="config-row">
-            <div class="config-block">
-              <label class="field-label" for="profile">Profile <span class="help" tabindex="0" data-tip="Scan intensity. Fast: shallow &amp; quick. Balanced: good default. Strict: deeper recursion, longer timeouts, more files.">?</span></label>
-              <select id="profile">
-                <option value="fast">⚡ Fast</option>
-                <option value="balanced" selected>⚖️ Balanced</option>
-                <option value="strict">🔥 Strict</option>
-              </select>
-            </div>
-            <div class="config-block">
-              <label class="field-label" for="max-depth">Max depth <span class="help" tabindex="0" data-tip="How many levels of scripts loading scripts are followed (imports/chunks). 3 = entry scripts only, 5–7 = full bundle graphs.">?</span></label>
-              <select id="max-depth">
-                <option value="3">3</option>
-                <option value="5" selected>5</option>
-                <option value="7">7</option>
-                <option value="10">10</option>
-              </select>
-            </div>
-            <div class="config-block">
-              <label class="field-label" for="max-files">Max files <span class="help" tabindex="0" data-tip="Cap on how many JavaScript files are analyzed. Prevents huge sites from running too long. Skipped files are reported in the Assets view.">?</span></label>
-              <select id="max-files">
-                <option value="25">25</option>
-                <option value="50" selected>50</option>
-                <option value="100">100</option>
-                <option value="200">200</option>
-                <option value="500">500</option>
-                <option value="1000">1000</option>
-              </select>
-            </div>
-            <div class="config-block">
-              <label class="field-label" for="workers">Workers <span class="help" tabindex="0" data-tip="Parallel analyzer threads. Higher = faster on a powerful machine; lower it if you're low on RAM.">?</span></label>
-              <select id="workers">
-                <option value="2">2</option>
-                <option value="4">4</option>
-                <option value="6" selected>6</option>
-                <option value="8">8</option>
-                <option value="12">12</option>
-                <option value="16">16</option>
-              </select>
-            </div>
-          </div>
-          <div class="row">
-            <button class="btn" id="analyze-url">🚀 Analyze Target</button>
-          </div>
-        </div>
-
-        <div class="loading" id="loading">
-          <span class="spinner"></span>
-          <span class="progress-wrap">
-            <span id="loading-text">Analyzing…</span>
-            <span class="progress-track" aria-hidden="true"><i class="progress-fill" id="progress-fill"></i></span>
-            <span class="progress-stats" id="progress-stats"></span>
-          </span>
-          <button class="btn ghost cancel-btn" id="cancel-scan" type="button">Cancel</button>
-        </div>
-      </div>
-    </section>
-
-    <section class="results" id="results">
-      <div class="results-header">
-        <h2>📊 Analysis Dashboard</h2>
-        <div class="row" style="margin:0">
-          <div class="meta" id="result-meta"></div>
-          <button class="btn ghost" id="export-html">📄 HTML</button>
-          <button class="btn ghost" id="export-txt">📝 TXT</button>
-          <button class="btn ghost" id="export-csv">📊 CSV</button>
-          <button class="btn ghost" id="export-sarif">🧾 SARIF</button>
-        </div>
-      </div>
-
-      <div class="view-tabs fade-up" id="view-tabs">
-        <button class="view-tab active" data-view="overview">📊 Overview</button>
-        <button class="view-tab" data-view="findings">🚦 Findings</button>
-        <button class="view-tab" data-view="scripts">📚 Scripts</button>
-        <button class="view-tab" data-view="intelligence">🧠 Intelligence</button>
-        <button class="view-tab" data-view="runtime">🖥️ Runtime</button>
-      </div>
-
-      <div class="grid grid-2 view-group" data-view="overview">
-        <div class="card">
-          <h3>Overall Risk</h3>
-          <div class="gauge-wrap">
-            <div class="gauge">
-              <svg viewBox="0 0 120 120">
-                <circle class="gauge-circle" cx="60" cy="60" r="50"></circle>
-                <circle class="gauge-val" id="gauge" cx="60" cy="60" r="50"></circle>
-              </svg>
-            </div>
-            <div class="gauge-copy">
-              <div class="risk" id="risk-label">LOW</div>
-              <div class="score" id="risk-score">Score 0</div>
-              <span class="risk-chip" id="risk-chip">0 findings</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <h3>🎯 What to investigate first</h3>
-          <p class="modal-note" style="margin:0 0 8px">Actionable findings ranked by evidence strength and impact — not decoration.</p>
-          <div class="find-list" id="priority-list"></div>
-        </div>
-      </div>
-
-      <div class="grid grid-2 view-group" style="margin-top:18px" data-view="overview">
-        <div class="card">
-          <h3>Why this score?</h3>
-          <p class="modal-note" style="margin:0 0 8px">Every point is explained by evidence. Demonstrated/high-confidence flows weigh far more than regex observations.</p>
-          <div id="risk-breakdown"></div>
-        </div>
-        <div class="card">
-          <h3>Detection Snapshot</h3>
-          <div id="category-bars"></div>
-        </div>
-      </div>
-
-      <div class="grid grid-4 view-group" style="margin-top:18px" data-view="overview" id="metrics"></div>
-
-      <div class="grid grid-3 view-group" style="margin-top:18px" data-view="overview">
-        <div class="card chart-card">
-          <h3>Finding Mix</h3>
-          <svg class="chart" id="donut-chart" viewBox="0 0 220 220"></svg>
-          <div class="legend" id="donut-legend"></div>
-        </div>
-        <div class="card chart-card">
-          <h3>Detection Radar</h3>
-          <canvas class="chart" id="radar-chart"></canvas>
-        </div>
-        <div class="card">
-          <h3>Analysis Journey</h3>
-          <div class="timeline" id="timeline"></div>
-        </div>
-      </div>
-
-      <div class="card view-group" style="margin-top:18px" data-view="scripts">
-        <h3>📚 Script Inventory &amp; Behavior</h3>
-        <p class="modal-note" style="margin:0 0 8px">Every discovered script gets a behavior profile: first/third-party attribution, sensitive reads, DOM/network writes, browser APIs, loading method, and a 0–100 script risk score.</p>
-        <div id="script-panel"></div>
-      </div>
-
-      <div class="card view-group" style="margin-top:18px" data-view="scripts">
-        <h3>📁 JavaScript Assets</h3>
-        <div class="finding-grid" id="scan-summary"></div>
-        <div class="file-tabs" id="file-tabs"></div>
-        <div id="file-panel"></div>
-      </div>
-
-      <div class="card view-group" style="margin-top:18px" data-view="findings">
-        <h3>🛠️ Actionable Findings</h3>
-        <p class="modal-note" style="margin:0 0 8px">Issues that require investigation or remediation. <b>Confirmed</b> is reserved for demonstrated/deterministic proof; static source→sink flows are high-confidence and open for triage. Click <b>status</b> to triage (stored in your browser only).</p>
-        <div class="file-tabs" id="finding-filters"></div>
-        <div class="find-list" id="unified-findings"></div>
-      </div>
-
-      <div class="card view-group" style="margin-top:18px" data-view="findings">
-        <h3>👁️ Security Observations</h3>
-        <p class="modal-note" style="margin:0 0 8px">Interesting behavior and capability signals that are <b>not</b> proven vulnerabilities — API surface, obfuscation, inventory, and patterns without an established source→sink path.</p>
-        <div class="find-list" id="risk-signals"></div>
-      </div>
-
-      <div class="card view-group" style="margin-top:18px" data-view="intelligence">
-        <h3>🔁 Source → Sink Data Flows</h3>
-        <div class="find-list" id="flow-panel"></div>
-      </div>
-
-      <div class="card view-group" style="margin-top:18px" data-view="intelligence">
-        <h3>🎯 Attack Surface</h3>
-        <div class="finding-grid" id="attack-panel"></div>
-      </div>
-
-      <div class="card view-group" style="margin-top:18px" data-view="intelligence">
-        <h3>🔐 Secrets &amp; Sensitive Data</h3>
-        <div class="finding-grid" id="secrets-panel"></div>
-      </div>
-
-      <div class="card view-group" style="margin-top:18px" data-view="intelligence">
-        <h3>🧰 Dependencies &amp; Transport</h3>
-        <div class="finding-grid" id="dep-panel"></div>
-      </div>
-
-      <div class="card view-group" style="margin-top:18px" data-view="runtime">
-        <h3>🖥️ Runtime Evidence</h3>
-        <p class="modal-note" style="margin:0 0 8px">
-          Evidence is captured on your machine with a local headless browser. ScriptSentry keeps URLs, console
-          text, DOM sink values, storage <b>key names</b>, and cookie <b>names only</b> — never cookie values,
-          request bodies, or localStorage values.
+    <!-- ============================ What it finds ============================ -->
+    <section class="section" id="features">
+      <div class="section-head">
+        <span class="section-kicker">01 — Capabilities</span>
+        <h2>What It Finds</h2>
+        <p>
+          Not just dangerous strings — what the scripts actually <em>do</em>: what they read,
+          where that data can go, which third parties are involved, and how risky that
+          behavior is.
         </p>
-        <div id="runtime-panel"></div>
+      </div>
+
+      <div class="feature-grid">
+        <article class="feature-card">
+          <div class="feature-ico">🔐</div>
+          <h3>Secrets &amp; Credentials</h3>
+          <p>JWTs, API keys, auth headers, crypto keys and IVs — filtered so placeholders and template markers don't cry wolf.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-ico">🕳️</div>
+          <h3>Real DOM-XSS &amp; Redirects</h3>
+          <p>Source→sink taint analysis: <code>location</code>, <code>postMessage</code>, storage, cookies and forms flowing into <code>innerHTML</code>, <code>eval</code> or a redirect.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-ico">🚚</div>
+          <h3>Data Exfiltration</h3>
+          <p>Sensitive reads correlated with external or third-party destinations, WebSockets, SSE and beacon calls.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-ico">🌐</div>
+          <h3>Attack Surface</h3>
+          <p>Endpoints, HTTP methods, GraphQL, parameters, headers, body fields and internal or hidden routes.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-ico">📦</div>
+          <h3>Dependencies &amp; Tech Stack</h3>
+          <p>Frameworks and libraries, plus framework-specific risky APIs: React <code>dangerouslySetInnerHTML</code>, Angular <code>bypassSecurityTrust*</code>, Vue <code>v-html</code>, jQuery sinks.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-ico">💾</div>
+          <h3>Storage &amp; Crypto Use</h3>
+          <p>localStorage / sessionStorage / cookie usage and client-side crypto routines, with key and IV material surfaced.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-ico">🧩</div>
+          <h3>Obfuscation</h3>
+          <p>Encoded and hidden strings, suspicious runtime calls, and minified or packed bundle detection.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-ico">🖥️</div>
+          <h3>Runtime Evidence <span class="tag">Optional</span></h3>
+          <p>A local headless browser watches the live page: network traffic, DOM sinks, <code>eval</code>, storage and scripts loaded only at runtime.</p>
+        </article>
       </div>
     </section>
 
-    <footer class="footer">
-      ScriptSentry · JS Intelligence Studio · <strong>private &amp; free</strong> · run <code>python3 server.py</code>
-    </footer>
-  </div>
+    <!-- ============================ How it works ============================ -->
+    <section class="section" id="how">
+      <div class="section-head">
+        <span class="section-kicker">02 — Workflow</span>
+        <h2>How It Works</h2>
+        <p>Three ways in, one evidence-driven pipeline, and a dashboard built for triage instead of noise.</p>
+      </div>
 
-  <div class="modal-overlay" id="privacy-modal" hidden>
-    <div class="modal" role="dialog" aria-labelledby="privacy-title">
-      <div class="modal-ico">🔒</div>
-      <h2 id="privacy-title">Run it locally — it's free &amp; private</h2>
-      <p>
-        You're viewing the <b>hosted interface</b>. For privacy, ScriptSentry never sends your
-        code to a cloud. Start the local engine, then this page connects to it automatically.
-        Pick the easiest option:
+      <ol class="steps">
+        <li class="step-card">
+          <span class="step-num">1</span>
+          <h3>Give It Code</h3>
+          <p>Paste JavaScript, drag &amp; drop your bundle files, or scan a URL. The engine crawls imports and bundler chunk maps to find the real script graph.</p>
+        </li>
+        <li class="step-card">
+          <span class="step-num">2</span>
+          <h3>It Profiles Behavior</h3>
+          <p>Every script gets a behavior profile: first/third-party attribution, sensitive reads, DOM and network writes, browser APIs and a 0–100 script risk score.</p>
+        </li>
+        <li class="step-card">
+          <span class="step-num">3</span>
+          <h3>Follow the Data</h3>
+          <p>Taint analysis traces source→sink paths, ranks them by evidence strength, and states the limits of every conclusion.</p>
+        </li>
+        <li class="step-card">
+          <span class="step-num">4</span>
+          <h3>Triage, Then Export</h3>
+          <p>Mark findings open, needs review, confirmed, false positive or informational, then export HTML, TXT, CSV or SARIF.</p>
+        </li>
+      </ol>
+    </section>
+
+    <!-- ============================ Trust ============================ -->
+    <section class="section" id="trust">
+      <div class="section-head">
+        <span class="section-kicker">03 — Trustworthiness</span>
+        <h2>Built to Avoid Crying Wolf</h2>
+        <p>ScriptSentry keeps three questions separate — most scanners blur them together.</p>
+      </div>
+
+      <div class="trust-table" role="table" aria-label="Severity, confidence and status are separate axes">
+        <div class="trust-row trust-head" role="row">
+          <span role="columnheader">Question</span><span role="columnheader">Answer</span>
+        </div>
+        <div class="trust-row" role="row">
+          <span role="cell">How bad would it be <em>if real</em>?</span>
+          <span role="cell" data-label="Answer">Severity — Info → Critical</span>
+        </div>
+        <div class="trust-row" role="row">
+          <span role="cell">How certain is the <em>evidence</em>?</span>
+          <span role="cell" data-label="Answer">Confidence — low → high → confirmed</span>
+        </div>
+        <div class="trust-row" role="row">
+          <span role="cell">What's the analyst state?</span>
+          <span role="cell" data-label="Answer">Open · Needs review · Confirmed · False positive · Informational</span>
+        </div>
+      </div>
+
+      <p class="section-note">
+        A regex hit is <b>not</b> treated as proof. A static source→sink path is reported as
+        high confidence but stays <b>Open</b> — encoding, framework sanitizers or unreachable
+        code may still neutralize it. <b>Confirmed</b> is reserved for deterministic proof or a
+        demonstrated runtime effect.
       </p>
+    </section>
 
-      <div class="setup-toggle" role="tablist">
-        <button class="setup-tab active" data-setup="easy" role="tab">⭐ Easiest: one file</button>
-        <button class="setup-tab" data-setup="clone" role="tab">🐙 Clone the repo</button>
+    <!-- ============================ Setup ============================ -->
+    <section class="section" id="setup">
+      <div class="section-head">
+        <span class="section-kicker">04 — Requirements</span>
+        <h2>Run Your Own Engine</h2>
+        <p>
+          The page you are reading is only the interface. Start the engine on your machine once,
+          and this dashboard connects to it automatically — nothing is uploaded anywhere.
+        </p>
       </div>
 
-      <div class="setup-pane" data-setup-pane="easy">
-        <p class="modal-note" style="margin:6px 0 10px">
-          Download <b>one file</b>. On first run it fetches the engine from the official GitHub
-          repo, installs dependencies, and starts — no clone needed.
-        </p>
-        <div class="setup-actions">
-          <a class="btn" id="download-launcher" rel="noopener"
-             href="https://raw.githubusercontent.com/AmitPal-CyberBuddy/ScriptSentry/main/scriptsentry.py"
-             download="scriptsentry.py">⬇️ Download scriptsentry.py</a>
+      <div class="setup-card">
+        <div class="setup-card-head">
+          <div>
+            <h3>One File Is Enough</h3>
+            <p class="modal-note">Download a single launcher. On first run it fetches the engine, installs dependencies and starts — no clone required.</p>
+          </div>
+          <div class="setup-actions">
+            <button class="btn js-download-launcher" type="button"
+                    data-download="https://raw.githubusercontent.com/AmitPal-CyberBuddy/ScriptSentry/main/scriptsentry.py"
+                    data-filename="scriptsentry.py">
+              ⬇️ Download scriptsentry.py
+            </button>
+            <span class="download-hint" id="download-hint" role="status" aria-live="polite"></span>
+          </div>
         </div>
+
         <ol class="setup-steps">
           <li><b>Download</b> the launcher above (or copy it straight from GitHub).</li>
           <li><b>Run it:</b> <code>python3 scriptsentry.py --port 8000</code> — the first run downloads the engine.</li>
-          <li><b>Paste the pairing token</b> it prints into the field below.</li>
+          <li><b>Copy the pairing token</b> it prints, then paste it into the setup dialog.</li>
         </ol>
+
         <div class="code-box">
           <pre id="setup-code-easy"># downloads &amp; starts the engine on first run
 python3 scriptsentry.py --port 8000</pre>
-          <button class="btn ghost" data-copy="setup-code-easy">📋 Copy</button>
+          <button class="btn ghost" data-copy="setup-code-easy" type="button">📋 Copy</button>
         </div>
-      </div>
 
-      <div class="setup-pane" data-setup-pane="clone" hidden>
-        <ol class="setup-steps">
-          <li><b>Get the project:</b> clone or download <code>ScriptSentry</code>.</li>
-          <li><b>Open a terminal</b> inside the project folder.</li>
-          <li><b>Install deps:</b> <code>pip install -r requirements.txt</code></li>
-          <li><b>Start the server:</b> <code>python3 server.py --port 8000</code></li>
-          <li><b>Keep this page open</b> and press <em>Retry connection</em>.</li>
-        </ol>
-        <div class="code-box">
-          <pre id="setup-code-clone">git clone https://github.com/AmitPal-CyberBuddy/ScriptSentry.git
+        <details class="setup-details">
+          <summary>Prefer the full repo? (git clone)</summary>
+          <ol class="setup-steps">
+            <li>Clone <code>ScriptSentry</code> and open a terminal inside it.</li>
+            <li><b>Install deps:</b> <code>pip install -r requirements.txt</code></li>
+            <li><b>Start the server:</b> <code>python3 server.py --port 8000</code></li>
+            <li>Keep this page open and press <em>Retry Connection</em> in the setup dialog.</li>
+          </ol>
+          <div class="code-box">
+            <pre id="setup-code-clone">git clone https://github.com/AmitPal-CyberBuddy/ScriptSentry.git
 cd ScriptSentry
 pip install -r requirements.txt
 python3 server.py --port 8000</pre>
-          <button class="btn ghost" data-copy="setup-code-clone">📋 Copy</button>
+            <button class="btn ghost" data-copy="setup-code-clone" type="button">📋 Copy</button>
+          </div>
+          <p class="modal-note">⚠️ If you change the port, update <code>webui/config.js</code> to the same port.</p>
+        </details>
+      </div>
+    </section>
+
+    <!-- ============================ Connect ============================ -->
+    <section class="section" id="connect">
+      <div class="section-head">
+        <span class="section-kicker">05 — Connect</span>
+        <h2>Connect With Me</h2>
+        <p>
+          I am Amit Pal, and I build ScriptSentry for analysts, with analysts. When a result
+          looks wrong — or you have a bundle that deserves a second pair of eyes — send it to me.
+        </p>
+      </div>
+
+      <div class="connect-card">
+        <div class="connect-avatar" aria-hidden="true">🛡️</div>
+        <div class="connect-body">
+          <h3>Found a Bug — or a Finding That Is Wrong?</h3>
+          <p class="connect-lead">
+            Send me the finding, the snippet that triggered it, and what you expected instead.
+            Real production bundles are the best test suite there is, and a false positive I can
+            reproduce is a bug I can fix.
+          </p>
+          <div class="connect-actions">
+            <a class="btn" href="mailto:amitpal.secure@gmail.com?subject=ScriptSentry%20feedback">✉️ amitpal.secure@gmail.com</a>
+            <a class="btn ghost" href="https://github.com/AmitPal-CyberBuddy/ScriptSentry/issues" target="_blank" rel="noopener noreferrer">🐞 Issue tracker</a>
+            <a class="btn ghost" href="https://www.linkedin.com/in/amitpal-wb/" target="_blank" rel="noopener noreferrer">💼 LinkedIn</a>
+          </div>
+          <p class="connect-note">
+            <b>Next on my bench: build-over-build diffing.</b> Snapshot a bundle today, snapshot
+            it again after the next release, and see only what changed — new secrets, new sinks,
+            new third parties — with a CI gate that fails on newly confirmed findings. Ideas are
+            welcome while I design it.
+          </p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============================ Footer ============================ -->
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <a class="brand footer-brand-row" href="#top" aria-label="ScriptSentry home">
+          <span class="mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" role="img" aria-hidden="true" focusable="false">
+              <defs>
+                <linearGradient id="ssMark2" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#22d3ee" />
+                  <stop offset="1" stop-color="#a78bfa" />
+                </linearGradient>
+              </defs>
+              <path d="M16 2.2 27.5 6v9.6c0 6.6-4.9 12.2-11.5 14.2C9.4 27.8 4.5 22.2 4.5 15.6V6z" fill="url(#ssMark2)" opacity=".16" />
+              <path d="M16 2.2 27.5 6v9.6c0 6.6-4.9 12.2-11.5 14.2C9.4 27.8 4.5 22.2 4.5 15.6V6z" fill="none" stroke="url(#ssMark2)" stroke-width="2.2" stroke-linejoin="round" />
+              <g fill="none" stroke="#eaf6ff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13.2 12.4 9.8 16l3.4 3.6" />
+                <path d="M18.8 12.4 22.2 16l-3.4 3.6" />
+                <path d="M17.3 11.2 14.7 20.8" />
+              </g>
+            </svg>
+          </span>
+          <span class="brand-text">
+            <span class="brand-name">ScriptSentry</span>
+            <span class="sub">JS Intelligence Studio</span>
+          </span>
+        </a>
+        <p>
+          Local-first JavaScript security analysis — free, open source, and it runs on your
+          own machine.
+        </p>
+      </div>
+
+      <nav class="footer-col" aria-label="Product">
+        <h3>Product</h3>
+        <a href="tool.html">⚡ Open the Analyzer</a>
+        <a href="changelog.html">📜 What's New</a>
+      </nav>
+
+      <nav class="footer-col" aria-label="Connect">
+        <h3>Connect</h3>
+        <a href="mailto:amitpal.secure@gmail.com">✉️ amitpal.secure@gmail.com</a>
+        <a href="https://www.linkedin.com/in/amitpal-wb/" target="_blank" rel="noopener noreferrer">💼 LinkedIn</a>
+        <a href="https://github.com/AmitPal-CyberBuddy/ScriptSentry" target="_blank" rel="noopener noreferrer">🐙 GitHub · source &amp; docs</a>
+      </nav>
+    </div>
+
+    <div class="footer-legal">
+      <p>
+        ⚖️ <b>Authorized testing only.</b> Scan only what you own or have written permission
+        to test. ScriptSentry gives you triage signals, not proof — verify every finding before
+        you act on it. You are responsible for complying with all applicable laws and the
+        target's terms of service.
+      </p>
+      <p class="footer-meta">
+        ScriptSentry · JS Intelligence Studio · <strong>private &amp; free</strong> ·
+        run <code>python3 server.py</code> · no telemetry, no accounts, no cloud.
+      </p>
+    </div>
+  </footer>
+
+  <!-- ============================ Setup / pairing modal ============================ -->
+  <div class="modal-overlay" id="privacy-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="privacy-title">
+      <button class="modal-close" id="close-modal-x" type="button" aria-label="Close setup dialog" title="Close">×</button>
+
+      <div class="modal-head">
+        <div class="modal-ico">🔒</div>
+        <div>
+          <h2 id="privacy-title">Run it locally — it's free &amp; private</h2>
+          <p class="modal-head-sub">
+            You're viewing the <b>hosted interface</b>. For privacy, I never see what you
+            analyze — the code stays on your machine. Start the local engine, and this
+            page connects to it automatically. Pick the easiest option:
+          </p>
         </div>
       </div>
 
-      <p class="modal-note authorized-note">
-        ⚖️ <b>Authorized testing only.</b> Only scan systems you own or have explicit written
-        permission to test. You are responsible for lawful use.
-      </p>
-      <p class="modal-note">
-        ⚠️ If you change the port, update <code>webui/config.js</code> to the same port.
-        The engine prints a pairing token at startup; it stays in this tab only.
-      </p>
-      <label class="field-label" for="engine-token">Engine pairing token</label>
-      <input id="engine-token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the token printed by server.py" />
-      <p class="error-note" id="connection-error" hidden></p>
-      <div class="modal-actions">
-        <button class="btn secondary" id="close-modal">Got it</button>
-        <button class="btn" id="retry-backend">🔄 Retry connection</button>
+      <div class="modal-grid">
+        <div class="modal-col">
+          <div class="setup-toggle" role="tablist">
+            <button class="setup-tab active" data-setup="easy" role="tab">⭐ Easiest: one file</button>
+            <button class="setup-tab" data-setup="clone" role="tab">🐙 Clone the Repo</button>
+          </div>
+
+          <div class="setup-pane" data-setup-pane="easy">
+            <p class="modal-note" style="margin:6px 0 10px">
+              One file, one command. On first run it fetches the engine from the official GitHub
+              repo, installs what it needs, and starts — no clone required.
+            </p>
+            <div class="setup-actions">
+              <button class="btn js-download-launcher" type="button"
+                      data-download="https://raw.githubusercontent.com/AmitPal-CyberBuddy/ScriptSentry/main/scriptsentry.py"
+                      data-filename="scriptsentry.py">
+                ⬇️ Download scriptsentry.py
+              </button>
+              <span class="download-hint" id="download-hint-modal" role="status" aria-live="polite"></span>
+            </div>
+            <ol class="setup-steps">
+              <li><b>Download</b> the launcher above (or copy it straight from GitHub).</li>
+              <li><b>Run it:</b> <code>python3 scriptsentry.py --port 8000</code> — the first run downloads the engine.</li>
+              <li><b>Paste the pairing token</b> it prints into the field below.</li>
+            </ol>
+            <div class="code-box">
+              <pre id="setup-code-easy-modal"># downloads &amp; starts the engine on first run
+python3 scriptsentry.py --port 8000</pre>
+              <button class="btn ghost" data-copy="setup-code-easy-modal" type="button">📋 Copy</button>
+            </div>
+          </div>
+
+          <div class="setup-pane" data-setup-pane="clone" hidden>
+            <ol class="setup-steps">
+              <li><b>Get the project:</b> clone or download <code>ScriptSentry</code>.</li>
+              <li><b>Open a terminal</b> inside the project folder.</li>
+              <li><b>Install deps:</b> <code>pip install -r requirements.txt</code></li>
+              <li><b>Start the server:</b> <code>python3 server.py --port 8000</code></li>
+              <li><b>Keep this page open</b> and press <em>Retry Connection</em>.</li>
+            </ol>
+            <div class="code-box">
+              <pre id="setup-code-clone-modal">git clone https://github.com/AmitPal-CyberBuddy/ScriptSentry.git
+cd ScriptSentry
+pip install -r requirements.txt
+python3 server.py --port 8000</pre>
+              <button class="btn ghost" data-copy="setup-code-clone-modal" type="button">📋 Copy</button>
+            </div>
+          </div>
+
+          <p class="modal-note">
+            ⚠️ If you change the port, update <code>webui/config.js</code> to the same port.
+            The engine prints a pairing token at startup; it stays in this tab only.
+          </p>
+        </div>
+
+        <div class="modal-col modal-col-aside">
+          <h3 class="aside-title">Pair the engine</h3>
+          <p class="modal-note" style="margin:0 0 10px">
+            The token is printed in your terminal when the engine starts. It is kept in this
+            browser tab only — never in the URL, never in a report.
+          </p>
+          <label class="field-label" for="engine-token">Engine pairing token</label>
+          <div class="token-field">
+            <span class="token-field-icon" aria-hidden="true">🔑</span>
+            <input id="engine-token" class="token-input" type="password" autocomplete="off" spellcheck="false"
+                   placeholder="Paste the token printed by server.py" />
+          </div>
+          <p class="error-note" id="connection-error" hidden></p>
+
+          <div class="aside-status" id="engine-status-aside">
+            <span class="pulse-dot" id="engine-dot-modal" aria-hidden="true"></span>
+            <span id="engine-status-text-modal">Checking local engine…</span>
+          </div>
+
+          <div class="modal-actions">
+            <button class="btn secondary" id="close-modal">Got it</button>
+            <button class="btn" id="retry-backend">🔄 Retry Connection</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

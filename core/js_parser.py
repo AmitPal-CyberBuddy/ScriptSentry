@@ -12,6 +12,28 @@ except ImportError:
     esprima = None
 
 
+PARSER_NAME = "esprima"
+
+
+def parser_available():
+    """True when the optional JavaScript parser is installed.
+
+    Everything keeps working without it, but taint analysis degrades to the
+    line-based fallback, so callers should surface this to the analyst instead
+    of silently producing weaker results.
+    """
+    return esprima is not None
+
+
+def parser_status():
+    return {
+        "name": PARSER_NAME,
+        "available": esprima is not None,
+        "mode": "ast" if esprima is not None else "regex_fallback",
+        "install_hint": f"pip install {PARSER_NAME}",
+    }
+
+
 def _node_key(node, key="name"):
     """Return the normalized name for an ESTree-style identifier node."""
     if node is None:

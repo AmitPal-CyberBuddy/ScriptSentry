@@ -2,6 +2,7 @@ import html
 import itertools
 import os
 
+from core.js_parser import parser_status
 from core.analysis_model import deduplicate_findings, split_findings
 from core.risk_model import overall_risk, top_priorities
 from core.script_intel import build_script_intel, data_exfiltration_candidates
@@ -123,6 +124,26 @@ def _crypto_flow_text(flows):
     return out
 
 
+def _flow_summary_text(items):
+    """Render the structured flow summary as readable strings.
+
+    ``flow_analyzer`` returns ``[{stage, description}]`` records; reports and the
+    dashboard need a one-line form.  Plain strings are passed through so older
+    payloads and hand-built fixtures still work.
+    """
+    out = []
+    for item in items or []:
+        if isinstance(item, dict):
+            stage = safe_text(item.get("stage", "")).strip()
+            description = safe_text(item.get("description", "")).strip()
+            text = f"{stage} ({description})" if stage and description else (stage or description)
+        else:
+            text = safe_text(item).strip()
+        if text:
+            out.append(text)
+    return out
+
+
 def _normalize_data(file_name, data):
     """Return a copy of a scan result normalized for report-friendly rendering."""
     return {
@@ -154,7 +175,7 @@ def _normalize_data(file_name, data):
         "storage_analysis": data.get("storage_analysis", []),
         "config_summary": data.get("config_summary", []),
         "technology_stack": data.get("technology_stack", []),
-        "data_flow_summary": data.get("data_flow_summary", []),
+        "data_flow_summary": _flow_summary_text(data.get("data_flow_summary", [])),
         "obfuscation_analysis": data.get("obfuscation_analysis", {}),
         "secret_analysis": data.get("secret_analysis", []),
         "risk_signals": data.get("risk_signals", []),
@@ -218,6 +239,10 @@ def build_report_model(results, ai_summary=None, metadata=None):
     runtime_evidence = results.get("__runtime_evidence__") or {}
     runtime_findings = results.get("__runtime_findings__") or []
     scan_summary = results.get("__scan_summary__") or {}
+    # Local artifact path -> origin URL. A URL scan keeps its bundles in a
+    # temporary workspace that is deleted when the scan ends, so findings
+    # must carry the URL they came from, not that path.
+    url_by_path = dict(scan_summary.get("path_to_url") or {})
     page_url = runtime_evidence.get("url") or (metadata or {}).get("source", "")
     if page_url and not str(page_url).startswith(("http://", "https://")):
         page_url = ""
@@ -236,6 +261,11 @@ def build_report_model(results, ai_summary=None, metadata=None):
         if str(file_name).startswith("__"):
             continue
         norm = _normalize_data(file_name, data)
+        # Prefer the URL the script was downloaded from; fall back to the
+        # URL recorded on the document, then to the local artifact path.
+        norm["origin"] = (url_by_path.get(file_name)
+                          or str(data.get("url") or "")
+                          or ("" if str(file_name).startswith("runtime://") else file_name))
         score, label, findings = score_risk(norm)
         norm["score"] = score
         norm["risk"] = label
@@ -258,7 +288,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
         all_transport.update(norm.get("transport", []) or [])
         total_count += len(findings)
         for flow in norm.get("dataflows", []) or []:
-            all_flows.append({**flow, "file": file_name})
+            all_flows.append({**flow, "file": file_name, "origin": norm["origin"]})
             all_signals.append({
                 "id": flow.get("id", "dataflow"), "severity": flow.get("severity", "HIGH"),
                 "title": flow.get("type", flow.get("id", "Source-to-sink flow")),
@@ -274,7 +304,11 @@ def build_report_model(results, ai_summary=None, metadata=None):
             })
         for f in norm.get("rich_findings", []) or []:
             if isinstance(f, dict):
-                all_findings.append({**f, "file": f.get("file", file_name)})
+                all_findings.append({
+                    **f,
+                    "file": f.get("file", file_name),
+                    "origin": f.get("origin") or norm["origin"],
+                })
         asrf = norm.get("attack_surface", {}) or {}
         for key in all_attack_surface.keys():
             all_attack_surface[key].extend(asrf.get(key, []) or [])
@@ -425,6 +459,71 @@ def build_report_model(results, ai_summary=None, metadata=None):
     }
 
 
+def scan_reliability(model, results=None):
+    """How much of the target we actually saw, and how much to trust it.
+
+    A report that lists findings without saying what was *not* analyzed invites
+    over-trust. Every export therefore carries the same block: coverage
+    (scanned / discovered / skipped and why), which analysis engine ran, and
+    the confidence mix of the findings.
+    """
+    summary = (model or {}).get("scan_summary") or {}
+    files = (model or {}).get("files") or []
+    findings = ((model or {}).get("summary") or {}).get("findings") or []
+    flows = ((model or {}).get("summary") or {}).get("dataflows") or []
+    runtime = (model or {}).get("runtime") or {}
+
+    parser = {}
+    if results is not None:
+        try:
+            from core.js_parser import parser_status
+            parser = parser_status() or {}
+        except Exception:
+            parser = {}
+    if not parser:
+        parser = ((model or {}).get("meta") or {}).get("ast_parser") or {}
+
+    confidence_mix = {}
+    for f in list(findings) + list(flows):
+        if not isinstance(f, dict):
+            continue
+        key = str(f.get("confidence") or "low").lower()
+        confidence_mix[key] = confidence_mix.get(key, 0) + 1
+
+    discovered = int(summary.get("total_discovered") or len(files) or 0)
+    scanned = int(summary.get("total_files") or len(files) or 0)
+    skipped = int(summary.get("skipped_files") or 0)
+    reasons = [str(r).replace("_", " ") for r in (summary.get("skipped_reasons") or [])]
+    coverage_pct = round((scanned / discovered) * 100.0, 1) if discovered else 100.0
+
+    rows = [("Coverage", f"{scanned} of {discovered} discovered script(s) analyzed ({coverage_pct:g}%)")]
+    if skipped:
+        rows.append(("Skipped", f"{skipped} asset(s)"
+                     + (f" — {', '.join(reasons)}" if reasons else "")))
+    if summary.get("capped"):
+        rows.append(("File cap", f"reached the {summary.get('max_files', '?')}-file limit; "
+                                 "further scripts were not analyzed"))
+    if summary.get("max_depth"):
+        rows.append(("Traversal", f"import depth limited to {summary.get('max_depth')}"))
+    rows.append(("Analysis engine", "JavaScript AST" if parser.get("available")
+                 else "line-based fallback (the optional JavaScript parser is not installed)"))
+    status = str(runtime.get("status") or summary.get("runtime_status") or "not_run")
+    rows.append(("Runtime verification", {
+        "captured": "captured in a local headless browser",
+        "disabled": "disabled by configuration",
+        "unavailable": "unavailable (Playwright not installed)",
+        "error": "attempted, failed",
+    }.get(status, "not run")))
+    if confidence_mix:
+        rows.append(("Confidence mix", ", ".join(
+            f"{k} {v}" for k, v in sorted(confidence_mix.items(), key=lambda kv: -kv[1]))))
+    rows.append(("Confirmed proof",
+                 "none — no finding was proven by observing an unsafe effect"
+                 if not confidence_mix.get("confirmed")
+                 else f"{confidence_mix.get('confirmed')} finding(s) proven at runtime"))
+    return rows
+
+
 def _overall_risk_label(score, max_file_score):
     if score >= 18 or max_file_score >= 9:
         return "CRITICAL"
@@ -518,6 +617,10 @@ def generate_report(results, ai_summary=None):
             report.append(f"  - {safe_text(line)}")
 
     # Top risks
+    report.append("\n========== SCAN COVERAGE & RELIABILITY ==========")
+    for label, value in scan_reliability(model, results):
+        report.append(f"  - {label}: {safe_text(value)}")
+
     report.append("\n========== TOP RISK SIGNALS ==========")
     top = sorted(summary["signals"], key=lambda s: {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}.get(s.get("severity", "INFO"), 4))[:12]
     if not top:
@@ -552,6 +655,8 @@ def generate_report(results, ai_summary=None):
     report.append("\n\n========== DETAILED ANALYSIS ==========")
     for norm in model["files"]:
         report.append(f"\n==== {norm['name']} ====")
+        if norm.get("origin") and norm["origin"] != norm["name"]:
+            report.append(f"  Origin: {safe_text(norm['origin'])}")
         report.append(f"  Score: {norm['score']} · Risk: {norm['risk']} · Confidence: {norm['confidence'] or 'n/a'}")
         if norm.get("file_size"):
             report.append(f"  Size: {norm['file_size']} bytes · Lines: {norm['line_count']}")
@@ -779,6 +884,10 @@ def generate_html_report(results, ai_summary=None):
     .sev-LOW { background:#22d3ee; color:#06303a; }
     .sev-INFO { background:#8b5cf6; color:#fff; }
     .bars { display:grid; gap:8px; margin-top:8px; }
+    table.kv { width:100%; border-collapse:collapse; font-size:13px; }
+    table.kv th { text-align:left; width:32%; padding:7px 12px 7px 0; color:#40516e; font-weight:700; vertical-align:top; }
+    table.kv td { padding:7px 0; color:#2b3a56; }
+    table.kv tr + tr th, table.kv tr + tr td { border-top:1px solid #eef1f6; }
     .bar { display:grid; grid-template-columns:140px 1fr 34px; gap:10px; align-items:center; font-size:12px; color:#40516e; }
     .track { height:9px; border-radius:9px; background:#e5e9f1; overflow:hidden; }
     .track i { display:block; height:100%; border-radius:9px; background:#22d3ee; }
@@ -816,6 +925,12 @@ def generate_html_report(results, ai_summary=None):
         pct = max(3, min(100, int(value * 100 / max_value)))
         html.append(f"<div class=\"bar\"><span>{esc(key.replace('_',' ').title())}</span><div class=\"track\"><i style=\"width:{pct}%\"></i></div><b>{value}</b></div>")
     html.append("</div></div>")
+
+    # Coverage / reliability: what we saw, what we could not, how sure we are.
+    html.append("<h2>📏 Scan Coverage &amp; Reliability</h2><div class=\"card\"><table class=\"kv\">")
+    for label, value in scan_reliability(model, results):
+        html.append(f"<tr><th>{esc(label)}</th><td>{esc(value)}</td></tr>")
+    html.append("</table></div>")
 
     # Signals
     html.append("<h2>🚦 Top Risk Signals</h2><div class=\"card\">")
@@ -874,6 +989,8 @@ def generate_html_report(results, ai_summary=None):
     html.append("<h2>🔎 Detailed Analysis</h2>")
     for norm in model["files"]:
         html.append(f"<div class=\"card\"><div class=\"file-head\"><h3>{esc(norm['name'])}</h3><span class=\"pill\">{esc(norm['risk'])} · {norm['score']}</span></div>")
+        if norm.get("origin") and norm["origin"] != norm["name"]:
+            html.append(f"<p style=\"color:#0f6fa8;font-size:12px;word-break:break-all\">origin: {esc(norm['origin'])}</p>")
         if norm.get("file_size"):
             html.append(f"<p style=\"color:#6b7891;font-size:12px\">{norm['file_size']} bytes · {norm['line_count']} lines · confidence {esc(norm.get('confidence') or 'n/a')}</p>")
         if norm["real_crypto_detected"]:
@@ -946,7 +1063,7 @@ def generate_csv_report(results, ai_summary=None):
     model = build_report_model(results, ai_summary=ai_summary)
     findings = _all_unified_findings(model)
     fields = [
-        "id", "type", "severity", "confidence", "status", "file", "line",
+        "id", "type", "severity", "confidence", "status", "origin", "file", "line",
         "source", "sink", "flow", "evidence", "sanitization_detected", "framework",
         "evidence_type", "analysis_quality", "limitations", "observation",
     ]
@@ -954,20 +1071,26 @@ def generate_csv_report(results, ai_summary=None):
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
     for f in findings:
-        flow = " -> ".join(f.get("flow", []) or [])
+        flow = " -> ".join(str(x) for x in (f.get("flow", []) or []))
         limitations = "; ".join(str(x) for x in (f.get("limitations", []) or []))
+        evidence = f.get("evidence", "")
+        # Evidence is frequently a list (keys, IVs, secret candidates). Writing
+        # it raw produced Python reprs like "['a', 'b']" in the export.
+        if isinstance(evidence, (list, tuple)):
+            evidence = " | ".join(str(x) for x in evidence)
         writer.writerow({
             "id": f.get("id", ""),
             "type": f.get("type", ""),
             "severity": f.get("severity", ""),
             "confidence": f.get("confidence", ""),
             "status": f.get("status", ""),
+            "origin": f.get("origin", "") or f.get("file", ""),
             "file": f.get("file", ""),
             "line": f.get("line", 0),
             "source": f.get("source", ""),
             "sink": f.get("sink", ""),
             "flow": flow,
-            "evidence": f.get("evidence", ""),
+            "evidence": evidence,
             "sanitization_detected": f.get("sanitization_detected", False),
             "framework": f.get("framework", ""),
             "evidence_type": f.get("evidence_type", ""),
@@ -994,8 +1117,13 @@ def generate_sarif_report(results, ai_summary=None):
                 "id": rule_id,
                 "name": rule_id,
                 "shortDescription": {"text": str(f.get("type") or rule_id)},
-                "help": {"text": f"ScriptSentry deterministic finding: {f.get('type', rule_id)}"},
-                "properties": {"tags": [str(f.get("severity", "")).lower()]},
+                "fullDescription": {"text": str(f.get("type") or rule_id)},
+                "help": {"text": f"ScriptSentry finding: {f.get('type', rule_id)}"},
+                "defaultConfiguration": {"level": _sarif_level(f.get("severity", "MEDIUM"))},
+                "properties": {
+                    "tags": [str(f.get("severity", "")).lower(), "security", "javascript"],
+                    "security-severity": _sarif_security_severity(f.get("severity", "MEDIUM")),
+                },
             }
         # line numbers are typically 1-indexed in ESTree; SARIF expects 0-indexed.
         start_line = max(0, int(f.get("line", 1) or 1) - 1)
@@ -1004,18 +1132,30 @@ def generate_sarif_report(results, ai_summary=None):
             message = f"{f.get('source')} -> {message}"
         if f.get("flow"):
             message += " | path: " + " -> ".join(f.get("flow", [])[:6])
+        observation = bool(f.get("observation", False))
+        status = str(f.get("status", "") or "").lower()
+        # A low-confidence observation is not a failed check: exporting it as
+        # level=error makes CI gate on findings the engine itself calls
+        # unproven, which is how a good scanner loses its audience.
+        level = "note" if (observation or status in ("informational", "false_positive")) \
+            else _sarif_level(f.get("severity", "MEDIUM"))
         result = {
             "ruleId": rule_id,
-            "level": _sarif_level(f.get("severity", "MEDIUM")),
+            "level": level,
+            # SARIF has no severity field of its own; `rank` is the standard
+            # place to express confidence (0-100) and `kind` the result state.
+            "rank": _sarif_rank(f.get("confidence", "")),
+            "kind": _sarif_kind(f.get("confidence", ""), status, observation),
             "message": {"text": str(message)[:1000]},
             "locations": [{
                 "physicalLocation": {
-                    "artifactLocation": {"uri": str(f.get("file", ""))},
+                    "artifactLocation": {"uri": str(f.get("origin") or f.get("file", ""))},
                     "region": {"startLine": start_line},
                 }
             }],
             "properties": {
                 "confidence": f.get("confidence", ""),
+                "security-severity": _sarif_security_severity(f.get("severity", "MEDIUM")),
                 "status": f.get("status", ""),
                 "source": f.get("source", ""),
                 "sink": f.get("sink", ""),
@@ -1042,6 +1182,27 @@ def generate_sarif_report(results, ai_summary=None):
 
 def _sarif_level(severity):
     return {"CRITICAL": "error", "HIGH": "error", "MEDIUM": "warning", "LOW": "note", "INFO": "note"}.get(str(severity).upper(), "warning")
+
+
+def _sarif_rank(confidence):
+    """SARIF ``rank`` is confidence expressed as a percentage."""
+    return {"low": 25.0, "medium": 50.0, "high": 75.0, "confirmed": 100.0}.get(
+        str(confidence or "").lower(), 25.0)
+
+
+def _sarif_security_severity(severity):
+    """GitHub-style 0-10 score, so imported results sort correctly there."""
+    return {"CRITICAL": "9.5", "HIGH": "8.0", "MEDIUM": "5.5", "LOW": "3.0", "INFO": "1.0"}.get(
+        str(severity).upper(), "5.5")
+
+
+def _sarif_kind(confidence, status, observation=False):
+    """``fail`` only for evidence-backed, still-open findings."""
+    if observation or status in ("informational", "false_positive"):
+        return "informational"
+    if str(confidence or "").lower() == "confirmed":
+        return "fail"
+    return "open"
 
 
 # =========================================
@@ -1076,7 +1237,7 @@ def _clean_list(items, limit=8):
     for item in items or []:
         if isinstance(item, dict):
             text = safe_text(
-                item.get("value", item.get("name", item.get("signal", item.get("endpoint", item.get("storage", "")))))
+                item.get("value", item.get("name", item.get("signal", item.get("stage", item.get("endpoint", item.get("storage", ""))))))
             ).strip()
         else:
             text = safe_text(item).strip()
@@ -1158,7 +1319,7 @@ def _file_diagnostic(file_name, data):
         "decoded": _clean_list(data.get("decoded_strings", []), 8),
         "tech": _clean_list(data.get("technology_stack", []), 8),
         "features": _clean_list(data.get("notable_features", []), 10),
-        "data_flow": _clean_list(data.get("data_flow_summary", []), 8),
+        "data_flow": _clean_list(_flow_summary_text(data.get("data_flow_summary", [])), 8),
         "auth": _clean_list(data.get("auth_summary", []), 8),
         "obfuscation": _clean_list(data.get("obfuscation_analysis", {}).get("evidence", []), 8),
         "source_map": data.get("source_map", {}) or {},
@@ -1175,6 +1336,10 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
     runtime_evidence = results.get("__runtime_evidence__") or {}
     runtime_findings = results.get("__runtime_findings__") or []
     scan_summary = results.get("__scan_summary__") or {}
+    # Local artifact path -> origin URL. A URL scan keeps its bundles in a
+    # temporary workspace that is deleted when the scan ends, so findings
+    # must carry the URL they came from, not that path.
+    url_by_path = dict(scan_summary.get("path_to_url") or {})
     page_url = runtime_evidence.get("url") or (metadata or {}).get("source", "")
     if page_url and not str(page_url).startswith(("http://", "https://")):
         page_url = ""
@@ -1210,6 +1375,8 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         if str(file_name).startswith("__"):
             continue
         diag = _file_diagnostic(file_name, data)
+        diag["origin"] = (url_by_path.get(file_name) or str(data.get("url") or "")
+                           or ("" if str(file_name).startswith("runtime://") else file_name))
         intel_match = next((entry for entry in script_inventory if entry.get("path") == file_name or entry.get("name") == _basename_safe(file_name)), None)
         diag["script_intel"] = intel_match or {}
         files.append(diag)
@@ -1220,9 +1387,10 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         for finding in diag["findings"]:
             findings.append(finding)
         for flow in diag["dataflows"]:
-            all_flows.append({**flow, "file": file_name})
+            all_flows.append({**flow, "file": file_name, "origin": diag["origin"]})
         for finding in diag["rich_findings"]:
-            all_findings.append({**finding, "file": finding.get("file", file_name)})
+            all_findings.append({**finding, "file": finding.get("file", file_name),
+            "origin": finding.get("origin") or diag["origin"]})
         flow_ids = {f.get("id") for f in diag["dataflows"]} | {f.get("id") for f in diag["framework_findings"]}
         for sig in diag["signals"]:
             if sig.get("id") in ("api_surface", "notable_features") or sig.get("id") in flow_ids:
@@ -1325,6 +1493,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
             "release_status": RELEASE_STATUS,
             "dev_build": is_dev_build(),
             "analysis_mode": metadata.get("mode", "code") if metadata else "code",
+            "ast_parser": parser_status(),
             "source": metadata.get("source", "") if metadata else "",
             "files": len(files),
             "runtime_evidence": bool(runtime_evidence.get("captured")),

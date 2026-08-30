@@ -58,17 +58,41 @@
     backendChecked = false;
   }
 
-  /* Backend liveness + privacy gate */
+  /* Backend liveness + privacy gate
+   *
+   * The status is rendered in two places (the header pill and the setup
+   * dialog).  The dot is a real animated element (pulsing core + expanding
+   * ring) so an offline engine is obvious at a glance, and the state is also
+   * carried by a class for colour/aria, never by a static emoji.
+   */
+  const ENGINE_STATE_CLASS = {
+    offline: "is-offline",
+    checking: "is-checking",
+    online: "is-online",
+  };
+
   function setEngineStatus(state, text) {
-    const dot = $("#engine-dot");
-    const label = $("#engine-status-text");
-    if (!dot || !label) return;
-    dot.className = "dot" + (state === "offline" ? " offline" : state === "checking" ? " checking" : "");
-    label.textContent = text || "Local engine offline — run server.py";
+    const stateClass = ENGINE_STATE_CLASS[state] || "is-online";
+    const label = text || "Local engine offline — run server.py";
+    [
+      ["#engine-dot", "#engine-status-text"],
+      ["#engine-dot-modal", "#engine-status-text-modal"],
+    ].forEach(([dotSel, labelSel]) => {
+      const dot = $(dotSel);
+      const textNode = $(labelSel);
+      if (dot) dot.className = `pulse-dot ${stateClass}`;
+      if (textNode) textNode.textContent = label;
+    });
+    const pill = $("#engine-status");
+    if (pill) {
+      pill.className = `engine-pill ${stateClass}`;
+      pill.setAttribute("aria-label", `Local engine status: ${label}. Click to open the setup guide.`);
+    }
+    const aside = $("#engine-status-aside");
+    if (aside) aside.className = `aside-status ${stateClass}`;
   }
 
   async function checkBackend() {
-    const dot = $("#engine-dot");
     setEngineStatus("checking", "Checking local engine…");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2500);
@@ -79,23 +103,44 @@
         if (health.auth_required && !apiToken()) {
           backendConnected = false;
           backendChecked = true;
-          setEngineStatus("checking", "🟡 Engine online · pairing token required");
+          setEngineStatus("checking", "Engine online · pairing token required");
           return false;
         }
         backendConnected = true;
         backendChecked = true;
-        setEngineStatus("", "🟢 Local engine connected · private analysis ready");
+        setEngineStatus("online", "Local engine connected · private analysis ready");
         return true;
       }
       throw new Error("health not ok");
     } catch {
       backendConnected = false;
       backendChecked = true;
-      setEngineStatus("offline", "🔴 Local engine offline — run server.py");
+      setEngineStatus("offline", "Local engine offline — run server.py");
       return false;
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /* The engine is often started *after* this page is opened, so keep
+   * re-checking while it is unreachable (and stop once it answers). */
+  let enginePollTimer = null;
+
+  function stopEnginePoll() {
+    if (enginePollTimer) {
+      clearInterval(enginePollTimer);
+      enginePollTimer = null;
+    }
+  }
+
+  function scheduleEnginePoll() {
+    stopEnginePoll();
+    if (backendConnected) return;
+    enginePollTimer = setInterval(async () => {
+      if (document.hidden || backendConnected) return;
+      await checkBackend();
+      if (backendConnected) stopEnginePoll();
+    }, 8000);
   }
 
   async function ensureBackend() {
@@ -107,7 +152,14 @@
 
   function openPrivacyModal() {
     const modal = $("#privacy-modal");
-    if (modal) modal.hidden = false;
+    if (!modal) return;
+    modal.hidden = false;
+    document.body.classList.add("modal-open");
+    // Focus the least destructive control that is always useful here.
+    const target = apiToken() ? $("#retry-backend") : $("#engine-token");
+    if (target && typeof target.focus === "function") {
+      setTimeout(() => target.focus({ preventScroll: true }), 40);
+    }
   }
 
   function showConnectionError(error) {
@@ -157,8 +209,342 @@
   function closePrivacyModal() {
     const modal = $("#privacy-modal");
     if (modal) modal.hidden = true;
+    document.body.classList.remove("modal-open");
     const node = $("#connection-error");
     if (node) node.hidden = true;
+  }
+
+  /* Force-download the one-file launcher.
+   *
+   * A plain `<a href="https://raw.githubusercontent.com/…" download>` does NOT
+   * download: browsers ignore the `download` attribute for cross-origin
+   * targets, so the file opens in a tab instead.  Fetching the text and saving
+   * it through a same-origin blob URL is what actually produces a download.
+   */
+  function saveBlob(blob, filename) {
+    const href = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.download = filename;
+    anchor.rel = "noopener";
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    // Give the browser a moment to start the download before releasing it.
+    setTimeout(() => URL.revokeObjectURL(href), 30000);
+  }
+
+  async function downloadLauncher(btn) {
+    if (!btn || btn.disabled) return;
+    const url = String(btn.getAttribute("data-download") || "").trim();
+    const filename = String(btn.getAttribute("data-filename") || "scriptsentry.py").trim();
+    const hint = btn.parentElement ? btn.parentElement.querySelector(".download-hint") : null;
+    const original = btn.textContent;
+    if (!url) return;
+
+    btn.disabled = true;
+    btn.textContent = "⏳ Downloading…";
+    if (hint) hint.textContent = "";
+
+    try {
+      const res = await fetch(url, { mode: "cors", cache: "no-store", credentials: "omit" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      if (!text.trim()) throw new Error("empty file");
+      saveBlob(new Blob([text], { type: "text/x-python;charset=utf-8" }), filename);
+      if (hint) hint.textContent = `✅ Downloaded ${filename}`;
+      btn.textContent = "✅ Downloaded";
+    } catch {
+      // Last resort: open it so the user can still save it manually.
+      if (hint) hint.textContent = "⚠️ Couldn't save automatically — opened in a new tab.";
+      window.open(url, "_blank", "noopener,noreferrer");
+    } finally {
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.disabled = false;
+      }, 1800);
+    }
+  }
+
+  /* ---------------- Scroll experience ---------------- */
+
+  const REVEAL_SELECTOR = [
+    ".section-head",
+    ".feature-card",
+    ".step-card",
+    ".notice-card",
+    ".trust-row",
+    ".setup-card",
+    ".connect-card",
+    ".console",
+    ".tool-hero",
+    ".footer-brand",
+    ".footer-col",
+  ].join(", ");
+
+  // Reveal blocks as they scroll into view (once, then stop observing).
+  function initReveal() {
+    const nodes = $$(REVEAL_SELECTOR);
+    if (!nodes.length) return;
+
+    if (!("IntersectionObserver" in window) ||
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      nodes.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+
+    nodes.forEach((el) => {
+      // Stagger siblings so a grid of cards cascades instead of popping.
+      const siblings = Array.from(el.parentElement ? el.parentElement.children : []);
+      const index = Math.max(0, siblings.indexOf(el));
+      el.style.setProperty("--reveal-delay", `${Math.min(index, 7) * 70}ms`);
+    });
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add("is-visible");
+          observer.unobserve(entry.target);
+        });
+      },
+      { rootMargin: "0px 0px -8% 0px", threshold: 0.08 },
+    );
+
+    nodes.forEach((el) => {
+      // Anything already on screen at load reveals immediately.
+      const box = el.getBoundingClientRect();
+      if (box.top < window.innerHeight * 0.9) el.classList.add("is-visible");
+      else observer.observe(el);
+    });
+  }
+
+  // Thin progress bar under the sticky header.
+  function initScrollProgress() {
+    const bar = $("#scroll-progress");
+    if (!bar) return;
+    let queued = false;
+    const update = () => {
+      queued = false;
+      const doc = document.documentElement;
+      const max = doc.scrollHeight - window.innerHeight;
+      const ratio = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
+      bar.style.transform = `scaleX(${ratio})`;
+    };
+    window.addEventListener("scroll", () => {
+      if (queued) return;
+      queued = true;
+      window.requestAnimationFrame(update);
+    }, { passive: true });
+    window.addEventListener("resize", update, { passive: true });
+    update();
+  }
+
+  // Highlight the nav link for whichever section is on screen.
+  function initNavSpy() {
+    const links = $$('.site-nav a[href^="#"]');
+    if (!links.length || !("IntersectionObserver" in window)) return;
+    const byId = new Map();
+    links.forEach((link) => {
+      const target = document.getElementById(link.getAttribute("href").slice(1));
+      if (target) byId.set(target, link);
+    });
+    if (!byId.size) return;
+
+    const current = $("#nav-current");
+    const setActive = (link) => {
+      links.forEach((l) => {
+        const on = l === link;
+        l.classList.toggle("is-active", on);
+        if (on) l.setAttribute("aria-current", "true");
+        else l.removeAttribute("aria-current");
+      });
+      // "You are here" label for narrow screens, where the nav is collapsed.
+      if (current) current.textContent = link ? link.textContent.trim() : "Overview";
+    };
+    if (current) current.textContent = "Overview";
+
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((e) => e.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (visible && byId.has(visible.target)) setActive(byId.get(visible.target));
+    }, { rootMargin: "-25% 0px -60% 0px", threshold: [0.01, 0.25, 0.6] });
+
+    byId.forEach((_, section) => observer.observe(section));
+  }
+
+  /* Shared page chrome: setup modal, engine pill, launcher downloads. */
+  function initChrome() {
+    $$(".js-download-launcher").forEach((btn) => {
+      btn.addEventListener("click", () => downloadLauncher(btn));
+    });
+
+    const pill = $("#engine-status");
+    if (pill) pill.addEventListener("click", openPrivacyModal);
+
+    const heroSetup = $("#hero-setup");
+    if (heroSetup) heroSetup.addEventListener("click", openPrivacyModal);
+
+    const closeX = $("#close-modal-x");
+    if (closeX) closeX.addEventListener("click", closePrivacyModal);
+
+    // Clicking the dimmed backdrop also closes the dialog.
+    const modal = $("#privacy-modal");
+    if (modal) {
+      modal.addEventListener("mousedown", (event) => {
+        if (event.target === modal) closePrivacyModal();
+      });
+    }
+
+    // Smooth in-page scrolling for the header / footer navigation.
+    $$('a[href^="#"]').forEach((link) => {
+      link.addEventListener("click", (event) => {
+        const id = link.getAttribute("href").slice(1);
+        if (!id) return;
+        const target = document.getElementById(id);
+        if (!target) return;
+        event.preventDefault();
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+        if (history.replaceState) history.replaceState(null, "", `#${id}`);
+      });
+    });
+
+    initReveal();
+    initScrollProgress();
+    initNavSpy();
+    initMobileNav();
+    initHelpTips();
+  }
+
+  /* ---------------- Help tooltips on touch ----------------
+   * The tips are CSS-only on hover, which no phone has. Tap, click,
+   * Enter and Space now toggle them, and a floating tip that would
+   * hang off the edge of the viewport is nudged back into view.
+   * (On touch/narrow screens CSS renders the tip inline instead, so
+   * there is nothing to nudge and nothing that can clip.) */
+  function initHelpTips() {
+    const tips = $$(".help");
+    if (!tips.length) return;
+
+    // Matches the inline-expansion media query in styles.css.
+    const inlineMode = window.matchMedia("(max-width: 700px), (pointer: coarse)");
+
+    const closeAll = (except) => {
+      tips.forEach((tip) => {
+        if (tip !== except) {
+          tip.classList.remove("is-open");
+          tip.setAttribute("aria-expanded", "false");
+        }
+      });
+    };
+
+    // Keep a floating tip inside the viewport by shifting it sideways.
+    const nudgeIntoView = (tip) => {
+      if (inlineMode.matches) {
+        tip.style.removeProperty("--tip-shift");
+        return;
+      }
+      const width = parseFloat(getComputedStyle(tip, "::after").width) || 0;
+      if (!width) return;
+      const rect = tip.getBoundingClientRect();
+      const center = rect.left + rect.width / 2;
+      const margin = 10;
+      const left = center - width / 2;
+      const right = center + width / 2;
+      let shift = 0;
+      if (left < margin) shift = margin - left;
+      else if (right > window.innerWidth - margin) shift = window.innerWidth - margin - right;
+      tip.style.setProperty("--tip-shift", `${Math.round(shift)}px`);
+    };
+
+    tips.forEach((tip) => {
+      // A disclosure, not a button-with-action, so the state is exposed.
+      tip.setAttribute("role", "button");
+      tip.setAttribute("aria-label", `What is this? ${tip.getAttribute("data-tip") || ""}`.trim());
+      tip.setAttribute("aria-expanded", "false");
+
+      const toggle = (event) => {
+        if (event) event.preventDefault();
+        const open = !tip.classList.contains("is-open");
+        closeAll(tip);
+        tip.classList.toggle("is-open", open);
+        tip.setAttribute("aria-expanded", open ? "true" : "false");
+        if (open) nudgeIntoView(tip);
+      };
+
+      tip.addEventListener("click", toggle);
+
+      // A <span> does not fire click for Enter/Space the way a button
+      // does, so keyboard activation is wired up explicitly.
+      tip.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+          toggle(event);
+        }
+      });
+
+      // Blur closes a focus-opened tip; a tapped one stays until dismissed.
+      tip.addEventListener("blur", () => {
+        tip.classList.remove("is-open");
+        tip.setAttribute("aria-expanded", "false");
+      });
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest(".help")) closeAll(null);
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeAll(null);
+    });
+
+    // A tip measured at one width is wrong at another.
+    window.addEventListener("resize", () => {
+      tips.forEach((tip) => {
+        tip.style.removeProperty("--tip-shift");
+        tip.classList.remove("is-open");
+        tip.setAttribute("aria-expanded", "false");
+      });
+    });
+  }
+
+  /* Below 1040px the section links collapse behind a menu button. Without
+   * this a phone visitor could not reach any other part of the page. */
+  function initMobileNav() {
+    const header = $("#site-header");
+    const toggle = $("#nav-toggle");
+    const nav = $("#site-nav");
+    if (!header || !toggle || !nav) return;
+
+    const setOpen = (open) => {
+      header.classList.toggle("nav-open", open);
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      toggle.setAttribute("aria-label", open ? "Close Navigation Menu" : "Open Navigation Menu");
+    };
+
+    toggle.addEventListener("click", () => setOpen(!header.classList.contains("nav-open")));
+
+    // Tapping a section link should navigate and get the menu out of the way.
+    nav.addEventListener("click", (event) => {
+      if (event.target.closest("a")) setOpen(false);
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && header.classList.contains("nav-open")) {
+        setOpen(false);
+        toggle.focus();
+      }
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!header.contains(event.target)) setOpen(false);
+    });
+
+    // Leaving the collapsed layout with the menu open would strand it open.
+    window.addEventListener("resize", () => {
+      if (window.innerWidth > 1040) setOpen(false);
+    });
   }
 
   async function retryBackend() {
@@ -231,6 +617,28 @@
     return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
   }
 
+  /* The scan runs as a pipeline (Recon -> Discover -> Download -> Normalize ->
+   * Analyze -> Correlate -> Verify -> Report). Showing the stages tells you
+   * what the engine is doing; a bare percentage never did. */
+  function renderStages(job) {
+    const host = $("#progress-stages");
+    if (!host) return;
+    const stages = Array.isArray(job.stages) ? job.stages : [];
+    if (!stages.length) {
+      host.innerHTML = "";
+      host.hidden = true;
+      return;
+    }
+    host.hidden = false;
+    host.innerHTML = stages.map((stage) => {
+      const state = stage.state === "active" ? "active" : (stage.state === "done" ? "done" : "pending");
+      const mark = state === "done" ? "\u2713" : (state === "active" ? "\u25c9" : "\u25cb");
+      return `<span class="progress-stage is-${state}" role="listitem" title="${escapeHtml(stage.description || "")}">`
+        + `<span class="stage-mark" aria-hidden="true">${mark}</span>`
+        + `${escapeHtml(stage.label || stage.key || "")}</span>`;
+    }).join("");
+  }
+
   function renderProgress(job) {
     const text = $("loading-text");
     const fill = $("#progress-fill");
@@ -239,15 +647,24 @@
     const pct = Math.max(0, Math.min(100, Number(job.percent || 0)));
     text.textContent = job.message || (job.phase || "Working…");
     fill.style.width = `${pct}%`;
-    const eta = job.eta_seconds == null ? "—" : formatDuration(job.eta_seconds * 1000);
+    renderStages(job);
+    // An ETA measured over a couple of seconds is a guess, not an estimate.
+    // Say so instead of printing a number that looks authoritative.
+    const confidence = Number(job.eta_confidence || 0);
+    let eta = "—";
+    if (job.eta_seconds != null) {
+      eta = confidence < 0.5 ? "estimating…" : `~${formatDuration(job.eta_seconds * 1000)} left`;
+    }
+    // `total` is the engine's current work estimate, not the file cap.
+    const files = job.total ? `${job.files_scanned || 0}/${job.total}` : `${job.files_scanned || 0}`;
     stats.innerHTML = [
-      ["phase", job.phase || "queued"],
-      ["files", `${job.files_scanned || 0}${job.total ? `/${job.total}` : ""}`],
+      ["stage", job.stage || job.phase || "queued"],
+      ["files", files],
       ["bytes", formatBytes(job.bytes_scanned)],
       ["pct", `${pct.toFixed(0)}%`],
       ["elapsed", formatDuration(job.elapsed_ms)],
       ["eta", eta],
-    ].map(([k, v]) => `<b>${escapeHtml(k)}</b>: ${escapeHtml(v)}`).join(" · ");
+    ].map(([k, v]) => `<b>${escapeHtml(k)}</b>: ${escapeHtml(String(v))}`).join(" · ");
   }
 
   function showLoading(text) {
@@ -284,18 +701,37 @@
 
   function initParticles() {
     const canvas = $("#particles");
+    if (!canvas) return;
     const ctx = canvas.getContext("2d");
     const colors = ["#22d3ee", "#38bdf8", "#a78bfa", "#f472b6"];
     let particles = [];
     let raf = 0;
+    let w = 0;
+    let h = 0;
+    let dpr = 1;
 
-    function resize() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      const count = Math.min(90, Math.floor(window.innerWidth / 16));
+    // Fewer, slower particles on a phone: a 90-particle animation loop
+    // competes with the analyzer for the main thread on weak hardware.
+    const budget = () => {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return 0;
+      const narrow = window.innerWidth < 640;
+      return narrow ? 28 : 90;
+    };
+
+    function build() {
+      w = window.innerWidth;
+      h = window.innerHeight;
+      // Size the backing store in device pixels, or the field looks
+      // soft on every HiDPI phone and laptop screen.
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const count = Math.min(budget(), Math.floor(w / 16));
       particles = Array.from({ length: count }, () => ({
-        x: Math.random() * canvas.width,
-        y: Math.random() * canvas.height,
+        x: Math.random() * w,
+        y: Math.random() * h,
         r: Math.random() * 1.8 + 0.5,
         vx: (Math.random() - 0.5) * 0.28,
         vy: (Math.random() - 0.5) * 0.28,
@@ -305,7 +741,7 @@
     }
 
     function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, w, h);
       for (const p of particles) {
         ctx.beginPath();
         ctx.globalAlpha = p.a;
@@ -314,18 +750,51 @@
         ctx.fill();
         p.x += p.vx;
         p.y += p.vy;
-        if (p.x < 0) p.x = canvas.width;
-        if (p.x > canvas.width) p.x = 0;
-        if (p.y < 0) p.y = canvas.height;
-        if (p.y > canvas.height) p.y = 0;
+        if (p.x < 0) p.x = w;
+        if (p.x > w) p.x = 0;
+        if (p.y < 0) p.y = h;
+        if (p.y > h) p.y = 0;
       }
       ctx.globalAlpha = 1;
       raf = requestAnimationFrame(draw);
     }
 
-    resize();
-    window.addEventListener("resize", resize);
-    draw();
+    build();
+
+    /* Rebuilding the field on every resize event is both wasteful and
+     * visibly wrong on mobile: showing/hiding the URL bar fires resize
+     * continuously as the page scrolls, which used to scatter every
+     * particle back to a new random position. Width changes are the
+     * only ones that actually require a rebuild, and they are debounced
+     * so a drag-resize or a rotate settles first. */
+    let resizeTimer = 0;
+    let lastWidth = window.innerWidth;
+    window.addEventListener("resize", () => {
+      if (window.innerWidth === lastWidth) return; // height-only: URL bar
+      lastWidth = window.innerWidth;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(build, 180);
+    });
+
+    // Rotating a phone changes both axes and must not be debounced away
+    // into a stretched canvas.
+    window.addEventListener("orientationchange", () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(build, 260);
+    });
+
+    if (particles.length) draw();
+
+    // Pause the loop when the tab is hidden.
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      } else if (!raf && particles.length) {
+        draw();
+      }
+    });
+
     window.addEventListener("beforeunload", () => cancelAnimationFrame(raf));
   }
 
@@ -677,10 +1146,60 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
   /* ---------------- Rendering ---------------- */
 
+  function renderEngineNotes() {
+    const node = $("#engine-notes");
+    if (!node || !payload) return;
+    const notes = [];
+    const parser = (payload.meta || {}).ast_parser || {};
+    if (parser.available === false) {
+      notes.push(
+        `<b>Reduced-depth analysis:</b> the optional JavaScript parser (<code>${escapeHtml(parser.name || "esprima")}</code>) `
+        + "is not installed, so this scan used the line-based fallback. Install it for full AST taint analysis: "
+        + `<code>${escapeHtml(parser.install_hint || "pip install esprima")}</code>.`,
+      );
+    }
+    const warnings = new Set();
+    (payload.files || []).forEach((f) => (f.analysis_warnings || []).forEach((w) => warnings.add(w)));
+    warnings.forEach((w) => notes.push(escapeHtml(w)));
+    node.innerHTML = notes.length
+      ? notes.map((n) => `<div class="engine-note">⚠️ ${n}</div>`).join("")
+      : "";
+    node.hidden = !notes.length;
+  }
+
+  /* Keep the last result for the lifetime of this tab: a reload or an
+   * accidental navigation should not cost you another scan. */
+  const STORE_KEY = "scriptsentry_last_result";
+  const STORE_LIMIT = 2 * 1024 * 1024;  // sessionStorage is typically ~5 MB
+
+  function persistPayload() {
+    try {
+      const text = JSON.stringify(payload);
+      if (!text || text.length > STORE_LIMIT) return;
+      sessionStorage.setItem(STORE_KEY, text);
+    } catch {
+      /* storage unavailable or full -- a re-scan is always possible */
+    }
+  }
+
+  function restorePayload() {
+    try {
+      const text = sessionStorage.getItem(STORE_KEY);
+      if (!text) return false;
+      const parsed = JSON.parse(text);
+      if (!parsed || !parsed.summary) return false;
+      payload = parsed;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function renderDashboard() {
     if (!payload) return;
     const results = $("#results");
     results.classList.add("show");
+    renderEngineNotes();
     $("#result-meta").textContent = `${payload.meta.engine} · ${payload.meta.analysis_mode === "url" ? "Remote URL" : "Source snippet"} · ${payload.meta.generated_at || ""}`;
     renderSummary();
     renderPriorities();
@@ -697,6 +1216,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     renderRuntime();
     renderScanSummary();
     renderFiles();
+    persistPayload();
   }
 
   const SEV_COLOR = { CRITICAL: "#ff4d6d", HIGH: "#ff9f43", MEDIUM: "#ffd166", LOW: "#22d3ee", INFO: "#a78bfa" };
@@ -1055,17 +1575,46 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       const st = getStatus(f);
       return !(OBSERVATION_STATUSES.has(st) || (f.observation && st !== "open" && st !== "confirmed" && st !== "false_positive"));
     });
+    // Severity counts drive the filter chips so you can see the shape of the
+    // scan before clicking anything.
+    const sevCounts = {};
+    findings.forEach((f) => {
+      const sev = String(f.severity || "MEDIUM").toUpperCase();
+      sevCounts[sev] = (sevCounts[sev] || 0) + 1;
+    });
+    const sevButtons = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+      .filter((sev) => sevCounts[sev])
+      .map((sev) => `<button class="file-tab" data-sev="${sev}" title="Filter by ${sev} severity">`
+        + `${sev} <b>${sevCounts[sev]}</b></button>`)
+      .join("");
+
     $("#finding-filters").innerHTML = [
+      `<input id="finding-search" class="finding-search" type="search" placeholder="Filter by type, file, source or sink…"
+              value="${escapeHtml(window.__findingSearch || "")}" aria-label="Search findings" />`,
       ["all", "All"],
       ["open", "Open"],
       ["needs_review", "Needs review"],
       ["confirmed", "Confirmed"],
       ["false_positive", "False positive"],
       ["informational", "Info"],
-    ].map(([v, label]) => `<button class="file-tab ${v === "all" ? "active" : ""}" data-f="${v}">${label}</button>`).join("");
+    ].map((entry) => (typeof entry === "string"
+      ? entry
+      : `<button class="file-tab ${entry[0] === "all" ? "active" : ""}" data-f="${entry[0]}">${entry[1]}</button>`)).join("")
+      + sevButtons;
 
     const filter = (window.__findingFilter || "all");
-    const list = findings.filter((f) => filter === "all" || getStatus(f) === filter);
+    const severity = window.__findingSeverity || "";
+    const term = String(window.__findingSearch || "").trim().toLowerCase();
+    const matches = (f) => {
+      if (filter !== "all" && getStatus(f) !== filter) return false;
+      if (severity && String(f.severity || "").toUpperCase() !== severity) return false;
+      if (!term) return true;
+      return [f.type, f.id, f.file, f.source, f.sink, f.evidence]
+        .map((v) => String(Array.isArray(v) ? v.join(" ") : (v == null ? "" : v)).toLowerCase())
+        .join(" ").includes(term);
+    };
+    const list = findings.filter(matches);
+
     $("#unified-findings").innerHTML = list.length
       ? list.slice(0, 80).map((f, i) => {
           const sev = f.severity || "MEDIUM";
@@ -1081,7 +1630,9 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
             ${quality}${limits}
             <button class="status-chip status-${st}" data-key="${encodeURIComponent(findingKey(f))}" title="Click to cycle triage status">${escapeHtml(STATUS_LABEL[st] || st)}</button></span>
           </li>`;
-        }).join("")
+        }).join("") + (list.length > 80
+          ? `<li class="truncation-note">Showing the first <b>80</b> of <b>${list.length}</b> matching findings — narrow the filters to see the rest.</li>`
+          : "")
       : `<li><span class="risk-dot" style="color:#34d399"></span><span>No actionable findings for this filter. See <b>Security Observations</b> for capability signals.</span></li>`;
 
     $("#unified-findings").querySelectorAll(".status-chip").forEach((btn) => {
@@ -1094,16 +1645,45 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
     const filters = $("#finding-filters");
     filters.querySelectorAll(".file-tab").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.f === filter);
+      const isStatus = !!btn.dataset.f;
+      btn.classList.toggle("active", isStatus ? btn.dataset.f === filter : btn.dataset.sev === severity);
       btn.onclick = () => {
-        window.__findingFilter = btn.dataset.f;
+        if (isStatus) {
+          window.__findingFilter = btn.dataset.f;
+        } else {
+          // Clicking the active severity chip again clears the filter.
+          window.__findingSeverity = btn.dataset.sev === severity ? "" : btn.dataset.sev;
+        }
         renderUnifiedFindings();
       };
     });
+
+    const search = $("#finding-search");
+    if (search) {
+      let debounce = null;
+      search.addEventListener("input", () => {
+        clearTimeout(debounce);
+        debounce = setTimeout(() => {
+          window.__findingSearch = search.value;
+          renderUnifiedFindings();
+        }, 180);
+      });
+      // Keep focus and caret position while re-rendering on each keystroke.
+      if (document.activeElement === search) {
+        const caret = search.value.length;
+        search.focus();
+        try { search.setSelectionRange(caret, caret); } catch { /* not supported */ }
+      }
+    }
   }
 
   function activateView(view) {
-    $$(".view-tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
+    $$(".view-tab").forEach((t) => {
+      const on = t.dataset.view === view;
+      t.classList.toggle("active", on);
+      t.setAttribute("aria-selected", on ? "true" : "false");
+      t.tabIndex = on ? 0 : -1;
+    });
     $$(".view-group").forEach((group) => {
       group.style.display = group.dataset.view === view ? "" : "none";
     });
@@ -1232,24 +1812,88 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       .join("");
   }
 
+  /* The radar is a <canvas>: it has no intrinsic scaling, so its
+   * backing store has to be rebuilt whenever its box changes. It used
+   * to be drawn once and then stretched by CSS after a resize or a
+   * rotation — the grid and labels drifted out of alignment with the
+   * polygon. A ResizeObserver covers both cases that matter:
+   *   - the viewport changing width
+   *   - the Overview panel being hidden and re-shown by the view tabs
+   *     (a display:none canvas measures 0 and must be redrawn)      */
+  function initChartResponsiveness() {
+    const canvas = $("#radar-chart");
+    if (!canvas) return;
+
+    const redraw = () => {
+      if (canvas.clientWidth && payload && payload.radar) renderRadar();
+    };
+
+    if (typeof ResizeObserver !== "undefined") {
+      let raf = 0;
+      let lastWidth = 0;
+      const observer = new ResizeObserver((entries) => {
+        const width = Math.round(entries[0].contentRect.width);
+        if (!width || width === lastWidth) return;
+        lastWidth = width;
+        cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(redraw);
+      });
+      observer.observe(canvas);
+      return;
+    }
+
+    // Fallback for engines without ResizeObserver.
+    let timer = 0;
+    window.addEventListener("resize", () => {
+      clearTimeout(timer);
+      timer = setTimeout(redraw, 160);
+    });
+  }
+
   function renderRadar() {
     const canvas = $("#radar-chart");
     const ctx = canvas.getContext("2d");
-    const dpr = window.devicePixelRatio || 1;
+    // Cap DPR: a 3x backing store on a phone costs memory and fill rate
+    // for a chart that is 250px wide, with no visible gain.
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const width = canvas.clientWidth || 220;
     const height = canvas.clientHeight || 220;
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
-    ctx.scale(dpr, dpr);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const data = payload.radar;
     const labels = data.labels || [];
     const values = data.values || [];
-    const cx = width / 2;
-    const cy = height / 2;
-    const radius = Math.min(width, height) / 2 - 30;
     const n = labels.length;
     if (!n) return;
+
+    /* The radius used to be min(w,h)/2 - 30: a constant that assumed a
+     * roomy card. On a phone the labels are then drawn past the left
+     * and right edges of the canvas and sliced in half.
+     *
+     * The reserve is now measured from the longest label at the real
+     * font size, and it is budgeted per axis — a label at the top of
+     * the chart only needs vertical room for one line of text, not
+     * half its own width, so the plot does not shrink more than it
+     * has to. */
+    const labelFont = Math.max(9, Math.min(11, Math.round(Math.min(width, height) / 22)));
+    const labelText = labels.map((label) => String(label).slice(0, 14));
+
+    ctx.font = `${labelFont}px Inter, sans-serif`;
+    let widest = 0;
+    for (const text of labelText) widest = Math.max(widest, ctx.measureText(text).width);
+
+    const gap = 12;
+    const halfW = width / 2;
+    const halfH = height / 2;
+    const radius = Math.max(
+      20,
+      Math.min(halfW - widest / 2 - gap, halfH - labelFont - gap),
+    );
+
+    const cx = halfW;
+    const cy = halfH;
 
     ctx.clearRect(0, 0, width, height);
 
@@ -1280,13 +1924,13 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       ctx.strokeStyle = "rgba(142,162,193,0.16)";
       ctx.stroke();
 
-      const lx = cx + Math.cos(angle) * (radius + 18);
-      const ly = cy + Math.sin(angle) * (radius + 18);
+      const lx = cx + Math.cos(angle) * (radius + gap);
+      const ly = cy + Math.sin(angle) * (radius + gap);
       ctx.fillStyle = "#8ea2c1";
-      ctx.font = "10px Inter, sans-serif";
+      ctx.font = `${labelFont}px Inter, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(labels[i].slice(0, 14), lx, ly);
+      ctx.fillText(labelText[i], lx, ly);
     }
 
     // polygon
@@ -1471,8 +2115,29 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
   /* ---------------- Boot ---------------- */
 
+  /* The dashboard is now two pages sharing one script: `index.html` is the
+   * landing page, `tool.html` hosts the console.  Chrome (engine status, setup
+   * dialog, scroll effects) runs on both; the analyzer wiring only runs where
+   * the console markup actually exists. */
+  function isToolPage() {
+    return !!$("#code-input");
+  }
+
   function init() {
     initParticles();
+    initChrome();
+    initChartResponsiveness();
+    if (isToolPage()) initTool();
+    checkBackend().then(scheduleEnginePoll);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && !backendConnected) checkBackend();
+    });
+    window.addEventListener("focus", () => {
+      if (!backendConnected) checkBackend();
+    });
+  }
+
+  function initTool() {
     initTabs();
     initViews();
     initUpload();
@@ -1537,15 +2202,39 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
         });
       });
     });
+    // Arrow-key navigation between the analysis views.
+    const viewTabs = $$(".view-tab");
+    viewTabs.forEach((tab, index) => {
+      tab.addEventListener("keydown", (event) => {
+        const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+        if (!step) return;
+        event.preventDefault();
+        const next = viewTabs[(index + step + viewTabs.length) % viewTabs.length];
+        activateView(next.dataset.view);
+        next.focus();
+      });
+    });
+
+    // Restore the previous result of this tab, if there is one.
+    if (restorePayload()) {
+      renderDashboard();
+      const meta = $("#result-meta");
+      if (meta) meta.textContent += " · restored from this tab (reload cleared nothing, no re-scan needed)";
+    }
+
+    // Ctrl/Cmd+Enter runs the analysis for whichever pane is active.
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") closePrivacyModal();
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         if ($("#pane-code").classList.contains("active")) analyzeCode();
         else analyzeUrl();
       }
     });
-    checkBackend();
   }
+
+  // Escape closes the setup dialog on every page.
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closePrivacyModal();
+  });
 
   document.addEventListener("DOMContentLoaded", init);
 })();

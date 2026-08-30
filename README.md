@@ -1,10 +1,5 @@
 # 🛡️ ScriptSentry
 
-> 🚧 **Under active development — not yet published.** This is a pre-release
-> build (version `2.2.0-dev`). Expect breaking changes, and treat findings and
-> scores as work-in-progress rather than production-grade results. This notice
-> will be removed once ScriptSentry ships its first stable release.
-
 **Watch every line. Detect every risk.**
 
 ScriptSentry is a **privacy-first JavaScript security & script-behavior
@@ -44,7 +39,7 @@ cloud; there are no accounts and no API keys required for core analysis.
   the live page: network traffic, DOM sinks, `eval`, storage, cookies, and
   scripts loaded only after execution
 
-## Why it's trustworthy
+## Why the results are trustworthy
 
 ScriptSentry is built to **avoid crying wolf**. It separates three things many
 scanners mix together:
@@ -68,7 +63,7 @@ The dashboard therefore splits results into:
   vulnerability (API surface, obfuscation, inventory, patterns without a flow).
 
 Each finding also shows an **analysis quality** rating and any **limitations**
-(e.g. “dynamic property access unresolved”), so the tool never pretends to
+(e.g. "dynamic property access unresolved"), so the tool never pretends to
 understand JavaScript constructs it didn't fully model. The risk score is a
 bounded **0–100** with an itemized breakdown of exactly what contributes to it,
 plus an **investigate-first** priority list.
@@ -109,19 +104,21 @@ python -m playwright install chromium
 python3 server.py
 ```
 
-Open the URL the server prints (default `http://127.0.0.1:8000`). On startup the
-server prints a one-time **engine pairing token** — paste it into the page's
-privacy modal when prompted. The token stays in that browser tab only and is
+Open the URL the server prints (default `http://127.0.0.1:8000`). Locally, `/`
+serves the **analysis console** (`tool.html`) directly; the overview/landing page
+lives at `/index.html`. On startup the server prints a one-time **engine pairing
+token** — paste it into the page's setup dialog when prompted (the header's
+animated engine pill opens it). The token stays in that browser tab only and is
 sent as an `X-ScriptSentry-Token` header.
 
-You can analyze JavaScript three ways:
+### Three ways to analyze
 
-- **Paste JavaScript** into the editor and hit **Analyze Code**,
+- **Paste JavaScript** into the editor and hit **Analyze Code**.
 - **Upload files** — switch the editor to **📁 Upload files** and drag & drop one
   or more local `.js` / `.mjs` / `.cjs` / `.jsx` / `.ts` files; they're analyzed
   together with per-file attribution. Files are read in your browser and sent
   only to the local engine over the paired channel — nothing is uploaded to a
-  cloud, or
+  cloud.
 - **Enter a target URL** and choose a profile (Fast / Balanced / Strict),
   recursion depth, file cap, and worker count, then hit **Analyze Target**.
   Hover the **?** next to each option for a one-line explanation of what it
@@ -181,13 +178,17 @@ After any analysis, use the header buttons (or the API/CLI) to export:
 
 ---
 
-## Hosted UI with a local engine
+## Host the UI, keep the engine local
 
 You can host the dashboard front-end (for example on **GitHub Pages**) while the
 analysis engine stays entirely on your own machine:
 
 1. Publish the `webui/` folder (a ready-made workflow is in
-   `deployment/deploy-pages.yml`).
+   `deployment/deploy-pages.yml`). It is a handful of static pages —
+   `index.html` (overview, what it finds, how it works, setup, connect),
+   `tool.html` (the console) and `changelog.html` (what's new) — plus `assets/`
+   (favicons, app icons, web manifest, social card). GitHub Pages serves
+   `index.html` at `/`.
 2. On your machine run `pip install -r requirements.txt && python3 server.py`.
 3. Open the hosted page and enter the pairing token. It talks directly to your
    local `127.0.0.1` engine — **no code ever leaves your computer**.
@@ -195,7 +196,7 @@ analysis engine stays entirely on your own machine:
 The local engine only accepts loopback/GitHub-Pages origins, requires the
 pairing token for analysis, rejects credential-bearing or private/loopback
 target URLs, and validates redirects so it can't be abused as an open proxy.
-See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the full hosting guide.
+Full hosting details are in [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ---
 
@@ -213,19 +214,30 @@ See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the full hosting guide.
 
 ---
 
-## Learn more
+## Project status
 
-- 📘 [`AUDIT.md`](AUDIT.md) — security decisions, architecture internals,
-  detection methodology, and deliberate limitations (for contributors and
-  reviewers).
-- 🚀 [`DEPLOYMENT.md`](DEPLOYMENT.md) — hosting the UI and running the engine.
-- 🧪 Tests use an accuracy regression suite (true-positive, true-negative,
-  known-false-positive, edge, minified and obfuscated fixtures) to keep false
-  positives and false negatives in check.
+ScriptSentry is under active development and has not shipped its first stable
+release yet. The analysis is already useful for triage, but the interface and
+the detection rules are still being refined — treat findings as signals to
+investigate rather than a final verdict, and expect things to keep improving.
 
-**Current status:** 🚧 under development / pre-release (`2.2.0-dev`). Version
-and release details live in [`release.json`](release.json) and
-[`CHANGELOG.md`](CHANGELOG.md).
+Every change is recorded in the [changelog](webui/changelog.html), and the
+technical notes behind the design decisions live in [`AUDIT.md`](AUDIT.md).
+
+---
+
+## Getting help
+
+- 🐛 **Found a bug — or a finding that's wrong?** Open an
+  [issue](https://github.com/AmitPal-CyberBuddy/ScriptSentry/issues) or
+  [email me](mailto:amitpal.secure@gmail.com?subject=ScriptSentry%20feedback).
+  For a wrong finding, the most useful thing to send is the snippet plus what
+  the tool reported.
+- 💼 **Connect on [LinkedIn](https://www.linkedin.com/in/amitpal-wb/)**.
+- 🐙 **Browse the source** on
+  [GitHub](https://github.com/AmitPal-CyberBuddy/ScriptSentry).
+
+---
 
 > ScriptSentry produces deterministic signals for triage — it is not proof of
 > exploitation. Always validate findings with server-side behavior and manual

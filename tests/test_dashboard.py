@@ -1,12 +1,23 @@
 import json
 import unittest
 
+from core.js_parser import parser_available
+
 from core.analysis_model import correlate_findings, deduplicate_findings
 from core.analyzer_service import analyze_content
 from core.attack_surface import extract_attack_surface
 from core.crypto import extract_crypto_material
 from core.reporter import build_dashboard_payload, build_report_model, generate_csv_report, generate_html_report, generate_sarif_report
 from core.taint import analyze_taint
+
+# These contracts assert AST-layer behaviour.  Without the optional esprima parser the
+# engine falls back to line-based analysis, which cannot satisfy them -- skip instead of
+# reporting a false regression.
+requires_ast_parser = unittest.skipUnless(
+    parser_available(),
+    "needs the optional esprima AST parser (pip install esprima)",
+)
+
 
 
 class DashboardAnalysisTest(unittest.TestCase):
@@ -74,6 +85,8 @@ eval(userInput);
         code = '''
 import axios from "axios";
 import {getAuth} from "firebase/auth";
+
+
 export const app = () => fetch("/api/v2/items", {method:"POST"});
 class Service { constructor(){ this.x = 1; } }
 '''
@@ -143,6 +156,7 @@ eval(userInput);
         self.assertIn("Technology Stack", html)
 
 
+    @requires_ast_parser
     def test_taint_url_search_params_to_innerhtml(self):
         code = """
         const p = new URLSearchParams(location.search);
@@ -166,6 +180,7 @@ eval(userInput);
         info = [x for x in flows if x.get("status") == "informational"]
         self.assertTrue(any(x.get("sanitization_detected") or "sanitized" in str(x.get("evidence") or "").lower() for x in info))
 
+    @requires_ast_parser
     def test_taint_open_redirect(self):
         code = """
         const q = new URLSearchParams(location.search).get('next');
@@ -182,6 +197,7 @@ eval(userInput);
         flows = analyze_taint(code, "t.js")
         self.assertTrue(any("postMessage" in (x.get("type") or "") and "*" in (x.get("evidence") or "") for x in flows))
 
+    @requires_ast_parser
     def test_taint_interprocedural_function_param(self):
         code = """
         function setMsg(x){ document.body.innerHTML = x; }
@@ -195,6 +211,7 @@ eval(userInput);
             for x in flows
         ))
 
+    @requires_ast_parser
     def test_taint_object_property(self):
         code = """
         const cfg = { q: location.search };

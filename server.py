@@ -37,6 +37,7 @@ from urllib.parse import urlparse
 from config import DEFAULT_PROFILE, SCAN_MAX_WORKERS, SCAN_PROFILES
 from core.analyzer_service import analyze_content, analyze_files, analyze_url
 from core.jobs import jobs
+from core.js_parser import parser_status
 from core.runtime_evidence import playwright_available, runtime_evidence_enabled
 from core.url_policy import validate_public_url
 from core.version import ENGINE_NAME, RELEASE_STATUS, __version__ as ENGINE_VERSION, is_dev_build
@@ -191,6 +192,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                         "enabled": runtime_evidence_enabled(),
                         "playwright": playwright_available(),
                     },
+                    "ast_parser": parser_status(),
                 })
                 return
             if not self._require_api_auth():
@@ -218,8 +220,20 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 return
             self._send_error_json("Not found", 404)
             return
+        # Browsers probe /favicon.ico regardless of the <link rel="icon"> tag;
+        # point it at the real brand asset instead of logging a 404.
+        if parsed.path in ("/favicon.ico", "/favicon.png"):
+            self.send_response(302)
+            self.send_header("Location", "/assets/favicon.svg")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        # The dashboard is two pages: `index.html` (landing/overview) and
+        # `tool.html` (the analysis console).  GitHub Pages serves the landing
+        # page at `/`, but a local engine is almost always launched to *use* the
+        # tool, so loopback visitors land straight on the console.
         if parsed.path == "/":
-            self.path = "/index.html"
+            self.path = "/tool.html"
         return super().do_GET()
 
     def _read_json_body(self):
@@ -536,6 +550,16 @@ def main():
     if is_dev_build():
         print("⚠  UNDER DEVELOPMENT — pre-release build (not a published/stable release).", flush=True)
     print(f"Engine pairing token: {API_TOKEN}", flush=True)
+    status = parser_status()
+    if status.get("available"):
+        print(f"AST parser: {status['name']} (full source-to-sink analysis)", flush=True)
+    else:
+        # Silent degradation was the bug: scans quietly ran in fallback mode.
+        print(
+            f"AST parser: UNAVAILABLE — running in {status.get('mode', 'regex_fallback')} mode. "
+            f"Install it for full analysis: {status.get('install_hint', 'pip install esprima')}",
+            flush=True,
+        )
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print("WARNING: non-loopback binding; protect the port with a firewall/reverse proxy.", flush=True)
     try:
