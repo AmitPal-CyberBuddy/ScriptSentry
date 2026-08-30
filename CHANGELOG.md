@@ -164,6 +164,36 @@ release yet.
   parser state at startup, and the console warns when a scan ran in fallback
   mode. Tests that require the AST layer skip cleanly when esprima is absent.
 
+### Scan pipeline, progress and reporting accuracy
+- **Explicit pipeline stages.** A scan is now modelled as Recon → Discover →
+  Download → Normalize → Analyze → Correlate → Verify → Report
+  (`core/pipeline.py`). Each stage carries a cost weight, so the progress bar
+  reflects where the time actually goes instead of crawling to 3% and then
+  jumping. The console renders the stages with pending/active/done state; the
+  fine-grained `phase` values existing consumers rely on are unchanged.
+- **Honest ETA.** The old estimate was `elapsed x (100 - percent) / percent`
+  over a percentage computed as "files done / file cap", which reported absurd
+  numbers for small sites and swung wildly between polls. The ETA now measures
+  the progress rate over a sliding window, smooths it with an EMA, damps
+  upward jumps so a stall cannot explode the estimate, and reports a
+  confidence value — the UI shows "estimating…" until it is meaningful.
+- **Provenance in every export.** Findings now carry the URL the script came
+  from. Previously a URL scan reported the temporary workspace path, which is
+  deleted when the scan ends, so no finding could be traced back to an asset.
+  CSV gained an `origin` column and SARIF points `artifactLocation` at it.
+- **SARIF accuracy.** `rank` now carries confidence (25/50/75/100), `kind`
+  carries the result state, `security-severity` is emitted for GitHub, and
+  observations / false positives export as `note` + `informational` instead of
+  `error` — they used to fail CI gates on findings the engine itself calls
+  unproven.
+- **CSV accuracy.** List-valued evidence (keys, IVs, secret candidates) is
+  joined instead of written as a Python repr such as `['a', 'b']`.
+- **Coverage & reliability block.** TXT and HTML reports now state what was
+  and was not analyzed: coverage, skipped assets and why, file-cap and depth
+  limits, whether the AST parser or the line fallback ran, the runtime
+  verification status, and the confidence mix. Reports that hide their own
+  blind spots invite over-trust.
+
 ### Audit follow-ups — web UI
 - Sticky header links are page sections with scroll-spy; below 1040px the nav
   collapses into a real menu (it used to disappear entirely) and shows a

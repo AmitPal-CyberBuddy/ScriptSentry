@@ -525,6 +525,28 @@
     return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
   }
 
+  /* The scan runs as a pipeline (Recon -> Discover -> Download -> Normalize ->
+   * Analyze -> Correlate -> Verify -> Report). Showing the stages tells you
+   * what the engine is doing; a bare percentage never did. */
+  function renderStages(job) {
+    const host = $("#progress-stages");
+    if (!host) return;
+    const stages = Array.isArray(job.stages) ? job.stages : [];
+    if (!stages.length) {
+      host.innerHTML = "";
+      host.hidden = true;
+      return;
+    }
+    host.hidden = false;
+    host.innerHTML = stages.map((stage) => {
+      const state = stage.state === "active" ? "active" : (stage.state === "done" ? "done" : "pending");
+      const mark = state === "done" ? "\u2713" : (state === "active" ? "\u25c9" : "\u25cb");
+      return `<span class="progress-stage is-${state}" role="listitem" title="${escapeHtml(stage.description || "")}">`
+        + `<span class="stage-mark" aria-hidden="true">${mark}</span>`
+        + `${escapeHtml(stage.label || stage.key || "")}</span>`;
+    }).join("");
+  }
+
   function renderProgress(job) {
     const text = $("loading-text");
     const fill = $("#progress-fill");
@@ -533,15 +555,24 @@
     const pct = Math.max(0, Math.min(100, Number(job.percent || 0)));
     text.textContent = job.message || (job.phase || "Working…");
     fill.style.width = `${pct}%`;
-    const eta = job.eta_seconds == null ? "—" : formatDuration(job.eta_seconds * 1000);
+    renderStages(job);
+    // An ETA measured over a couple of seconds is a guess, not an estimate.
+    // Say so instead of printing a number that looks authoritative.
+    const confidence = Number(job.eta_confidence || 0);
+    let eta = "—";
+    if (job.eta_seconds != null) {
+      eta = confidence < 0.5 ? "estimating…" : `~${formatDuration(job.eta_seconds * 1000)} left`;
+    }
+    // `total` is the engine's current work estimate, not the file cap.
+    const files = job.total ? `${job.files_scanned || 0}/${job.total}` : `${job.files_scanned || 0}`;
     stats.innerHTML = [
-      ["phase", job.phase || "queued"],
-      ["files", `${job.files_scanned || 0}${job.total ? `/${job.total}` : ""}`],
+      ["stage", job.stage || job.phase || "queued"],
+      ["files", files],
       ["bytes", formatBytes(job.bytes_scanned)],
       ["pct", `${pct.toFixed(0)}%`],
       ["elapsed", formatDuration(job.elapsed_ms)],
       ["eta", eta],
-    ].map(([k, v]) => `<b>${escapeHtml(k)}</b>: ${escapeHtml(v)}`).join(" · ");
+    ].map(([k, v]) => `<b>${escapeHtml(k)}</b>: ${escapeHtml(String(v))}`).join(" · ");
   }
 
   function showLoading(text) {

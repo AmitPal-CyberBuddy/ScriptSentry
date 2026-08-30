@@ -2880,3 +2880,50 @@ main[id] {
     transform: none !important;
   }
 }
+
+/* ============================================================
+   Scan pipeline stage strip
+   ============================================================ */
+.progress-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 6px;
+}
+
+.progress-stages[hidden] {
+  display: none;
+}
+
+.progress-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(148, 163, 184, 0.08);
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  transition: color 0.25s ease, border-color 0.25s ease, background 0.25s ease;
+}
+
+.progress-stage .stage-mark {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.progress-stage.is-active {
+  border-color: rgba(34, 211, 238, 0.55);
+  background: rgba(34, 211, 238, 0.12);
+  color: #7dd3fc;
+}
+
+.progress-stage.is-done {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.1);
+  color: #34d399;
+}
