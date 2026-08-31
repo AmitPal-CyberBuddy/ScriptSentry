@@ -148,6 +148,11 @@ to the rule-based summary if Ollama is offline:
 python3 main.py https://example.com --ai ollama --model llama3.2
 ```
 
+Flags: `--ai {disabled,ollama}` (default `disabled` — no summary at all),
+`--model NAME` (Ollama model, default `llama3.2`), `--ollama-url URL`
+(default `http://localhost:11434`). Only structured findings — never raw
+source code — are sent to Ollama.
+
 ---
 
 ## Reading the dashboard
@@ -198,7 +203,8 @@ analysis engine stays entirely on your own machine:
 
 The local engine only accepts loopback/GitHub-Pages origins, requires the
 pairing token for analysis, rejects credential-bearing or private/loopback
-target URLs, and validates redirects so it can't be abused as an open proxy.
+target URLs, and pins each outbound hop to the public IPs it validated at scan
+time (DNS-rebinding resistant) so it can't be abused as an open proxy.
 Full hosting details are in [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ---
@@ -214,6 +220,11 @@ Full hosting details are in [`DEPLOYMENT.md`](DEPLOYMENT.md).
 - The server binds to loopback by default, uses a process-scoped pairing token
   with `hmac.compare_digest`, enforces origin checks, and bounds request body
   and URL sizes.
+- **DNS-rebinding resistant scans.** Each target is validated and resolved in a
+  single step, then every connection is pinned to the validated public address
+  literals (all address families); redirect hops are re-validated and re-pinned.
+  Set `SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS=1` only when you are explicitly
+  authorized to scan local/private targets.
 
 ---
 

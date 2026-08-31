@@ -105,6 +105,9 @@ The backend should be protected behind the platform's TLS/auth boundary when dep
 It allows exact GitHub Pages origins (and exact values in `SCRIPTSENTRY_ALLOWED_ORIGINS`) and
 requires the process pairing token for analysis, status, results, cancellation, and reports.
 Do not put that token in a public repository or `config.js`; enter it in the dashboard session.
+Outbound scans validate and resolve each target once and pin every connection to those validated
+public IPs (DNS-rebinding resistant); the same private-target override as local mode
+(`SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS=1`) applies for explicitly authorized local/private targets.
 
 ### 2. Point the frontend at the backend
 

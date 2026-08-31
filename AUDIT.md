@@ -116,6 +116,36 @@ Building on the review, the engine now:
 - Centralizes the engine version in `core/version.py` and adds `release.json`
   and `CHANGELOG.md`.
 
+## End-to-end review hardening — risk chips, taint precision & transport
+
+An end-to-end review of the shipped dashboard and CLI closed the remaining gaps:
+
+- **Per-file risk chips are consistent with the overall score.** `core.risk_model.file_risk`
+  reuses the evidence-weighted 0–100 model, so a file can no longer display CRITICAL beside an
+  overall MEDIUM report; `signal_score` is now the worst-file score, and observation-only files
+  stay below CRITICAL.
+- **Taint precision.** `core.taint.known_static`/`_is_static_value` suppress the by-name heuristic
+  for identifiers bound to statically-known values (literals, constant templates, literal
+  arrays/objects, constant unary expressions); reassignment to a static value clears prior taint in
+  both the AST and regex paths. Unresolved names (parameters, globals) keep conservative
+  medium-confidence treatment.
+- **DNS-rebinding TOCTOU closed.** `core.url_policy` validates and resolves each URL in one step
+  (`_validate_and_pin`), then pins the connection by overriding `socket.getaddrinfo` for the exact
+  host with **all** validated public address literals (all address families, so IPv6-only targets
+  still work), restoring the real resolver afterwards; `safe_get` re-pins every redirect hop.
+  `SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS=1` opts out for explicitly authorized local/private targets.
+  Per-connection pinning is used because urllib3's connection-level hooks no longer separate
+  `host` from `_dns_host` (urllib3 2.7).
+- **Server hygiene.** Directories without an index file 404 instead of listing; the
+  `read_response_text` fallback reads at most `max_bytes + 1` from `response.raw`; unused config
+  blocks, `ai/prompts.py`, and the never-written `derived_keys` key were removed.
+- **AI decision — local Ollama only.** `--ai ollama` sends structured findings (never raw source,
+  ≤6000 chars) to a local Ollama server (`/api/generate`, non-streaming, temperature 0.2, 60 s
+  timeout) and falls back to the deterministic rule-based summary on any failure
+  (`ollama_unavailable` + reason). Cloud LLM providers and the `--api-key` flag were removed:
+  shipping scanned code to a cloud contradicts the privacy-first design. The deterministic summary
+  is the default and nothing AI-related is mandatory.
+
 ## Deliberate limitations
 
 - Playwright is optional. When Chromium is unavailable ScriptSentry reports
