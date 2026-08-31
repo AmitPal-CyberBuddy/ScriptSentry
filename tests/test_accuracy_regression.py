@@ -86,6 +86,17 @@ class AccuracyContractTest(unittest.TestCase):
             self.assertTrue(is_observation(f))
             self.assertNotEqual(f.get("status"), "confirmed")
 
+    def test_dom_xss_tn_chat_identifiers_with_static_values(self):
+        # chat-widget.js uses input-ish names (message/data/input/payload)
+        # but every value is statically known or written via textContent.
+        # The by-name identifier heuristic must not fabricate flows.
+        r = analyze("false-positive-cases/chat-widget.js")
+        flows = flow_ids(r, "dom_injection")
+        self.assertFalse(
+            any(f.get("source", "").startswith("identifier:") for f in flows),
+            f"static identifiers became taint sources: {flows}",
+        )
+
     def test_dom_xss_edge_framework_does_not_claim_untrusted_flow(self):
         r = analyze("dom-xss/edge-framework.js")
         # Framework sink *pattern* may be flagged, but no untrusted source flow.

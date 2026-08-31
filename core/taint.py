@@ -55,6 +55,31 @@ def _is_literal(node):
     return node.get("type") in ("Literal", "StringLiteral", "TemplateLiteral")
 
 
+def _is_static_value(node):
+    """True when ``node`` is a value the engine can prove is constant.
+
+    Literals, constant template literals (no interpolation), and literal
+    arrays/objects are static.  A variable with a static value must not be
+    treated as user input by the by-name identifier heuristic.
+    """
+    if not isinstance(node, dict):
+        return False
+    ntype = node.get("type")
+    if ntype in ("Literal", "StringLiteral", "NumericLiteral", "BooleanLiteral", "NullLiteral"):
+        return True
+    if ntype == "TemplateLiteral":
+        return not (node.get("expressions") or [])
+    if ntype in ("ArrayExpression", "ObjectExpression"):
+        values = node.get("elements", []) if ntype == "ArrayExpression" else [
+            prop.get("value") for prop in (node.get("properties") or [])
+            if isinstance(prop, dict) and prop.get("type") == "Property"
+        ]
+        return all(_is_static_value(v) for v in values if v is not None)
+    if ntype == "UnaryExpression":
+        return _is_static_value(node.get("argument"))
+    return False
+
+
 def _is_sanitizer_call(name):
     if not name:
         return False
@@ -187,6 +212,10 @@ class TaintAnalyzer:
         self.props = {}
         self.functions = {}
         self.urlsearch_vars = set()
+        # Identifiers bound to statically-known values (literals, constant
+        # expressions).  The by-name identifier heuristic must never fire for
+        # these: `const input = 'welcome'` is not user input.
+        self.known_static = set()
         self.findings = []
         self._seen = set()
         self._func_depth = 0
@@ -292,7 +321,15 @@ class TaintAnalyzer:
             name = node.get("name")
             if name in self.vars:
                 return self.vars[name].copy()
-            # Conservative source: common input-ish identifiers.
+            # A name bound to a statically-known value (a literal or a
+            # constant expression) is not input, whatever it is called:
+            # `const input = 'welcome'` must not become a taint source.
+            if name in self.known_static:
+                return None
+            # Conservative source: common input-ish identifiers.  This only
+            # applies to *unresolved* names (function parameters, globals)
+            # whose value the engine could not see; a tracked or static
+            # binding above already decided the case.
             if name and re.fullmatch(r"(userInput|user_input|input|data|payload|param|query|value|userData|msg|message|payloadData)", name, re.I):
                 return _Taint([f"identifier:{name}"], False, [f"read {name}"], "medium")
             if name == "URLSearchParams":
@@ -773,6 +810,10 @@ class TaintAnalyzer:
                 taint = taint.copy()
                 taint.path.append(f"var {name} = {self._node_simple_text(init)[:60]}")
                 self.vars[name] = taint
+            elif _is_static_value(init):
+                # Statically-known value: the by-name identifier heuristic
+                # must not turn this into a "user input" source.
+                self.known_static.add(name)
             if _node_kind_str(init) == "NewExpression" and _name(init.get("callee")) == "URLSearchParams":
                 self.urlsearch_vars.add(name)
             # Track tainted object properties so `cfg.q` propagates the same source.
@@ -808,6 +849,11 @@ class TaintAnalyzer:
             taint = taint.copy()
             taint.path.append(f"{name} = {self._node_simple_text(right)[:60]}")
             self.vars[name] = taint
+            self.known_static.discard(name)
+        elif _is_static_value(right):
+            # Reassignment to a constant value clears any earlier taint.
+            self.vars.pop(name, None)
+            self.known_static.add(name)
 
     # ---------------- inter-procedural helpers ----------------
     def _collect_functions(self, node):
@@ -1073,6 +1119,12 @@ class TaintAnalyzer:
                 if value["sanitized"]:
                     value["path"].append("sanitized transformation")
                 tainted[name] = value
+            elif name in tainted:
+                # Reassignment to a value that is neither a source nor a
+                # tracked alias clears any earlier taint: `q = '/about'`
+                # after `q = location.hash` must not keep the fragment
+                # source alive on a later read.
+                tainted.pop(name, None)
 
             # Track object literal properties, e.g. { q: location.search }.
             for prop, expr_value in re.findall(r"([A-Za-z_$][\w$]*)\s*:\s*([^,}]+)", expr):

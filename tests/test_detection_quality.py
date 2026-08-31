@@ -371,6 +371,26 @@ class TaintPrecisionTest(unittest.TestCase):
     def test_plain_object_assign_stays_silent(self):
         self.assertEqual(self._ids("Object.assign(config, { a: 1 });"), [])
 
+    def test_static_values_are_not_input_by_name(self):
+        # `input`/`payload`/`message` are input-ish names, but a statically
+        # known value is not user input, whatever the variable is called.
+        self.assertEqual(self._ids(
+            "const input = 'welcome';\ndocument.body.innerHTML = input;"), [])
+        self.assertEqual(self._ids(
+            "const payload = { text: 'hello' };\n"
+            "document.body.innerHTML = payload.text;"), [])
+        self.assertEqual(self._ids(
+            "const message = 'hi';\nel.innerHTML = message;"), [])
+
+    def test_reassignment_to_static_clears_earlier_taint(self):
+        # Both the AST path and the line-fallback must drop the old source
+        # once the variable is reassigned to a constant.
+        self.assertEqual(self._ids(
+            "let q = location.hash;\nq = '/about';\nel.innerHTML = q;"), [])
+        self.assertEqual(self._ids(
+            "let q = '/about';\nq = location.hash;\nel.innerHTML = q;"),
+            ["dom_injection"])
+
 
 class ExtraSourceTest(unittest.TestCase):
     """Audit H13: sources that used to be invisible."""
