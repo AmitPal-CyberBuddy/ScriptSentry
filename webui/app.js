@@ -2115,9 +2115,10 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
   /* ---------------- Boot ---------------- */
 
-  /* The dashboard is now two pages sharing one script: `index.html` is the
-   * landing page, `tool.html` hosts the console.  Chrome (engine status, setup
-   * dialog, scroll effects) runs on both; the analyzer wiring only runs where
+  /* The dashboard is three pages sharing one script: `home/index.html` is the
+   * landing page, `tool/index.html` hosts the console, and `changelog/index.html`
+   * is generated from CHANGELOG.md.  Chrome (engine status, setup dialog,
+   * scroll effects) runs on all of them; the analyzer wiring only runs where
    * the console markup actually exists. */
   function isToolPage() {
     return !!$("#code-input");

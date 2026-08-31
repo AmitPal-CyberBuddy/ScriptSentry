@@ -81,16 +81,16 @@ def run(urls, max_depth=5, timeout=15, profile=DEFAULT_PROFILE, output_formats=N
 
     formats = output_formats or ["all"]
     if "all" in formats or "txt" in formats:
-        _save(os.path.join(OUTPUT_DIR, "report.txt"), generate_report(results, ai_summary=ai_summary))
+        _save(os.path.join(OUTPUT_DIR, "report.txt"), generate_report(results, ai_summary=ai_summary, metadata=metadata))
     if "all" in formats or "json" in formats:
         save_json(results, ai_summary=ai_summary, metadata=metadata)
     if "all" in formats or "html" in formats:
-        _save(os.path.join(OUTPUT_DIR, "report.html"), generate_html_report(results, ai_summary=ai_summary))
+        _save(os.path.join(OUTPUT_DIR, "report.html"), generate_html_report(results, ai_summary=ai_summary, metadata=metadata))
     if "all" in formats or "csv" in formats:
-        _save(os.path.join(OUTPUT_DIR, "report.csv"), generate_csv_report(results, ai_summary=ai_summary))
+        _save(os.path.join(OUTPUT_DIR, "report.csv"), generate_csv_report(results, ai_summary=ai_summary, metadata=metadata))
     if "all" in formats or "sarif" in formats:
-        _save(os.path.join(OUTPUT_DIR, "report.sarif"), generate_sarif_report(results, ai_summary=ai_summary))
-    print(generate_report(results, ai_summary=ai_summary))
+        _save(os.path.join(OUTPUT_DIR, "report.sarif"), generate_sarif_report(results, ai_summary=ai_summary, metadata=metadata))
+    print(generate_report(results, ai_summary=ai_summary, metadata=metadata))
     return results
 
 

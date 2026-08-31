@@ -105,11 +105,11 @@ python3 server.py
 ```
 
 Open the URL the server prints (default `http://127.0.0.1:8000`). Locally, `/`
-serves the **analysis console** (`tool.html`) directly; the overview/landing page
-lives at `/index.html`. On startup the server prints a one-time **engine pairing
-token** — paste it into the page's setup dialog when prompted (the header's
-animated engine pill opens it). The token stays in that browser tab only and is
-sent as an `X-ScriptSentry-Token` header.
+serves the **analysis console** (`webui/tool/index.html`) directly; the
+overview/landing page lives at `/home/`. On startup the server prints a
+one-time **engine pairing token** — paste it into the page's setup dialog when
+prompted (the header's animated engine pill opens it). The token stays in that
+browser tab only and is sent as an `X-ScriptSentry-Token` header.
 
 ### Three ways to analyze
 
@@ -185,10 +185,10 @@ analysis engine stays entirely on your own machine:
 
 1. Publish the `webui/` folder (a ready-made workflow is in
    `deployment/deploy-pages.yml`). It is a handful of static pages —
-   `index.html` (overview, what it finds, how it works, setup, connect),
-   `tool.html` (the console) and `changelog.html` (what's new) — plus `assets/`
-   (favicons, app icons, web manifest, social card). GitHub Pages serves
-   `index.html` at `/`.
+   `home/index.html` (overview, what it finds, how it works, setup, connect),
+   `tool/index.html` (the console) and `changelog/index.html` (what's new) —
+   plus `assets/` (favicons, app icons, web manifest, social card). GitHub
+   Pages serves them at `/home/`, `/tool/` and `/changelog/`.
 2. On your machine run `pip install -r requirements.txt && python3 server.py`.
 3. Open the hosted page and enter the pairing token. It talks directly to your
    local `127.0.0.1` engine — **no code ever leaves your computer**.
@@ -221,8 +221,8 @@ release yet. The analysis is already useful for triage, but the interface and
 the detection rules are still being refined — treat findings as signals to
 investigate rather than a final verdict, and expect things to keep improving.
 
-Every change is recorded in the [changelog](webui/changelog.html), and the
-technical notes behind the design decisions live in [`AUDIT.md`](AUDIT.md).
+Every change is recorded in the [changelog](webui/changelog/index.html), and
+the technical notes behind the design decisions live in [`AUDIT.md`](AUDIT.md).
 
 ---
 

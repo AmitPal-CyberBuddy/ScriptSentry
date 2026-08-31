@@ -62,6 +62,51 @@ def _is_sanitizer_call(name):
     return any(hint in lower for hint in SANITIZER_HINTS)
 
 
+# A `.value` read is only attacker-reachable when it comes off a real
+# form/DOM element: querySelector(...).value, getElementById(...).value,
+# form.elements.x.value, this.value in an event handler.  Any other `.value`
+# (config.value, state.value, props.value) is application data, not input.
+_FORM_VALUE_OBJECT_RE = re.compile(
+    r"(?:^|\.)(?:form|input|textarea|select|option|elements|target|currenttarget)\b",
+    re.I,
+)
+
+
+def _is_form_value_read(callee_txt: str) -> bool:
+    if not callee_txt.endswith(".value"):
+        return False
+    if callee_txt == "this.value":
+        # Inline event handlers read this.value off the form element; this is
+        # ambiguous outside that context, so keep it but at the caller's
+        # standard (medium/high) confidence.
+        return True
+    head = callee_txt[:-6]  # strip the trailing ".value"
+    return bool(
+        re.search(r"queryselector|getelementbyid|getelementsby(?:class|tag)name", head)
+        or _FORM_VALUE_OBJECT_RE.search(head)
+    )
+
+
+# Property reads that always yield numbers.  A number cannot become markup,
+# executable code or a navigation payload, so taint stops at these reads
+# (`q.length` of a tainted string is not a DOM-injection primitive).
+_NUMERIC_PROPS = frozenset({
+    "length", "size", "count", "index", "selectedindex",
+    "offsetwidth", "offsetheight", "clientwidth", "clientheight",
+    "scrollwidth", "scrollheight", "duration", "currenttime", "timestamp",
+})
+
+
+# Data that is worth stealing.  Exfiltration findings are gated on this: a
+# URL/query/fragment source reflected into a request is normal client
+# behaviour (search, pagination, sharing), while cookies, storage, tokens
+# and credentials leaving the page is always worth a HIGH finding.
+SENSITIVE_SOURCE_RE = re.compile(
+    r"cookie|storage|token|credential|password|secret|session|useragent",
+    re.I,
+)
+
+
 def _sanitize_transform(label):
     return label
 
@@ -184,6 +229,8 @@ class TaintAnalyzer:
 
         if ntype == "Identifier":
             return expr.get("name", "")
+        if ntype == "ThisExpression":
+            return "this"
         if ntype in ("MemberExpression", "ChainExpression", "OptionalMemberExpression"):
             if ntype == "ChainExpression":
                 return self._strip_calls(expr.get("expression", {}))
@@ -309,6 +356,13 @@ class TaintAnalyzer:
         if ntype in ("MemberExpression", "ChainExpression"):
             callee_txt = self._strip_calls(node).lower()
             for marker, source_label in SOURCE_PATTERNS.items():
+                if marker.lower() == "value" and not _is_form_value_read(callee_txt):
+                    # `.value` alone is not a taint source: a static config
+                    # object's `value` property (Vue/Pinia state, options,
+                    # this.value in a class) is not attacker input.  Only
+                    # reads off real form/DOM elements count, matching the
+                    # regex fallback's source_specs.
+                    continue
                 # callee_txt is lower-cased; the catalogue mixes case
                 # (localStorage, document.baseURI, history.state), so compare
                 # case-insensitively or those sources are never recognized.
@@ -323,6 +377,11 @@ class TaintAnalyzer:
                 key = f"{obj_name}.{prop_name}"
                 if key in self.props:
                     return self.props[key].copy()
+            # Numeric property reads (.length, .size, geometry) return numbers
+            # and cannot carry markup, code or a navigation payload, so taint
+            # stops here instead of flagging `el.innerHTML = q.length`.
+            if isinstance(prop, dict) and str(_name(prop) or "").lower() in _NUMERIC_PROPS:
+                return None
             # A member access on a tracked object should propagate taint.
             if isinstance(obj, dict):
                 obj_taint = self._taint_of_expr(obj, depth + 1)
@@ -350,8 +409,13 @@ class TaintAnalyzer:
                 return _Taint(["source:URL search params"], False, [f"read {callee_txt}"], "high")
             if "getitem" in lower and ("localstorage" in lower or "sessionstorage" in lower):
                 return _Taint(["source:browser storage"], False, [f"read {callee_txt}"], "high")
-            if "cookie" in lower:
-                return _Taint(["source:document.cookie"], False, [f"read {callee_txt}"], "high")
+            # Cookie *reads* (Cookies.get, getCookie, cookieStore.get) are
+            # sources; cookie *writes* (Cookies.set, setCookie) write data and
+            # must not taint their return value as though it had been read
+            # from the jar. document.cookie reads are handled by the
+            # member-expression branch via SOURCE_PATTERNS.
+            if "cookie" in lower and ("get" in lower or "read" in lower):
+                return _Taint([f"source:document.cookie"], False, [f"read {callee_txt}"], "high")
             if "referrer" in lower:
                 return _Taint(["source:document.referrer"], False, [f"read {callee_txt}"], "high")
 
@@ -437,8 +501,10 @@ class TaintAnalyzer:
             # of an exploitable bug: encoding, framework behavior, an
             # unreachable branch or an unmodeled sanitizer may still neutralize
             # it. So high confidence -> 'open' (actionable), never 'confirmed'.
-            status = "open" if confidence in ("high", "confirmed") else "needs_review"
-            observation = False
+            observation = bool(extra.get("observation", False))
+            status = "informational" if observation else (
+                "open" if confidence in ("high", "confirmed") else "needs_review"
+            )
         sources = [s.replace("source:", "") for s in taint.sources]
         flow_steps = list(dict.fromkeys(taint.path))[:12]
         limitations = self._finding_limitations(taint, extra.get("limitations"))
@@ -502,11 +568,35 @@ class TaintAnalyzer:
                     taint = candidate if taint is None else (taint.copy() if not taint else taint)
                     if candidate is not taint:
                         taint.merge(candidate)
-            self._record_sink("data_exfiltration_flow", node, taint, {
-                "id": "data_exfiltration_flow",
-                "type": "Sensitive data sent to a network sink",
-                "severity": "HIGH",
-            })
+            if not taint or not taint.sources:
+                return
+            source_text = " → ".join(taint.sources)
+            # Exfiltration means *sensitive* material (cookies, storage,
+            # tokens, credentials) leaving the page.  Reflecting a URL/query
+            # parameter into a request is normal client behaviour (search,
+            # pagination, sharing) and is not a leak; it only matters when the
+            # destination is clearly external, and even then it is a LOW
+            # candidate, not a confirmed leak -- consistent with the
+            # line-fallback heuristic.
+            if SENSITIVE_SOURCE_RE.search(source_text):
+                self._record_sink("data_exfiltration_flow", node, taint, {
+                    "id": "data_exfiltration_flow",
+                    "type": "Sensitive data sent to a network sink",
+                    "severity": "HIGH",
+                })
+            else:
+                destination = str(self._node_simple_text(args[0]) if args else "").strip("'\"")
+                if re.match(r"^(https?:)?//", destination):
+                    self._record_sink("data_exfiltration_candidate", node, taint, {
+                        "id": "data_exfiltration_candidate",
+                        "type": "URL-derived data sent to an external destination",
+                        "severity": "LOW",
+                        "observation": True,
+                        "limitations": [
+                            "Destination is external but the payload is URL-derived data; "
+                            "review whether it leaks identifiers to a third party.",
+                        ],
+                    })
             return
 
         # postMessage target-origin
@@ -583,6 +673,30 @@ class TaintAnalyzer:
                 "type": "DOM injection",
                 "severity": "HIGH",
             })
+            return
+
+        # Object.assign(target, merged) is a prototype-pollution vector when
+        # the merged object can carry "__proto__" keys -- most commonly a
+        # JSON.parse() payload (`Object.assign(config, JSON.parse(q))`).
+        # Gate on that evidence so ordinary object merging stays silent.
+        if "object.assign" in lower:
+            args = node.get("arguments", []) or []
+            merged = None
+            for arg in args:
+                candidate = self._taint_of_expr(arg)
+                if candidate:
+                    if merged is None:
+                        merged = candidate.copy()
+                    else:
+                        merged.merge(candidate)
+            if merged and merged.sources and re.search(
+                r"__proto__|prototype|json\s*\.\s*parse", self.content, re.I
+            ):
+                self._record_sink("prototype_pollution", node, merged, {
+                    "id": "prototype_pollution",
+                    "type": "Prototype pollution",
+                    "severity": "MEDIUM",
+                })
             return
 
         # location assign/replace/open -> open redirect
@@ -1009,11 +1123,15 @@ class TaintAnalyzer:
 
         def taints_in(expr):
             values = []
+            numeric_props = "|".join(sorted(_NUMERIC_PROPS))
+            # A numeric property read (q.length, q.size) cannot carry a
+            # payload, so an alias followed by one does not propagate taint.
+            not_numeric = rf"(?!\s*\.\s*(?:{numeric_props})\b)"
             for name, value in tainted.items():
-                if re.search(rf"\b{re.escape(name)}\b", expr):
+                if re.search(rf"\b{re.escape(name)}\b{not_numeric}", expr):
                     values.append(value)
             for key, value in properties.items():
-                if re.search(rf"\b{re.escape(key)}\b", expr):
+                if re.search(rf"\b{re.escape(key)}\b{not_numeric}", expr):
                     values.append(value)
             values.extend(inline_sources(expr))
             return values

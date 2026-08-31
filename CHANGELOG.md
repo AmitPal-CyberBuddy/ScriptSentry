@@ -1,11 +1,10 @@
 # Changelog
 
-All notable changes to ScriptSentry are documented here. The version number is
-defined in one place (`core/version.py`) and mirrored in `release.json`.
+All notable changes to ScriptSentry are listed here, newest first.
 
-> 🚧 **Status: under active development — not yet published.** The project is
-> marked as a pre-release (`DEV_BUILD = True`, version suffix `-dev`) until the
-> first stable release.
+> 🚧 **Status: under active development.** ScriptSentry is still a pre-release
+> tool: it is already useful for triage, but features and detection rules keep
+> improving, and details may change between versions.
 
 ## [Unreleased] — 2.2.0-dev
 
@@ -79,12 +78,13 @@ release yet.
   the README.
 
 ### Brand, landing page & front-end fixes
-- **Two pages instead of one**: `index.html` is now the overview/landing page
-  (hero, what it finds, how it works, trust, setup, connect) and `tool.html`
-  hosts the analysis console. Both share `app.js`, `styles.css` and `config.js`;
-  the script detects which page it is on and only wires the analyzer when the
-  console markup is present. `server.py` serves `/` → `tool.html` so a locally
-  started engine opens the console, while GitHub Pages serves `index.html`.
+- **Separate pages for overview and console**: `home/index.html` is the
+  overview/landing page (hero, what it finds, how it works, trust, setup,
+  connect) and `tool/index.html` hosts the analysis console. Both share
+  `app.js`, `styles.css` and `config.js`; the script detects which page it is
+  on and only wires the analyzer when the console markup is present. `server.py`
+  serves `/` → `tool/index.html` so a locally started engine opens the console,
+  while GitHub Pages serves the overview at `/home/`.
 - **Scroll animations**: sections, cards, steps and footer columns reveal as
   they enter the viewport (`IntersectionObserver`, staggered, unobserve after
   the first reveal), plus a scroll-progress bar under the sticky header and
@@ -335,9 +335,9 @@ release yet.
 ### Changelog page, docs metadata and navigation cleanup
 - **The changelog is a real page now.** `Changelog` used to link into the
   repository, which on a static site means a visitor lands on a file listing
-  instead of a page. `webui/changelog.html` is now generated from this file by
-  `tools/build_changelog.py`, so the hosted page cannot drift from the
-  changelog a person edits. The page reuses `index.html`'s head, header and
+  instead of a page. `webui/changelog/index.html` is now generated from this
+  file by `tools/build_changelog.py`, so the hosted page cannot drift from the
+  changelog a person edits. The page reuses the overview page's head, header and
   footer, so navigation and metadata changes land on it automatically.
 - **Two guards keep that honest.** `tests/test_docs.py` fails when the
   committed page is out of date (verified by mutation testing), and the Pages

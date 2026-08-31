@@ -26,6 +26,28 @@ class URLPolicyTest(unittest.TestCase):
         allowed, reason = validate_public_url("https://example.com/app.js", resolve=False)
         self.assertTrue(allowed, reason)
 
+    def test_private_target_override_reaches_the_crawler_boundary(self):
+        # The override must relax the destination checks *inside* the URL
+        # boundary (safe_get re-validates every URL and redirect hop), not
+        # only at the top-level call sites -- otherwise private-target scans
+        # silently return zero files.
+        previous = os.environ.get("SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS")
+        try:
+            os.environ["SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS"] = "1"
+            for url in ("http://127.0.0.1:8000/", "http://localhost/", "http://192.168.1.10/x.js"):
+                allowed, reason = validate_public_url(url, resolve=False)
+                self.assertTrue(allowed, (url, reason))
+            # Credential and scheme rules stay enforced even with the override.
+            allowed, reason = validate_public_url("http://user:pass@127.0.0.1/", resolve=False)
+            self.assertFalse(allowed)
+            allowed, reason = validate_public_url("ftp://127.0.0.1/", resolve=False)
+            self.assertFalse(allowed)
+        finally:
+            if previous is None:
+                os.environ.pop("SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS", None)
+            else:
+                os.environ["SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS"] = previous
+
 
 class JobLifecycleTest(unittest.TestCase):
     def test_terminal_jobs_are_evicted_and_active_jobs_are_bounded(self):
@@ -98,6 +120,14 @@ class APISecuritySmokeTest(unittest.TestCase):
         self.assertEqual(status, 401)
         self.assertIn("token", body.decode().lower())
 
+    def test_directories_without_an_index_are_not_listed(self):
+        """/assets/ must 404 instead of serving a directory listing."""
+        status, _, _ = self.request("/assets/")
+        self.assertEqual(status, 404)
+        # Real pages (dirs with index.html) keep working.
+        status, _, _ = self.request("/home/")
+        self.assertEqual(status, 200)
+
     def test_origin_and_payload_boundaries_are_enforced(self):
         status, _, _ = self.request(
             "/api/analyze",
@@ -158,38 +188,39 @@ class APISecuritySmokeTest(unittest.TestCase):
 
 
 class WebUICompletenessTest(unittest.TestCase):
-    """The dashboard is two static pages sharing one stylesheet and script.
+    """The dashboard is three static pages sharing one stylesheet and script.
 
-    ``index.html`` is the landing page, ``tool.html`` hosts the analysis
-    console. Both must stay self-contained: local assets only, a CSP, no
+    ``home/index.html`` is the landing page, ``tool/index.html`` hosts the
+    analysis console, and ``changelog/index.html`` is generated from
+    CHANGELOG.md. All must stay self-contained: local assets only, a CSP, no
     third-party font/CDN dependencies.
     """
 
-    def _read(self, name):
+    def _read(self, *parts):
         root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "webui")
-        with open(os.path.join(root, name), encoding="utf-8") as handle:
+        with open(os.path.join(root, *parts), encoding="utf-8") as handle:
             return handle.read()
 
     def test_pages_use_local_assets_and_declare_a_csp(self):
-        for page in ("index.html", "tool.html"):
+        for page in ("home/index.html", "tool/index.html"):
             with self.subTest(page=page):
-                html = self._read(page)
-                self.assertIn('href="styles.css"', html)
-                self.assertIn('src="app.js"', html)
-                self.assertIn('src="config.js"', html)
+                html = self._read(*page.split("/"))
+                self.assertIn('href="../styles.css"', html)
+                self.assertIn('src="../app.js"', html)
+                self.assertIn('src="../config.js"', html)
                 self.assertIn("Content-Security-Policy", html)
                 self.assertNotIn("fonts.googleapis.com", html)
 
     def test_console_page_exposes_pairing_and_scan_controls(self):
-        html = self._read("tool.html")
+        html = self._read("tool", "index.html")
         self.assertIn('id="engine-token"', html)
         self.assertIn('id="cancel-scan"', html)
         self.assertIn('id="code-input"', html)
         self.assertIn('id="url-input"', html)
 
     def test_landing_page_links_to_the_console(self):
-        html = self._read("index.html")
-        self.assertIn('href="tool.html"', html)
+        html = self._read("home", "index.html")
+        self.assertIn('href="tool/"', html)
         # Brand assets referenced by <link rel="icon"> must exist on disk.
         root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "webui")
         for asset in ("assets/favicon.svg", "assets/site.webmanifest", "assets/og-card.png"):

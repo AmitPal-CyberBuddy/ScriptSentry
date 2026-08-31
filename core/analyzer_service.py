@@ -439,7 +439,15 @@ def _attach_runtime(results, url, timeout=15, max_files=50, progress_callback=No
         data = _scan_document(path, script_content, source_url=script_url)
         results[path] = data
         seen.add(digest)
-    notify("verify", "Runtime evidence captured", current=1, total=1)
+    # The verify stage is the one stage whose outcome is not guaranteed; report
+    # what actually happened instead of claiming a capture that failed.
+    status = runtime.get("status", "not_run")
+    if runtime.get("captured"):
+        notify("verify", "Runtime evidence captured", current=1, total=1)
+    elif status in ("disabled", "missing_dependency"):
+        notify("verify", f"Runtime evidence skipped ({status})", current=1, total=1)
+    else:
+        notify("verify", f"Runtime evidence unavailable ({status})", current=1, total=1)
     if progress is not None:
         progress.complete_stage()
     return attach_runtime_evidence(results, runtime, target_url=url)

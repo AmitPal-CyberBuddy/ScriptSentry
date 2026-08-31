@@ -12,27 +12,27 @@
   <meta name="robots" content="index, follow" />
 
   <!-- Identity: favicons, app icon and social card -->
-  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
-  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
-  <link rel="icon" type="image/png" sizes="192x192" href="assets/icon-192.png" />
-  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
-  <link rel="manifest" href="assets/site.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="../assets/icon-192.png" />
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" />
+  <link rel="manifest" href="../assets/site.webmanifest" />
 
   <!-- Open Graph / Twitter -->
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="ScriptSentry" />
   <meta property="og:title" content="ScriptSentry — Watch every line. Detect every risk." />
   <meta property="og:description" content="Free, privacy-first JavaScript security &amp; script-behavior intelligence. Runs locally — your code never leaves your machine." />
-  <meta property="og:image" content="assets/og-card.png" />
+  <meta property="og:image" content="../assets/og-card.png" />
   <meta property="og:image:alt" content="ScriptSentry — privacy-first JavaScript security analyzer" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="ScriptSentry — Watch every line. Detect every risk." />
   <meta name="twitter:description" content="Free, privacy-first JavaScript security &amp; script-behavior intelligence. Runs locally — your code never leaves your machine." />
-  <meta name="twitter:image" content="assets/og-card.png" />
+  <meta name="twitter:image" content="../assets/og-card.png" />
 
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' blob: data: http://127.0.0.1:* http://localhost:* https:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none';" />
-  <link rel="stylesheet" href="styles.css" />
-  <script src="config.js"></script>
+  <link rel="stylesheet" href="../styles.css" />
+  <script src="../config.js"></script>
 </head>
 <body>
   <canvas id="particles" aria-hidden="true"></canvas>
@@ -82,7 +82,7 @@
           <span class="pulse-dot" id="engine-dot" aria-hidden="true"></span>
           <span class="engine-text" id="engine-status-text">Checking local engine…</span>
         </button>
-        <a class="btn btn-sm go-to-tool" href="tool.html">⚡ Go to tool</a>
+        <a class="btn btn-sm go-to-tool" href="tool/">⚡ Go to tool</a>
       </div>
       <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false"
               aria-controls="site-nav" aria-label="Open Navigation Menu">
@@ -104,7 +104,7 @@
         and data flows it hides. All of it runs on your machine.
       </p>
       <div class="hero-cta">
-        <a class="btn btn-lg" href="tool.html">⚡ Open the Analyzer</a>
+        <a class="btn btn-lg" href="tool/">⚡ Open the Analyzer</a>
         <button class="btn btn-lg ghost" id="hero-setup" type="button">🛠️ Setup Guide</button>
       </div>
       <div class="badges">
@@ -387,8 +387,8 @@ python3 server.py --port 8000</pre>
 
       <nav class="footer-col" aria-label="Product">
         <h3>Product</h3>
-        <a href="tool.html">⚡ Open the Analyzer</a>
-        <a href="changelog.html">📜 What's New</a>
+        <a href="tool/">⚡ Open the Analyzer</a>
+        <a href="changelog/">📜 What's New</a>
       </nav>
 
       <nav class="footer-col" aria-label="Connect">
@@ -513,6 +513,6 @@ python3 server.py --port 8000</pre>
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="../app.js"></script>
 </body>
 </html>

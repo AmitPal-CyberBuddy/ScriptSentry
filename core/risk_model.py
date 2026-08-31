@@ -208,6 +208,30 @@ def overall_risk(
     }
 
 
+def file_risk(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Per-file risk using the *same* evidence-weighted model as the scan.
+
+    The report model used to score each file with the legacy additive
+    counter (a file could show CRITICAL (13) next to an overall HIGH (58)).
+    This reuses :func:`overall_risk` so a file chip and the overall score
+    speak the same language: bounded 0-100, evidence-tiered, observation
+    capped.
+    """
+    findings = [
+        f for f in (data.get("rich_findings") or data.get("findings") or [])
+        if isinstance(f, dict)
+    ]
+    if not findings:
+        # Raw scan results that have not been correlated yet still carry the
+        # structured flows the correlation would use.
+        findings = [
+            f for f in (data.get("dataflows") or []) if isinstance(f, dict)
+        ] + [
+            f for f in (data.get("framework_findings") or []) if isinstance(f, dict)
+        ]
+    return overall_risk(findings=findings)
+
+
 def top_priorities(findings: List[Dict[str, Any]], script_inventory: Optional[List[Dict[str, Any]]] = None, limit: int = 5) -> List[Dict[str, Any]]:
     """Return the most important things an analyst should investigate first.
 

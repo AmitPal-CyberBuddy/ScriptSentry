@@ -1,6 +1,6 @@
 """Generated documentation pages and the metadata that describes them.
 
-``webui/changelog.html`` is generated from ``CHANGELOG.md`` by
+``webui/changelog/index.html`` is generated from ``CHANGELOG.md`` by
 ``tools/build_changelog.py``. That is only a promise if something checks
 it, so the first test here runs the generator in ``--check`` mode and
 fails when the committed page has drifted from the file a person
@@ -20,7 +20,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 WEBUI = os.path.join(ROOT, "webui")
-CHANGELOG_HTML = os.path.join(WEBUI, "changelog.html")
+CHANGELOG_HTML = os.path.join(WEBUI, "changelog", "index.html")
 GENERATOR = os.path.join(ROOT, "tools", "build_changelog.py")
 
 with open(CHANGELOG_HTML, encoding="utf-8") as fh:
@@ -37,7 +37,7 @@ class GeneratedPageFreshnessTest(unittest.TestCase):
         )
         self.assertEqual(
             proc.returncode, 0,
-            "webui/changelog.html is out of date. Regenerate it with:\n"
+            "webui/changelog/index.html is out of date. Regenerate it with:\n"
             "    python3 tools/build_changelog.py\n"
             f"generator said: {proc.stdout.strip()}{proc.stderr.strip()}",
         )
@@ -47,7 +47,7 @@ class GeneratedPageFreshnessTest(unittest.TestCase):
         on the next release. The banner marks it as machine-written."""
         self.assertIn(
             "generated from CHANGELOG.md", PAGE,
-            "changelog.html lost its generated-from banner; it looks "
+            "changelog/index.html lost its generated-from banner; it looks "
             "hand-edited.",
         )
 
@@ -56,18 +56,19 @@ class ChangelogPageContractTest(unittest.TestCase):
     """The changelog page obeys the same rules as the other two pages."""
 
     def test_shared_assets_are_linked(self):
-        for asset in ('href="styles.css"', 'src="config.js"', 'src="app.js"'):
+        for asset in ('href="../styles.css"', 'src="../config.js"',
+                      'src="../app.js"'):
             self.assertIn(asset, PAGE,
-                          f"changelog.html is missing {asset}.")
+                          f"changelog/index.html is missing {asset}.")
 
     def test_content_security_policy_is_present(self):
         self.assertIn("Content-Security-Policy", PAGE,
-                      "changelog.html has no CSP.")
+                      "changelog/index.html has no CSP.")
 
     def test_no_external_fonts(self):
         self.assertNotIn(
             "fonts.googleapis.com", PAGE,
-            "changelog.html pulls a font from Google; the site is "
+            "changelog/index.html pulls a font from Google; the site is "
             "static-only and must not make third-party requests.",
         )
 
@@ -76,14 +77,14 @@ class ChangelogPageContractTest(unittest.TestCase):
         blocked and the page would break silently."""
         self.assertEqual(
             [], re.findall(r"<script(?![^>]*\bsrc=)[^>]*>", PAGE),
-            "changelog.html has an inline <script>, which its own CSP "
+            "changelog/index.html has an inline <script>, which its own CSP "
             "would block.",
         )
 
     def test_exactly_one_h1(self):
         self.assertEqual(
             1, len(re.findall(r"<h1\b", PAGE)),
-            "changelog.html should have exactly one h1.",
+            "changelog/index.html should have exactly one h1.",
         )
 
     def test_does_not_link_to_raw_repository_files(self):
@@ -100,7 +101,7 @@ class ChangelogPageContractTest(unittest.TestCase):
         ]
         self.assertEqual(
             [], raw,
-            f"changelog.html links to raw file locations: {raw}. Build a "
+            f"changelog/index.html links to raw file locations: {raw}. Build a "
             "page for it or drop the link.",
         )
 

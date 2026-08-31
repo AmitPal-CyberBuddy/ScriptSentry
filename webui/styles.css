@@ -89,10 +89,12 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
-  /* Defensive only. The overflow *sources* are fixed at their roots
-     (minmax(0,1fr) tracks, min-width:0 on flex children, fluid
-     clamps). This guard stays as a backstop, not as the fix. */
-  overflow-x: hidden;
+  /* `clip` (not `hidden`) so the sticky header keeps working: any
+     overflow value other than visible/clip turns the body into a scroll
+     container and position:sticky then sticks to a box that never
+     scrolls, so the header scrolls away with the page. `clip` cuts
+     horizontal overflow without creating a scroll container. */
+  overflow-x: clip;
 }
 
 /* Anything with a minimum intrinsic size must be allowed to shrink
@@ -3602,7 +3604,7 @@ main[id] {
    ============================================================ */
 
 .changelog-intro {
-  max-width: 720px;
+  max-width: 900px;
   margin: var(--space-md) auto var(--space-lg);
   text-align: center;
 }

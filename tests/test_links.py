@@ -1,6 +1,6 @@
 """Link integrity for the hosted pages.
 
-The hosted site is two static files, so a broken link is invisible until
+The hosted site is a set of static files, so a broken link is invisible until
 a visitor clicks it -- there is no build step and no router to complain.
 These checks are the build step.
 
@@ -17,20 +17,41 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEBUI = os.path.join(os.path.dirname(HERE), "webui")
-PAGES = ["index.html", "tool.html"]
+PAGES = ["home/index.html", "tool/index.html", "changelog/index.html"]
 
-with open(os.path.join(WEBUI, "index.html"), encoding="utf-8") as fh:
+with open(os.path.join(WEBUI, "home", "index.html"), encoding="utf-8") as fh:
     INDEX = fh.read()
-with open(os.path.join(WEBUI, "tool.html"), encoding="utf-8") as fh:
+with open(os.path.join(WEBUI, "tool", "index.html"), encoding="utf-8") as fh:
     TOOL = fh.read()
+with open(os.path.join(WEBUI, "changelog", "index.html"), encoding="utf-8") as fh:
+    CHANGELOG = fh.read()
 
-PAGES_SRC = {"index.html": INDEX, "tool.html": TOOL}
+PAGES_SRC = {
+    "home/index.html": INDEX,
+    "tool/index.html": TOOL,
+    "changelog/index.html": CHANGELOG,
+}
 
-# Anchors can legitimately live in either page when linked cross-page,
+# Anchors can legitimately live in any page when linked cross-page,
 # so ids are pooled.
 ALL_IDS = set()
 for src in PAGES_SRC.values():
     ALL_IDS |= set(re.findall(r'id="([^"]+)"', src))
+
+
+def resolve(page, target):
+    """Map a relative href target to a file under webui/, if it is one.
+
+    Directory-style targets ("home/", "tool/") resolve to the index.html
+    they contain; fragment-only links resolve to the page itself.
+    """
+    if not target:
+        return page
+    if target.endswith("/"):
+        return target + "index.html"
+    if target.startswith(("../", "assets/")):
+        return os.path.normpath(os.path.join(os.path.dirname(page), target))
+    return target
 
 
 def links(src):
@@ -50,7 +71,8 @@ class LinkTargetTest(unittest.TestCase):
                 target = href.split("#")[0]
                 if not target:
                     continue
-                if not os.path.isfile(os.path.join(WEBUI, target)):
+                resolved = resolve(page, target)
+                if not os.path.isfile(os.path.join(WEBUI, resolved)):
                     missing.append(f"{page}: {href}")
         self.assertEqual([], missing,
                          "Internal links point at files that do not exist.")
@@ -69,7 +91,7 @@ class LinkTargetTest(unittest.TestCase):
         dangling = []
         for page, src in PAGES_SRC.items():
             for href, _ in links(src):
-                m = re.match(r"(index|tool)\.html#(.+)$", href)
+                m = re.match(r"(home|tool)/#(.+)$", href)
                 if not m:
                     continue
                 if m.group(2) not in ALL_IDS:
@@ -84,14 +106,27 @@ class LinkTargetTest(unittest.TestCase):
                     bad.append(f"{page}: {href!r}")
         self.assertEqual([], bad, "Placeholder hrefs.")
 
+    def test_no_legacy_html_urls(self):
+        """The hosted URLs are clean: pages live at /home/, /tool/ and
+        /changelog/ and must not expose their .html file name in links."""
+        legacy = []
+        for page, src in PAGES_SRC.items():
+            for href, _ in links(src):
+                if ".html" in href:
+                    legacy.append(f"{page}: {href}")
+        self.assertEqual([], legacy,
+                         "Links still use .html URLs (use home/, tool/, changelog/).")
+
     def test_asset_references_resolve(self):
         missing = []
         for page, src in PAGES_SRC.items():
-            for href in re.findall(r'href="(assets/[^"]+)"', src):
-                if not os.path.isfile(os.path.join(WEBUI, href)):
+            for href in re.findall(r'href="((?:\.\./)?assets/[^"]+)"', src):
+                path = os.path.normpath(os.path.join(os.path.dirname(page), href))
+                if not os.path.isfile(os.path.join(WEBUI, path)):
                     missing.append(f"{page}: {href}")
-            for src_attr in re.findall(r'src="(assets/[^"]+)"', src):
-                if not os.path.isfile(os.path.join(WEBUI, src_attr)):
+            for src_attr in re.findall(r'src="((?:\.\./)?assets/[^"]+)"', src):
+                path = os.path.normpath(os.path.join(os.path.dirname(page), src_attr))
+                if not os.path.isfile(os.path.join(WEBUI, path)):
                     missing.append(f"{page}: {src_attr}")
         self.assertEqual([], missing, "Missing asset files.")
 

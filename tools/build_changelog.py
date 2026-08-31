@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render ``CHANGELOG.md`` into the static dashboard page ``webui/changelog.html``.
+"""Render ``CHANGELOG.md`` into the hosted page ``webui/changelog/index.html``.
 
 The hosted UI is a set of plain static files (GitHub Pages serves ``webui/``
 as-is), so "Changelog" has to be a real page rather than a link into the
@@ -32,8 +32,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "CHANGELOG.md"
 WEBUI = ROOT / "webui"
-INDEX = WEBUI / "index.html"
-OUTPUT = WEBUI / "changelog.html"
+INDEX = WEBUI / "home" / "index.html"
+OUTPUT = WEBUI / "changelog" / "index.html"
 
 PAGE_TITLE = "Changelog — ScriptSentry"
 PAGE_DESCRIPTION = (
@@ -48,8 +48,8 @@ PAGE_DESCRIPTION = (
 # so the pill is dropped and "Setup" joins the navigation instead. Keeping a
 # single header button (Go to tool) also stops the actions crowding at 320px.
 PILL_RE = re.compile(r'\s*<button class="engine-pill".*?</button>', re.S)
-SETUP_NAV_LINK = '\n        <a href="index.html#setup">Setup</a>'
-CONNECT_NAV_LINK = '<a href="index.html#connect">Connect</a>'
+SETUP_NAV_LINK = '\n        <a href="home/#setup">Setup</a>'
+CONNECT_NAV_LINK = '<a href="home/#connect">Connect</a>'
 
 
 # --------------------------------------------------------------------------
@@ -218,10 +218,11 @@ def slice_block(html_text: str, start: str, end: str, label: str) -> str:
 
 def relink(chrome: str) -> str:
     """Point landing-page anchors at the page they actually live on."""
-    # In-page anchors ("#features") belong to index.html, not to this page.
-    chrome = re.sub(r'href="#(?!top")([^"]+)"', r'href="index.html#\1"', chrome)
+    # In-page anchors ("#features") belong to the overview page, not here.
+    # The overview lives at the clean URL /home/ on the hosted site.
+    chrome = re.sub(r'href="#(?!top")([^"]+)"', r'href="home/#\1"', chrome)
     # The brand mark is "back to the top" on the landing page; here it is home.
-    chrome = chrome.replace('href="#top"', 'href="index.html"')
+    chrome = chrome.replace('href="#top"', 'href="home/"')
     return chrome
 
 
@@ -251,7 +252,7 @@ def adapt_footer(footer: str) -> str:
                 + match.group(1)
             )
     footer = footer.replace(
-        '<a href="changelog.html">', '<a href="changelog.html" aria-current="page">'
+        '<a href="changelog/">', '<a href="changelog/" aria-current="page">'
     )
     return footer
 
@@ -287,9 +288,9 @@ def adapt_head(head: str) -> str:
     )
     if 'rel="canonical"' not in head:
         head = head.replace(
-            '  <link rel="stylesheet" href="styles.css" />',
-            '  <link rel="canonical" href="changelog.html" />\n'
-            '  <link rel="stylesheet" href="styles.css" />',
+            '  <link rel="stylesheet" href="../styles.css" />',
+            '  <link rel="canonical" href="changelog/" />\n'
+            '  <link rel="stylesheet" href="../styles.css" />',
         )
     return head
 
@@ -329,7 +330,7 @@ def build() -> str:
 
 {header}
 
-  <main class="wrap wrap--prose" id="main">
+  <main class="wrap" id="main">
     <header class="changelog-intro">
       <span class="section-kicker">What's new</span>
 {intro}
@@ -340,14 +341,14 @@ def build() -> str:
     </div>
 
     <p class="changelog-back">
-      <a href="index.html">← Back to the overview</a> ·
-      <a href="tool.html">Open the analyzer →</a>
+      <a href="home/">← Back to the overview</a> ·
+      <a href="tool/">Open the analyzer →</a>
     </p>
   </main>
 
 {footer}
 
-  <script src="app.js"></script>
+  <script src="../app.js"></script>
 </body>
 </html>
 """

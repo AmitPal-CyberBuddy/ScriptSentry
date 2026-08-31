@@ -8,6 +8,7 @@ URLs.  This module keeps the crawler's network boundary in one place.
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 from typing import Iterable, Optional
 from urllib.parse import urljoin, urlparse
@@ -28,6 +29,21 @@ _UNSAFE_HOSTNAMES = {
     "metadata.google.internal",
     "metadata",
 }
+
+
+def _private_targets_allowed() -> bool:
+    """True when the explicit development override is set.
+
+    ``SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS=1`` exists so authorized testers can
+    point the crawler at applications on a local network or a localhost
+    service.  The top-level call sites (``analyzer_service``, ``server``)
+    consult it, but the crawler itself re-validates every URL (including each
+    redirect hop) inside ``safe_get``/``validate_public_url`` -- so the
+    override must be honored here too, or private-target scans silently fail
+    with zero files and a ``page_fetch: failed`` summary.
+    """
+    value = os.environ.get("SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS", "").strip().lower()
+    return value in ("1", "true", "yes", "on")
 
 
 def _unsafe_ip(value: str) -> bool:
@@ -72,6 +88,12 @@ def validate_public_url(url: str, *, resolve: bool = True, allowed_schemes=("htt
     if parsed.username or parsed.password:
         return False, "URLs containing credentials are not allowed"
     hostname = parsed.hostname.rstrip(".").lower()
+    # The explicit development override relaxes only the *destination* checks
+    # (private/reserved IPs and local hostnames).  Scheme, hostname and
+    # credential rules stay enforced so the override cannot turn the crawler
+    # into a credential-swallowing or non-http open proxy.
+    if _private_targets_allowed():
+        return True, ""
     if hostname in _UNSAFE_HOSTNAMES or _unsafe_ip(hostname):
         return False, "Local and reserved network destinations are not allowed"
     if resolve:
@@ -135,7 +157,16 @@ def read_response_text(response, *, max_bytes=MAX_PAGE_BYTES) -> Optional[str]:
         return raw.decode(encoding, errors="replace")
     except Exception:
         # Small mocked responses and a few custom transports only expose text.
+        # Bound the fallback too: read at most max_bytes+1 from the raw stream
+        # instead of letting response.text materialise an unbounded body.
         try:
+            raw = getattr(response, "raw", None)
+            if raw is not None and hasattr(raw, "read"):
+                chunk = raw.read(max_bytes + 1)
+                if chunk is None or len(chunk) > max_bytes:
+                    return None
+                encoding = getattr(response, "encoding", None) or "utf-8"
+                return chunk.decode(encoding, errors="replace")
             text = str(response.text)
             return text if len(text.encode("utf-8", errors="ignore")) <= max_bytes else None
         except Exception:
