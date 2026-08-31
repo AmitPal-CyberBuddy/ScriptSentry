@@ -4,10 +4,11 @@
 
 This is the **free, privacy-first** setup:
 
-- GitHub Pages hosts the UI: `webui/index.html` (overview / landing page) and
-  `webui/tool.html` (the analysis console), sharing `app.js`, `styles.css` and
-  `config.js`, plus the `webui/assets/` brand pack — favicons, app icons, web
-  manifest, and the Open Graph card.
+- GitHub Pages hosts the UI: `webui/home/index.html` (overview / landing page)
+  and `webui/tool/index.html` (the analysis console), plus
+  `webui/changelog/index.html` (generated from `CHANGELOG.md`), all sharing
+  `app.js`, `styles.css` and `config.js`, plus the `webui/assets/` brand pack —
+  favicons, app icons, web manifest, and the Open Graph card.
 - The analyzer runs **only on the visitor's machine** via `python3 server.py`.
 - No JavaScript ever uploads to a cloud. The page is just chrome; `server.py` does the work locally.
 
@@ -22,9 +23,10 @@ This is the **free, privacy-first** setup:
    this tab's session storage and is sent in an auth header, never in a URL or report.
 
 ### Wiring
-- `server.py` serves `/` -> `tool.html` so a locally started engine opens the
-  console directly; GitHub Pages serves `index.html` at `/`. The overview links
-  to `tool.html`, and the console links back to `index.html`.
+- `server.py` serves `/` -> `tool/index.html` so a locally started engine opens
+  the console directly; GitHub Pages serves the overview at `/home/`. The
+  overview links to `tool/`, and the console links back to `home/`. Pages use
+  clean URLs (no `.html`), served as `home/`, `tool/` and `changelog/`.
 - `webui/config.js` auto-selects the API base:
   - served from localhost → same origin
   - hosted on GitHub Pages → `http://127.0.0.1:8000`
@@ -36,6 +38,11 @@ This is the **free, privacy-first** setup:
 - For a **custom** hosted domain, set `SCRIPTSENTRY_ALLOWED_ORIGINS=https://my.example.com`
   before starting `server.py`.
 - If a visitor changes the port, they update `webui/config.js` to the matching port.
+- **Authorized internal testing only:** by default the crawler refuses local/reserved
+  destinations (including every redirect hop). To scan an application on a local network
+  or localhost that you are explicitly authorized to test, start the engine with
+  `SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS=1`. Scheme, hostname and credential-in-URL rules
+  still apply; the override only relaxes the private-destination check.
 
 ### Optional: local runtime evidence (Playwright)
 
@@ -98,6 +105,9 @@ The backend should be protected behind the platform's TLS/auth boundary when dep
 It allows exact GitHub Pages origins (and exact values in `SCRIPTSENTRY_ALLOWED_ORIGINS`) and
 requires the process pairing token for analysis, status, results, cancellation, and reports.
 Do not put that token in a public repository or `config.js`; enter it in the dashboard session.
+Outbound scans validate and resolve each target once and pin every connection to those validated
+public IPs (DNS-rebinding resistant); the same private-target override as local mode
+(`SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS=1`) applies for explicitly authorized local/private targets.
 
 ### 2. Point the frontend at the backend
 
@@ -177,8 +187,8 @@ jobs:
 ```
 
 > If you use a custom URL path (e.g. `https://user.github.io/repo/`), set asset
-> paths in `webui/index.html` to relative (`styles.css`, `app.js`, `config.js`)
-> rather than `/styles.css`. The included UI already uses relative asset paths.
+> paths in the pages to relative (`../styles.css`, `../app.js`, `../config.js`)
+> rather than absolute. The included UI already uses relative asset paths.
 
 ---
 

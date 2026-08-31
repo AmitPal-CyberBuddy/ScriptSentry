@@ -131,7 +131,6 @@ def extract_crypto_material(content, filename="inline.js"):
         "env_vars": [],
         "secrets": [],
         "decoded_secrets": [],
-        "derived_keys": [],
         "confidence": "LOW"
     }
 

@@ -105,11 +105,11 @@ python3 server.py
 ```
 
 Open the URL the server prints (default `http://127.0.0.1:8000`). Locally, `/`
-serves the **analysis console** (`tool.html`) directly; the overview/landing page
-lives at `/index.html`. On startup the server prints a one-time **engine pairing
-token** — paste it into the page's setup dialog when prompted (the header's
-animated engine pill opens it). The token stays in that browser tab only and is
-sent as an `X-ScriptSentry-Token` header.
+serves the **analysis console** (`webui/tool/index.html`) directly; the
+overview/landing page lives at `/home/`. On startup the server prints a
+one-time **engine pairing token** — paste it into the page's setup dialog when
+prompted (the header's animated engine pill opens it). The token stays in that
+browser tab only and is sent as an `X-ScriptSentry-Token` header.
 
 ### Three ways to analyze
 
@@ -139,11 +139,19 @@ Launch the dashboard directly from the CLI:
 python3 main.py --serve --port 8000
 ```
 
-Optional AI-style summary (not required for any core analysis):
+Optional AI-style summary (not required for any core analysis). The default
+`--ai` mode is the built-in rule-based summary; `--ai ollama` calls a **local**
+Ollama server (privacy-first — code never leaves your machine) and falls back
+to the rule-based summary if Ollama is offline:
 
 ```bash
-python3 main.py https://example.com --ai openai --api-key YOUR_KEY --model gpt-4o-mini
+python3 main.py https://example.com --ai ollama --model llama3.2
 ```
+
+Flags: `--ai {disabled,ollama}` (default `disabled` — no summary at all),
+`--model NAME` (Ollama model, default `llama3.2`), `--ollama-url URL`
+(default `http://localhost:11434`). Only structured findings — never raw
+source code — are sent to Ollama.
 
 ---
 
@@ -185,17 +193,18 @@ analysis engine stays entirely on your own machine:
 
 1. Publish the `webui/` folder (a ready-made workflow is in
    `deployment/deploy-pages.yml`). It is a handful of static pages —
-   `index.html` (overview, what it finds, how it works, setup, connect),
-   `tool.html` (the console) and `changelog.html` (what's new) — plus `assets/`
-   (favicons, app icons, web manifest, social card). GitHub Pages serves
-   `index.html` at `/`.
+   `home/index.html` (overview, what it finds, how it works, setup, connect),
+   `tool/index.html` (the console) and `changelog/index.html` (what's new) —
+   plus `assets/` (favicons, app icons, web manifest, social card). GitHub
+   Pages serves them at `/home/`, `/tool/` and `/changelog/`.
 2. On your machine run `pip install -r requirements.txt && python3 server.py`.
 3. Open the hosted page and enter the pairing token. It talks directly to your
    local `127.0.0.1` engine — **no code ever leaves your computer**.
 
 The local engine only accepts loopback/GitHub-Pages origins, requires the
 pairing token for analysis, rejects credential-bearing or private/loopback
-target URLs, and validates redirects so it can't be abused as an open proxy.
+target URLs, and pins each outbound hop to the public IPs it validated at scan
+time (DNS-rebinding resistant) so it can't be abused as an open proxy.
 Full hosting details are in [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ---
@@ -211,6 +220,11 @@ Full hosting details are in [`DEPLOYMENT.md`](DEPLOYMENT.md).
 - The server binds to loopback by default, uses a process-scoped pairing token
   with `hmac.compare_digest`, enforces origin checks, and bounds request body
   and URL sizes.
+- **DNS-rebinding resistant scans.** Each target is validated and resolved in a
+  single step, then every connection is pinned to the validated public address
+  literals (all address families); redirect hops are re-validated and re-pinned.
+  Set `SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS=1` only when you are explicitly
+  authorized to scan local/private targets.
 
 ---
 
@@ -221,8 +235,8 @@ release yet. The analysis is already useful for triage, but the interface and
 the detection rules are still being refined — treat findings as signals to
 investigate rather than a final verdict, and expect things to keep improving.
 
-Every change is recorded in the [changelog](webui/changelog.html), and the
-technical notes behind the design decisions live in [`AUDIT.md`](AUDIT.md).
+Every change is recorded in the [changelog](webui/changelog/index.html), and
+the technical notes behind the design decisions live in [`AUDIT.md`](AUDIT.md).
 
 ---
 

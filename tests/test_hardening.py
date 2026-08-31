@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import threading
 import time
 import unittest
@@ -7,7 +8,11 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from core.jobs import JobManager
-from core.url_policy import validate_public_url
+from core.url_policy import (
+    _pin_getaddrinfo,
+    _validate_and_pin,
+    validate_public_url,
+)
 
 
 class URLPolicyTest(unittest.TestCase):
@@ -25,6 +30,93 @@ class URLPolicyTest(unittest.TestCase):
     def test_allows_public_syntax_without_forcing_dns_in_unit(self):
         allowed, reason = validate_public_url("https://example.com/app.js", resolve=False)
         self.assertTrue(allowed, reason)
+
+    def test_getaddrinfo_pin_rewrites_only_the_target_host(self):
+        # During the pin window, lookups for the pinned hostname return the
+        # validated literals; other hosts resolve normally; afterwards the
+        # original resolver is restored.
+        original = socket.getaddrinfo
+        restore = _pin_getaddrinfo("example.com", ("93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"))
+        try:
+            self.assertIsNot(socket.getaddrinfo, original)  # pin is active
+            records = socket.getaddrinfo("example.com", 80, type=socket.SOCK_STREAM)
+            self.assertTrue(records)
+            self.assertEqual(records[0][4][0], "93.184.216.34")
+            # Both pinned addresses are chained so the client can fall back.
+            hosts = {r[4][0] for r in records}
+            self.assertIn("93.184.216.34", hosts)
+            self.assertIn("2606:2800:220:1:248:1893:25c8:1946", hosts)
+            other = socket.getaddrinfo("127.0.0.1", 80, type=socket.SOCK_STREAM)
+            self.assertEqual(other[0][4][0], "127.0.0.1")
+        finally:
+            socket.getaddrinfo = restore
+        self.assertIs(socket.getaddrinfo, original)
+
+    def test_validate_and_pin_rejects_private_resolution(self):
+        # A hostname that resolves to a private IP must be rejected even
+        # though the syntax check (resolve=False) passes -- this is the
+        # DNS-rebinding gate.
+        from core import url_policy as up
+        original = up._resolved_addresses
+        up._resolved_addresses = lambda hostname: {"127.0.0.1", "10.0.0.5"}
+        try:
+            ok, reason, ips = _validate_and_pin("http://public.example.com/app.js")
+            self.assertFalse(ok, reason)
+            self.assertIn("local or reserved", reason)
+            self.assertIsNone(ips)
+        finally:
+            up._resolved_addresses = original
+
+    def test_validate_and_pin_returns_public_literals(self):
+        from core import url_policy as up
+        original = up._resolved_addresses
+        up._resolved_addresses = lambda hostname: {"93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"}
+        try:
+            ok, reason, ips = _validate_and_pin("https://example.com/app.js")
+            self.assertTrue(ok, reason)
+            self.assertEqual(set(ips), {"93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"})
+        finally:
+            up._resolved_addresses = original
+
+    def test_validate_and_pin_is_noop_for_ip_literals(self):
+        ok, reason, ips = _validate_and_pin("http://93.184.216.34/app.js")
+        self.assertTrue(ok, reason)
+        self.assertIsNone(ips)
+
+    def test_validate_and_pin_honors_private_target_override(self):
+        previous = os.environ.get("SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS")
+        try:
+            os.environ["SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS"] = "1"
+            ok, reason, ips = _validate_and_pin("http://localhost:8000/app.js")
+            self.assertTrue(ok, reason)
+            self.assertIsNone(ips)  # no pinning for private-target scans
+        finally:
+            if previous is None:
+                os.environ.pop("SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS", None)
+            else:
+                os.environ["SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS"] = previous
+
+    def test_private_target_override_reaches_the_crawler_boundary(self):
+        # The override must relax the destination checks *inside* the URL
+        # boundary (safe_get re-validates every URL and redirect hop), not
+        # only at the top-level call sites -- otherwise private-target scans
+        # silently return zero files.
+        previous = os.environ.get("SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS")
+        try:
+            os.environ["SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS"] = "1"
+            for url in ("http://127.0.0.1:8000/", "http://localhost/", "http://192.168.1.10/x.js"):
+                allowed, reason = validate_public_url(url, resolve=False)
+                self.assertTrue(allowed, (url, reason))
+            # Credential and scheme rules stay enforced even with the override.
+            allowed, reason = validate_public_url("http://user:pass@127.0.0.1/", resolve=False)
+            self.assertFalse(allowed)
+            allowed, reason = validate_public_url("ftp://127.0.0.1/", resolve=False)
+            self.assertFalse(allowed)
+        finally:
+            if previous is None:
+                os.environ.pop("SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS", None)
+            else:
+                os.environ["SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS"] = previous
 
 
 class JobLifecycleTest(unittest.TestCase):
@@ -98,6 +190,14 @@ class APISecuritySmokeTest(unittest.TestCase):
         self.assertEqual(status, 401)
         self.assertIn("token", body.decode().lower())
 
+    def test_directories_without_an_index_are_not_listed(self):
+        """/assets/ must 404 instead of serving a directory listing."""
+        status, _, _ = self.request("/assets/")
+        self.assertEqual(status, 404)
+        # Real pages (dirs with index.html) keep working.
+        status, _, _ = self.request("/home/")
+        self.assertEqual(status, 200)
+
     def test_origin_and_payload_boundaries_are_enforced(self):
         status, _, _ = self.request(
             "/api/analyze",
@@ -158,38 +258,39 @@ class APISecuritySmokeTest(unittest.TestCase):
 
 
 class WebUICompletenessTest(unittest.TestCase):
-    """The dashboard is two static pages sharing one stylesheet and script.
+    """The dashboard is three static pages sharing one stylesheet and script.
 
-    ``index.html`` is the landing page, ``tool.html`` hosts the analysis
-    console. Both must stay self-contained: local assets only, a CSP, no
+    ``home/index.html`` is the landing page, ``tool/index.html`` hosts the
+    analysis console, and ``changelog/index.html`` is generated from
+    CHANGELOG.md. All must stay self-contained: local assets only, a CSP, no
     third-party font/CDN dependencies.
     """
 
-    def _read(self, name):
+    def _read(self, *parts):
         root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "webui")
-        with open(os.path.join(root, name), encoding="utf-8") as handle:
+        with open(os.path.join(root, *parts), encoding="utf-8") as handle:
             return handle.read()
 
     def test_pages_use_local_assets_and_declare_a_csp(self):
-        for page in ("index.html", "tool.html"):
+        for page in ("home/index.html", "tool/index.html"):
             with self.subTest(page=page):
-                html = self._read(page)
-                self.assertIn('href="styles.css"', html)
-                self.assertIn('src="app.js"', html)
-                self.assertIn('src="config.js"', html)
+                html = self._read(*page.split("/"))
+                self.assertIn('href="../styles.css"', html)
+                self.assertIn('src="../app.js"', html)
+                self.assertIn('src="../config.js"', html)
                 self.assertIn("Content-Security-Policy", html)
                 self.assertNotIn("fonts.googleapis.com", html)
 
     def test_console_page_exposes_pairing_and_scan_controls(self):
-        html = self._read("tool.html")
+        html = self._read("tool", "index.html")
         self.assertIn('id="engine-token"', html)
         self.assertIn('id="cancel-scan"', html)
         self.assertIn('id="code-input"', html)
         self.assertIn('id="url-input"', html)
 
     def test_landing_page_links_to_the_console(self):
-        html = self._read("index.html")
-        self.assertIn('href="tool.html"', html)
+        html = self._read("home", "index.html")
+        self.assertIn('href="tool/"', html)
         # Brand assets referenced by <link rel="icon"> must exist on disk.
         root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "webui")
         for asset in ("assets/favicon.svg", "assets/site.webmanifest", "assets/og-card.png"):

@@ -17,28 +17,28 @@
   <meta name="robots" content="index, follow" />
 
   <!-- Identity: favicons, app icon and social card -->
-  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
-  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
-  <link rel="icon" type="image/png" sizes="192x192" href="assets/icon-192.png" />
-  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
-  <link rel="manifest" href="assets/site.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="../assets/icon-192.png" />
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" />
+  <link rel="manifest" href="../assets/site.webmanifest" />
 
   <!-- Open Graph / Twitter -->
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="ScriptSentry" />
   <meta property="og:title" content="ScriptSentry — Changelog" />
   <meta property="og:description" content="Every notable change to ScriptSentry, the privacy-first JavaScript security and script-behavior analyzer. Release history, accuracy improvements and dashboard updates." />
-  <meta property="og:image" content="assets/og-card.png" />
+  <meta property="og:image" content="../assets/og-card.png" />
   <meta property="og:image:alt" content="ScriptSentry — privacy-first JavaScript security analyzer" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="ScriptSentry — Changelog" />
   <meta name="twitter:description" content="Every notable change to ScriptSentry, the privacy-first JavaScript security and script-behavior analyzer. Release history, accuracy improvements and dashboard updates." />
-  <meta name="twitter:image" content="assets/og-card.png" />
+  <meta name="twitter:image" content="../assets/og-card.png" />
 
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' blob: data: http://127.0.0.1:* http://localhost:* https:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none';" />
-  <link rel="canonical" href="changelog.html" />
-  <link rel="stylesheet" href="styles.css" />
-  <script src="config.js"></script>
+  <link rel="canonical" href="changelog/" />
+  <link rel="stylesheet" href="../styles.css" />
+  <script src="../config.js"></script>
 </head>
 <body>
   <canvas id="particles" aria-hidden="true"></canvas>
@@ -50,7 +50,7 @@
 <!-- ============================ Header ============================ -->
   <header class="site-header" id="site-header">
     <div class="header-inner">
-      <a class="brand" href="index.html" aria-label="ScriptSentry home">
+      <a class="brand" href="home/" aria-label="ScriptSentry home">
         <span class="mark" aria-hidden="true">
           <svg viewBox="0 0 32 32" role="img" aria-hidden="true" focusable="false">
             <defs>
@@ -76,16 +76,16 @@
 
       <div class="nav-current" id="nav-current" aria-hidden="true"></div>
       <nav class="site-nav" id="site-nav" aria-label="Main">
-        <a href="index.html#features">What It Finds</a>
-        <a href="index.html#how">How It Works</a>
-        <a href="index.html#trust">Trust</a>
+        <a href="home/#features">What It Finds</a>
+        <a href="home/#how">How It Works</a>
+        <a href="home/#trust">Trust</a>
         
-        <a href="index.html#setup">Setup</a>
-        <a href="index.html#connect">Connect</a>
+        <a href="home/#setup">Setup</a>
+        <a href="home/#connect">Connect</a>
       </nav>
 
       <div class="header-actions">
-        <a class="btn btn-sm go-to-tool" href="tool.html">⚡ Go to tool</a>
+        <a class="btn btn-sm go-to-tool" href="tool/">⚡ Go to tool</a>
       </div>
       <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false"
               aria-controls="site-nav" aria-label="Open Navigation Menu">
@@ -95,18 +95,29 @@
     <div class="scroll-progress" id="scroll-progress" aria-hidden="true"></div>
   </header>
 
-  <main class="wrap wrap--prose" id="main">
+  <main class="wrap" id="main">
     <header class="changelog-intro">
       <span class="section-kicker">What's new</span>
       <h1>Changelog</h1>
     </header>
 
     <div class="changelog">
-        <p>All notable changes to ScriptSentry are documented here. The version number is defined in one place (<code>core/version.py</code>) and mirrored in <code>release.json</code>.</p>
-        <blockquote>🚧 <strong>Status: under active development — not yet published.</strong> The project is marked as a pre-release (<code>DEV_BUILD = True</code>, version suffix <code>-dev</code>) until the first stable release.</blockquote>
+        <p>All notable changes to ScriptSentry are listed here, newest first.</p>
+        <blockquote>🚧 <strong>Status: under active development.</strong> ScriptSentry is still a pre-release tool: it is already useful for triage, but features and detection rules keep improving, and details may change between versions.</blockquote>
       <section class="release" id="unreleased-2-2-0-dev">
         <h2>[Unreleased] — 2.2.0-dev</h2>
         <p>The 2.2.0 accuracy &amp; triage work below is in development and not a published release yet.</p>
+        <h3 id="end-to-end-review-hardening-risk-chips-taint-precision-transport">End-to-end review hardening — risk chips, taint precision &amp; transport</h3>
+        <ul>
+          <li><strong>Per-file risk chips now match the overall score.</strong> A file's chip comes from the same evidence-weighted 0–100 model as the report score (<code>core.risk_model.file_risk</code>), so a file can no longer read CRITICAL next to an overall MEDIUM. The legacy sum-based <code>signal_score</code> is replaced by the worst-file score; observation-only files stay below CRITICAL.</li>
+          <li><strong>No directory listings.</strong> <code>server.py</code> returns <strong>404</strong> for directories without an <code>index.html</code> (e.g. <code>/assets/</code>), so the local engine cannot leak a directory tree.</li>
+          <li><strong>Bounded fallback reads.</strong> The exception fallback in <code>core/url_policy.read_response_text</code> reads at most <code>max_bytes + 1</code> bytes from <code>response.raw</code> instead of letting <code>response.text</code> materialize an unbounded body.</li>
+          <li><strong>Dead code removed</strong>: unused <code>config</code> blocks (origin allow-list, noise words, scan/performance/confidence constants), <code>ai/prompts.py</code>, and the never-written <code>derived_keys</code> crypto result key.</li>
+          <li><strong>Taint precision.</strong> Identifiers bound to statically-known values (literals, constant templates, literal arrays/objects, constant unary expressions) no longer trigger the by-name heuristic; <strong>reassignment to a static value clears prior taint</strong> in both the AST and regex paths. Unresolved names (parameters, globals) keep their conservative medium-confidence treatment.</li>
+          <li><strong>DNS-rebinding hardening.</strong> Each target is syntax-checked and resolved in a single step, then every connection is pinned to the validated public address literals (all address families), so an attacker-controlled name server cannot swap the answer mid-request; each redirect hop is re-validated and re-pinned. <code>SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS=1</code> opts out for explicitly authorized local/private targets.</li>
+          <li><strong>Local-first AI summary.</strong> <code>--ai ollama</code> sends only structured findings (never raw source) to a <strong>local</strong> Ollama server and falls back to the built-in rule-based summary when Ollama is offline or misbehaves. Cloud LLM providers and the <code>--api-key</code> placeholder were removed — shipping scanned code to a cloud would contradict the \"nothing leaves your computer\" design. The deterministic summary stays the default and is never mandatory.</li>
+          <li>Suite grown to <strong>227 tests + 5 subtests</strong>, covering the AI contract, DNS pinning, per-file risk consistency, and the accuracy-regression cases.</li>
+        </ul>
         <h3 id="accuracy-triage-model">Accuracy &amp; triage model</h3>
         <ul>
           <li>Severity, <strong>confidence</strong>, triage <strong>status</strong>, and <strong>analysis quality</strong> are now independent axes. Confidence is derived from the <em>evidence</em> (regex → low, framework/behavioral → medium, source-to-sink/runtime → high, demonstrated runtime effect → confirmed) and is never inferred from severity.</li>
@@ -148,7 +159,7 @@
         </ul>
         <h3 id="brand-landing-page-front-end-fixes">Brand, landing page &amp; front-end fixes</h3>
         <ul>
-          <li><strong>Two pages instead of one</strong>: <code>index.html</code> is now the overview/landing page (hero, what it finds, how it works, trust, setup, connect) and <code>tool.html</code> hosts the analysis console. Both share <code>app.js</code>, <code>styles.css</code> and <code>config.js</code>; the script detects which page it is on and only wires the analyzer when the console markup is present. <code>server.py</code> serves <code>/</code> → <code>tool.html</code> so a locally started engine opens the console, while GitHub Pages serves <code>index.html</code>.</li>
+          <li><strong>Separate pages for overview and console</strong>: <code>home/index.html</code> is the overview/landing page (hero, what it finds, how it works, trust, setup, connect) and <code>tool/index.html</code> hosts the analysis console. Both share <code>app.js</code>, <code>styles.css</code> and <code>config.js</code>; the script detects which page it is on and only wires the analyzer when the console markup is present. <code>server.py</code> serves <code>/</code> → <code>tool/index.html</code> so a locally started engine opens the console, while GitHub Pages serves the overview at <code>/home/</code>.</li>
           <li><strong>Scroll animations</strong>: sections, cards, steps and footer columns reveal as they enter the viewport (<code>IntersectionObserver</code>, staggered, unobserve after the first reveal), plus a scroll-progress bar under the sticky header and active-section highlighting in the nav. All of it is disabled under <code>prefers-reduced-motion</code>, and the hidden state is scoped to a <code>js-reveal</code> class set in <code>config.js</code> so a failed script can never blank the page.</li>
           <li><strong>Proper headings</strong>: one <code>h1</code> per page ("Watch every line…" on the overview, "JavaScript analysis console" on the console page), <code>h2</code> per section, <code>h3</code> per card, plus a skip-to-content link and <code>aria-current</code> on the active nav link.</li>
           <li><strong>Connect section is about ScriptSentry, not CyberBuddy.</strong> It now reads "Building ScriptSentry for analysts, with analysts" with a ScriptSentry roadmap item (build-over-build diffing and a CI gate) instead of the CyberBuddy / HAR Analyzer copy.</li>
@@ -163,7 +174,7 @@
         <h3 id="maintenance">Maintenance</h3>
         <ul>
           <li>Engine version centralized in <code>core/version.py</code>; added <code>release.json</code> and this changelog. TXT report no longer iterates string evidence character-by-character; CSV/SARIF export quality/limitation fields.</li>
-          <li>Test count: <strong>77+ passing</strong>.</li>
+          <li>Test count: <strong>227+ passing</strong> (plus 5 subtests).</li>
         </ul>
         <h3 id="audit-follow-ups-detection-quality">Audit follow-ups — detection quality</h3>
         <ul>
@@ -230,7 +241,7 @@
         </ul>
         <h3 id="changelog-page-docs-metadata-and-navigation-cleanup">Changelog page, docs metadata and navigation cleanup</h3>
         <ul>
-          <li><strong>The changelog is a real page now.</strong> <code>Changelog</code> used to link into the repository, which on a static site means a visitor lands on a file listing instead of a page. <code>webui/changelog.html</code> is now generated from this file by <code>tools/build_changelog.py</code>, so the hosted page cannot drift from the changelog a person edits. The page reuses <code>index.html</code>'s head, header and footer, so navigation and metadata changes land on it automatically.</li>
+          <li><strong>The changelog is a real page now.</strong> <code>Changelog</code> used to link into the repository, which on a static site means a visitor lands on a file listing instead of a page. <code>webui/changelog/index.html</code> is now generated from this file by <code>tools/build_changelog.py</code>, so the hosted page cannot drift from the changelog a person edits. The page reuses the overview page's head, header and footer, so navigation and metadata changes land on it automatically.</li>
           <li><strong>Two guards keep that honest.</strong> <code>tests/test_docs.py</code> fails when the committed page is out of date (verified by mutation testing), and the Pages workflow regenerates it on every deploy as a safety net. The generated file carries a "do not edit by hand" banner.</li>
           <li><strong>The changelog page is styled as a document, not a dashboard</strong>: one reading column at the 72ch prose measure, a rule between releases instead of a card per entry, and no new colours or type sizes. Responsiveness comes from the measure itself — a phone, a tablet and a 2560px display all get the same readable line — with a single width rule for the two back-links.</li>
           <li><strong>The footer is a wayfinding list again, not a sitemap.</strong> It had grown to nine links, three of which repeated sections the header nav already reaches. The Product column now carries only the two destinations the header does not route to (the analyzer and the changelog) alongside Connect.</li>
@@ -248,8 +259,8 @@
     </div>
 
     <p class="changelog-back">
-      <a href="index.html">← Back to the overview</a> ·
-      <a href="tool.html">Open the analyzer →</a>
+      <a href="home/">← Back to the overview</a> ·
+      <a href="tool/">Open the analyzer →</a>
     </p>
   </main>
 
@@ -257,7 +268,7 @@
   <footer class="site-footer">
     <div class="footer-inner">
       <div class="footer-brand">
-        <a class="brand footer-brand-row" href="index.html" aria-label="ScriptSentry home">
+        <a class="brand footer-brand-row" href="home/" aria-label="ScriptSentry home">
           <span class="mark" aria-hidden="true">
             <svg viewBox="0 0 32 32" role="img" aria-hidden="true" focusable="false">
               <defs>
@@ -288,8 +299,8 @@
 
       <nav class="footer-col" aria-label="Product">
         <h3>Product</h3>
-        <a href="tool.html">⚡ Open the Analyzer</a>
-        <a href="changelog.html" aria-current="page">📜 What's New</a>
+        <a href="tool/">⚡ Open the Analyzer</a>
+        <a href="changelog/" aria-current="page">📜 What's New</a>
       </nav>
 
       <nav class="footer-col" aria-label="Connect">
@@ -314,6 +325,6 @@
     </div>
   </footer>
 
-  <script src="app.js"></script>
+  <script src="../app.js"></script>
 </body>
 </html>

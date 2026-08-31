@@ -25,6 +25,8 @@ Environment overrides (optional)
 SCRIPTSENTRY_REF      git ref to fetch (default: main; set to a tag for release)
 SCRIPTSENTRY_REPO     "owner/name" of the GitHub repo to bootstrap from
 SCRIPTSENTRY_NO_INSTALL  set to "1" to skip the pip dependency install step
+SCRIPTSENTRY_BREAK_SYSTEM_PACKAGES  set to "1" to pass --break-system-packages to pip
+                        (PEP 668 externally-managed Pythons retry with this automatically)
 
 Authorized use
 --------------
@@ -101,6 +103,41 @@ def extract_engine(data: bytes) -> Path:
     return target
 
 
+def _pip_install(packages) -> bool:
+    """Run pip once; retry with --break-system-packages on PEP 668.
+
+    Returns True when pip reported success.  On failure pip's own stderr is
+    surfaced so the reason is never mysterious.
+    """
+    base = [sys.executable, "-m", "pip", "install", "--quiet"]
+    if os.environ.get("SCRIPTSENTRY_BREAK_SYSTEM_PACKAGES", "").strip().lower() in ("1", "true", "yes", "on"):
+        base.append("--break-system-packages")
+
+    def _run(command):
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+        return result.returncode == 0
+
+    if _run(base + list(packages)):
+        return True
+    if "--break-system-packages" not in base:
+        # PEP 668 (Debian 12+ / Ubuntu 23.04+): the distro python refuses
+        # site-packages writes. The tool is a local, user-launched utility, so
+        # retry with the documented escape hatch and say exactly that; a venv
+        # remains the cleaner alternative.
+        print(
+            "⚠  This Python is 'externally managed' (PEP 668); retrying the install "
+            "with --break-system-packages.\n"
+            "    Prefer isolation? Create a venv and run the launcher with it:\n"
+            f"      {sys.executable} -m venv ~/.scriptsentry/venv && ~/.scriptsentry/venv/bin/python scriptsentry.py\n"
+            "    (or set SCRIPTSENTRY_BREAK_SYSTEM_PACKAGES=1 to skip the message)",
+            flush=True,
+        )
+        return _run(base + ["--break-system-packages"] + list(packages))
+    return False
+
+
 def install_dependencies(engine_dir: Path) -> None:
     if os.environ.get("SCRIPTSENTRY_NO_INSTALL") == "1":
         _info("Skipping dependency install (SCRIPTSENTRY_NO_INSTALL set).")
@@ -116,14 +153,36 @@ def install_dependencies(engine_dir: Path) -> None:
         return
     print(f"📦 Installing Python dependencies: {', '.join(missing)}", flush=True)
     req = engine_dir / "requirements.txt"
-    cmd = [sys.executable, "-m", "pip", "install", "--quiet"]
-    cmd += [str(req)] if req.is_file() else missing
-    try:
-        subprocess.check_call(cmd)
-    except Exception as exc:  # noqa: BLE001
-        print(f"⚠  Automatic dependency install failed ({exc}).", flush=True)
-        print("   You can install them manually with:\n"
-              f"     {sys.executable} -m pip install -r requirements.txt\n", flush=True)
+    installed_all = False
+    if req.is_file():
+        # `pip install -r path` (the bare path is not a valid requirement
+        # string). Fast path: one pip run for the whole file.
+        installed_all = _pip_install(["-r", str(req)])
+    if not installed_all:
+        # Fall back to installing each missing package on its own so a single
+        # package with a broken/root-only build cannot block the rest (e.g.
+        # esprima's sdist writes headers to /usr/include, which fails for
+        # non-root users). Everything that installs still gets used; the
+        # engine degrades gracefully for the ones that do not.
+        failed = []
+        for pkg in list(missing):
+            print(f"  installing {pkg}…", flush=True)
+            if _pip_install([pkg]):
+                missing.remove(pkg)
+            else:
+                failed.append(pkg)
+        if failed:
+            print(f"⚠  Could not install: {', '.join(failed)}", flush=True)
+            print(
+                f"   You can install them manually with:\n"
+                f"     {sys.executable} -m pip install -r {req}\n",
+                flush=True,
+            )
+            print(
+                "   Note: without 'requests' and 'beautifulsoup4', URL scanning is unavailable; "
+                "pasted/uploaded code analysis still works.",
+                flush=True,
+            )
 
 
 def run_server(engine_dir: Path, server_args) -> None:

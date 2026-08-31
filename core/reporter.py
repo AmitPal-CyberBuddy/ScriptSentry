@@ -4,7 +4,7 @@ import os
 
 from core.js_parser import parser_status
 from core.analysis_model import deduplicate_findings, split_findings
-from core.risk_model import overall_risk, top_priorities
+from core.risk_model import file_risk, overall_risk, top_priorities
 from core.script_intel import build_script_intel, data_exfiltration_candidates
 from core.version import ENGINE_NAME, RELEASE_STATUS, SARIF_TOOL_VERSION, __version__ as ENGINE_VERSION, is_dev_build
 
@@ -253,9 +253,8 @@ def build_report_model(results, ai_summary=None, metadata=None):
         "parameters": [], "domains": [], "headers": [], "body_fields": [],
         "auth_hints": [], "internal_endpoints": [],
     }
-    total_score = 0
+    worst_file_score = 0
     total_count = 0
-    max_file_score = 0
 
     for file_name, data in results.items():
         if str(file_name).startswith("__"):
@@ -266,18 +265,21 @@ def build_report_model(results, ai_summary=None, metadata=None):
         norm["origin"] = (url_by_path.get(file_name)
                           or str(data.get("url") or "")
                           or ("" if str(file_name).startswith("runtime://") else file_name))
-        score, label, findings = score_risk(norm)
-        norm["score"] = score
-        norm["risk"] = label
         # Keep the structured taint/framework/risk findings for exports and let the
         # human-readable `findings` list carry the coarse risk strings for TXT/HTML.
         norm["rich_findings"] = [f for f in norm.get("findings", []) if isinstance(f, dict)]
+        # Per-file chips use the same evidence-weighted 0-100 model as the
+        # overall score, so a file can no longer show "CRITICAL (13)" next to
+        # an overall "HIGH (58)" from two incompatible scoring systems.
+        file_risk_model = file_risk(norm)
+        norm["score"] = file_risk_model["score"]
+        norm["risk"] = file_risk_model["label"]
+        _, _, findings = score_risk(norm)  # human-readable strings only
         norm["findings"] = findings
         intel_match = next((entry for entry in script_inventory if entry.get("path") == file_name or entry.get("name") == _basename_safe(file_name)), {})
         norm["script_intel"] = intel_match
         files.append(norm)
-        total_score += score
-        max_file_score = max(max_file_score, score)
+        worst_file_score = max(worst_file_score, file_risk_model["score"])
         flow_or_fw_ids = {f.get("id") for f in norm.get("dataflows", [])} | {f.get("id") for f in norm.get("framework_findings", [])}
         all_signals.extend(
             sig for sig in (_collect_signals(file_name, data) or []) if sig.get("id") not in flow_or_fw_ids
@@ -427,7 +429,9 @@ def build_report_model(results, ai_summary=None, metadata=None):
         "summary": {
             "total_files": len(files),
             "total_score": risk["score"],
-            "signal_score": total_score,
+            # Legacy aggregate kept for API compatibility: the worst single
+            # file, using the same 0-100 evidence-weighted per-file model.
+            "signal_score": worst_file_score,
             "risk_label": overall_label,
             "risk_color": overall_color,
             "risk_contributors": risk["contributors"],
@@ -435,7 +439,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
             "priorities": priorities,
             "actionable_findings": actionable_findings,
             "observations": observation_findings,
-            "max_file_score": max_file_score,
+            "max_file_score": worst_file_score,
             "total_findings": risk["counts"]["findings"],
             "total_observations": risk["counts"]["observations"],
             "categories": categories,
@@ -511,7 +515,8 @@ def scan_reliability(model, results=None):
     rows.append(("Runtime verification", {
         "captured": "captured in a local headless browser",
         "disabled": "disabled by configuration",
-        "unavailable": "unavailable (Playwright not installed)",
+        "missing_dependency": "unavailable (Playwright not installed)",
+        "browser_failed": "attempted, failed (browser could not launch)",
         "error": "attempted, failed",
     }.get(status, "not run")))
     if confidence_mix:
@@ -522,16 +527,6 @@ def scan_reliability(model, results=None):
                  if not confidence_mix.get("confirmed")
                  else f"{confidence_mix.get('confirmed')} finding(s) proven at runtime"))
     return rows
-
-
-def _overall_risk_label(score, max_file_score):
-    if score >= 18 or max_file_score >= 9:
-        return "CRITICAL"
-    if score >= 8 or max_file_score >= 5:
-        return "HIGH"
-    if score >= 3 or max_file_score >= 3:
-        return "MEDIUM"
-    return "LOW"
 
 
 def _txt_section(title, items, limit=8):
@@ -585,9 +580,9 @@ def _remediation(model):
     return steps
 
 
-def generate_report(results, ai_summary=None):
+def generate_report(results, ai_summary=None, metadata=None):
     """Generate a polished, structured text report."""
-    model = build_report_model(results, ai_summary=ai_summary)
+    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
     summary = model["summary"]
     report = []
 
@@ -821,9 +816,9 @@ def generate_report(results, ai_summary=None):
     return "\n".join(report)
 
 
-def generate_html_report(results, ai_summary=None):
+def generate_html_report(results, ai_summary=None, metadata=None):
     """Generate a self-contained, modern HTML report (exportable/shareable)."""
-    model = build_report_model(results, ai_summary=ai_summary)
+    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
     summary = model["summary"]
     risk_color = summary["risk_color"]
 
@@ -1055,12 +1050,12 @@ def _all_unified_findings(model):
     return deduplicate_findings(list(findings) + list(flows))
 
 
-def generate_csv_report(results, ai_summary=None):
+def generate_csv_report(results, ai_summary=None, metadata=None):
     """Generate a CSV export of unified findings."""
     import csv
     import io
 
-    model = build_report_model(results, ai_summary=ai_summary)
+    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
     findings = _all_unified_findings(model)
     fields = [
         "id", "type", "severity", "confidence", "status", "origin", "file", "line",
@@ -1101,12 +1096,12 @@ def generate_csv_report(results, ai_summary=None):
     return buf.getvalue()
 
 
-def generate_sarif_report(results, ai_summary=None):
+def generate_sarif_report(results, ai_summary=None, metadata=None):
     """Generate a SARIF 2.1.0 export of unified findings."""
     import json
     import uuid
 
-    model = build_report_model(results, ai_summary=ai_summary)
+    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
     findings = _all_unified_findings(model)
     rules_map = {}
     results_out = []
@@ -1270,7 +1265,10 @@ def _file_diagnostic(file_name, data):
         "framework_findings": len(data.get("framework_findings", []) or []),
         "findings": len(data.get("findings", []) or []),
     }
-    score, label, findings = score_risk(data)
+    # Per-file chip: same evidence-weighted model as the overall score.
+    file_risk_model = file_risk(data)
+    score, label = file_risk_model["score"], file_risk_model["label"]
+    _, _, findings = score_risk(data)  # human-readable strings only
     ast = data.get("ast_analysis", {}) or {}
     signals = []
     seen_sig = set()
@@ -1455,7 +1453,6 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         })
 
     all_signals = _dedupe_signals(all_signals)
-    max_file_score = max((f["score"] for f in files), default=0)
 
     # Explainable overall risk: a weighted, evidence-tiered 0-100 score plus
     # the explicit "why" contributors and the top investigation priorities.

@@ -228,13 +228,24 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        # The dashboard is two pages: `index.html` (landing/overview) and
-        # `tool.html` (the analysis console).  GitHub Pages serves the landing
-        # page at `/`, but a local engine is almost always launched to *use* the
+        # The dashboard is three pages: `home/index.html` (landing/overview),
+        # `tool/index.html` (the analysis console) and `changelog/index.html`
+        # (generated from CHANGELOG.md).  GitHub Pages serves the landing page
+        # at `/home/`, but a local engine is almost always launched to *use* the
         # tool, so loopback visitors land straight on the console.
         if parsed.path == "/":
-            self.path = "/tool.html"
+            self.path = "/tool/index.html"
         return super().do_GET()
+
+    def list_directory(self, path):
+        """Directories without an index page are 404, not a file listing.
+
+        The static site is three pages plus assets; a directory listing would
+        leak filenames and looks like an unfinished feature.  Only paths with
+        an ``index.html`` (home/, tool/, changelog/) are served.
+        """
+        self.send_error(404, "Not found")
+        return None
 
     def _read_json_body(self):
         content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
@@ -330,7 +341,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             source = f"{len(body['files'])} uploaded file(s)"
         metadata = {"mode": str(body.get("mode", "code")), "source": source}
         if report_format == "txt":
-            text = generate_report(results)
+            text = generate_report(results, metadata=metadata)
             data = text.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -343,7 +354,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
 
         if report_format == "csv":
-            text = generate_csv_report(results)
+            text = generate_csv_report(results, metadata=metadata)
             data = text.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/csv; charset=utf-8")
@@ -356,7 +367,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
 
         if report_format == "sarif":
-            text = generate_sarif_report(results)
+            text = generate_sarif_report(results, metadata=metadata)
             data = text.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/sarif+json; charset=utf-8")
@@ -368,7 +379,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.wfile.write(data)
             return
 
-        html = generate_html_report(results)
+        html = generate_html_report(results, metadata=metadata)
         data = html.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")

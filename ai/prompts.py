@@ -1,1 +1,0 @@
-EXECUTIVE_SUMMARY_PROMPT = """Summarize the security posture of the JavaScript bundle using deterministic evidence only. Focus on risk, authentication handling, storage exposure, and API architecture."""

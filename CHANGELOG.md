@@ -1,16 +1,51 @@
 # Changelog
 
-All notable changes to ScriptSentry are documented here. The version number is
-defined in one place (`core/version.py`) and mirrored in `release.json`.
+All notable changes to ScriptSentry are listed here, newest first.
 
-> 🚧 **Status: under active development — not yet published.** The project is
-> marked as a pre-release (`DEV_BUILD = True`, version suffix `-dev`) until the
-> first stable release.
+> 🚧 **Status: under active development.** ScriptSentry is still a pre-release
+> tool: it is already useful for triage, but features and detection rules keep
+> improving, and details may change between versions.
 
 ## [Unreleased] — 2.2.0-dev
 
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
+
+### End-to-end review hardening — risk chips, taint precision & transport
+- **Per-file risk chips now match the overall score.** A file's chip comes from
+  the same evidence-weighted 0–100 model as the report score
+  (`core.risk_model.file_risk`), so a file can no longer read CRITICAL next to
+  an overall MEDIUM. The legacy sum-based `signal_score` is replaced by the
+  worst-file score; observation-only files stay below CRITICAL.
+- **No directory listings.** `server.py` returns **404** for directories
+  without an `index.html` (e.g. `/assets/`), so the local engine cannot leak a
+  directory tree.
+- **Bounded fallback reads.** The exception fallback in
+  `core/url_policy.read_response_text` reads at most `max_bytes + 1` bytes from
+  `response.raw` instead of letting `response.text` materialize an unbounded
+  body.
+- **Dead code removed**: unused `config` blocks (origin allow-list, noise
+  words, scan/performance/confidence constants), `ai/prompts.py`, and the
+  never-written `derived_keys` crypto result key.
+- **Taint precision.** Identifiers bound to statically-known values (literals,
+  constant templates, literal arrays/objects, constant unary expressions) no
+  longer trigger the by-name heuristic; **reassignment to a static value clears
+  prior taint** in both the AST and regex paths. Unresolved names (parameters,
+  globals) keep their conservative medium-confidence treatment.
+- **DNS-rebinding hardening.** Each target is syntax-checked and resolved in a
+  single step, then every connection is pinned to the validated public address
+  literals (all address families), so an attacker-controlled name server cannot
+  swap the answer mid-request; each redirect hop is re-validated and re-pinned.
+  `SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS=1` opts out for explicitly authorized
+  local/private targets.
+- **Local-first AI summary.** `--ai ollama` sends only structured findings
+  (never raw source) to a **local** Ollama server and falls back to the built-in
+  rule-based summary when Ollama is offline or misbehaves. Cloud LLM providers
+  and the `--api-key` placeholder were removed — shipping scanned code to a
+  cloud would contradict the \"nothing leaves your computer\" design. The
+  deterministic summary stays the default and is never mandatory.
+- Suite grown to **227 tests + 5 subtests**, covering the AI contract, DNS
+  pinning, per-file risk consistency, and the accuracy-regression cases.
 
 ### Accuracy & triage model
 - Severity, **confidence**, triage **status**, and **analysis quality** are now
@@ -79,12 +114,13 @@ release yet.
   the README.
 
 ### Brand, landing page & front-end fixes
-- **Two pages instead of one**: `index.html` is now the overview/landing page
-  (hero, what it finds, how it works, trust, setup, connect) and `tool.html`
-  hosts the analysis console. Both share `app.js`, `styles.css` and `config.js`;
-  the script detects which page it is on and only wires the analyzer when the
-  console markup is present. `server.py` serves `/` → `tool.html` so a locally
-  started engine opens the console, while GitHub Pages serves `index.html`.
+- **Separate pages for overview and console**: `home/index.html` is the
+  overview/landing page (hero, what it finds, how it works, trust, setup,
+  connect) and `tool/index.html` hosts the analysis console. Both share
+  `app.js`, `styles.css` and `config.js`; the script detects which page it is
+  on and only wires the analyzer when the console markup is present. `server.py`
+  serves `/` → `tool/index.html` so a locally started engine opens the console,
+  while GitHub Pages serves the overview at `/home/`.
 - **Scroll animations**: sections, cards, steps and footer columns reveal as
   they enter the viewport (`IntersectionObserver`, staggered, unobserve after
   the first reveal), plus a scroll-progress bar under the sticky header and
@@ -131,7 +167,7 @@ release yet.
 - Engine version centralized in `core/version.py`; added `release.json` and
   this changelog. TXT report no longer iterates string evidence
   character-by-character; CSV/SARIF export quality/limitation fields.
-- Test count: **77+ passing**.
+- Test count: **227+ passing** (plus 5 subtests).
 
 
 ### Audit follow-ups — detection quality
@@ -335,9 +371,9 @@ release yet.
 ### Changelog page, docs metadata and navigation cleanup
 - **The changelog is a real page now.** `Changelog` used to link into the
   repository, which on a static site means a visitor lands on a file listing
-  instead of a page. `webui/changelog.html` is now generated from this file by
-  `tools/build_changelog.py`, so the hosted page cannot drift from the
-  changelog a person edits. The page reuses `index.html`'s head, header and
+  instead of a page. `webui/changelog/index.html` is now generated from this
+  file by `tools/build_changelog.py`, so the hosted page cannot drift from the
+  changelog a person edits. The page reuses the overview page's head, header and
   footer, so navigation and metadata changes land on it automatically.
 - **Two guards keep that honest.** `tests/test_docs.py` fails when the
   committed page is out of date (verified by mutation testing), and the Pages
