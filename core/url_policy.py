@@ -103,11 +103,79 @@ def validate_public_url(url: str, *, resolve: bool = True, allowed_schemes=("htt
     return True, ""
 
 
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host or "")
+        return True
+    except ValueError:
+        return False
+
+
+def _pin_getaddrinfo(hostname: str, ips) -> callable:
+    """Temporarily resolve ``hostname`` to the validated literals ``ips``.
+
+    Returns the original ``socket.getaddrinfo`` for the caller to restore.
+    The pin is scoped to the duration of one request (try/finally), and only
+    rewrites lookups for this exact hostname, so other threads resolving
+    other hosts are unaffected.
+
+    Every validated address is chained into the result so the HTTP client
+    keeps its usual try-in-order behaviour (e.g. IPv6 first, IPv4 fallback)
+    without ever consulting DNS again for this host.
+    """
+    hostname = (hostname or "").rstrip(".").lower()
+    ips = tuple(ips or ())
+    original = socket.getaddrinfo
+
+    def pinned(host, *args, **kwargs):
+        if host and host.rstrip(".").lower() == hostname:
+            records = []
+            for ip in ips:
+                records.extend(original(ip, *args, **kwargs))
+            return records
+        return original(host, *args, **kwargs)
+
+    socket.getaddrinfo = pinned
+    return original
+
+
+def _validate_and_pin(url: str):
+    """Validate ``url`` and resolve it exactly once; return ``(ok, reason, ips)``.
+
+    ``ips`` is the tuple of public IP literals the request is allowed to
+    connect to, or None for IP-literal targets (nothing to rebind) and for
+    unresolvable hostnames (the HTTP client will surface the connection
+    error).  Using one resolution for both the safety check and the
+    connection closes the DNS-rebinding window: the check and the socket
+    can no longer see two different answers.
+    """
+    ok, reason = validate_public_url(url, resolve=False)
+    if not ok:
+        return False, reason, None
+    if _private_targets_allowed():
+        # The development override also disables pinning: private-target
+        # scans connect to loopback/private IPs that pinning would reject.
+        return True, "", None
+    hostname = (urlparse(url).hostname or "").rstrip(".").lower()
+    if not hostname or _is_ip_literal(hostname):
+        return True, "", None
+    addresses = sorted(_resolved_addresses(hostname))
+    if not addresses:
+        return True, "", None
+    if any(_unsafe_ip(address) for address in addresses):
+        return False, "The target resolves to a local or reserved network", None
+    return True, "", tuple(addresses)
+
+
 def safe_get(url: str, *, timeout=15, headers=None, max_redirects=MAX_REDIRECTS, **kwargs):
     """GET a public URL without following an unsafe redirect.
 
     The returned object is a normal ``requests.Response``.  Callers decide how
     much of the body to read; this function only enforces the URL boundary.
+
+    Each hop is validated and resolved *once*; the request is pinned to the
+    validated IP so the destination cannot change between the check and the
+    connection (DNS rebinding).
     """
     if requests is None:
         return None
@@ -115,16 +183,30 @@ def safe_get(url: str, *, timeout=15, headers=None, max_redirects=MAX_REDIRECTS,
     session = requests.Session()
     try:
         for _ in range(max(0, int(max_redirects)) + 1):
-            valid, reason = validate_public_url(current, resolve=True)
+            valid, reason, pinned_ips = _validate_and_pin(current)
             if not valid:
                 raise ValueError(reason)
-            response = session.get(
-                current,
-                timeout=timeout,
-                headers=headers,
-                allow_redirects=False,
-                **kwargs,
-            )
+            if pinned_ips is None:
+                response = session.get(
+                    current,
+                    timeout=timeout,
+                    headers=headers,
+                    allow_redirects=False,
+                    **kwargs,
+                )
+            else:
+                hostname = (urlparse(current).hostname or "").rstrip(".").lower()
+                original = _pin_getaddrinfo(hostname, pinned_ips)
+                try:
+                    response = session.get(
+                        current,
+                        timeout=timeout,
+                        headers=headers,
+                        allow_redirects=False,
+                        **kwargs,
+                    )
+                finally:
+                    socket.getaddrinfo = original
             if response.is_redirect or response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("Location")
                 response.close()

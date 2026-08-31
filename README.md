@@ -139,10 +139,13 @@ Launch the dashboard directly from the CLI:
 python3 main.py --serve --port 8000
 ```
 
-Optional AI-style summary (not required for any core analysis):
+Optional AI-style summary (not required for any core analysis). The default
+`--ai` mode is the built-in rule-based summary; `--ai ollama` calls a **local**
+Ollama server (privacy-first — code never leaves your machine) and falls back
+to the rule-based summary if Ollama is offline:
 
 ```bash
-python3 main.py https://example.com --ai openai --api-key YOUR_KEY --model gpt-4o-mini
+python3 main.py https://example.com --ai ollama --model llama3.2
 ```
 
 ---
