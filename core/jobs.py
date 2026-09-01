@@ -46,6 +46,10 @@ class Job:
         self.created_at = datetime.now(timezone.utc).isoformat()
         self.started_at = None
         self.finished_at = None
+        # Heartbeat: wall-clock time of the last progress event. The UI uses
+        # the age to tell "working quietly on a big bundle" apart from
+        # "contact with the engine was lost".
+        self.last_update_ts = None
         self._lock = threading.Lock()
         self.cancel_event = threading.Event()
         # ETA state: a bounded window of (timestamp, fraction) samples plus an
@@ -125,6 +129,7 @@ class Job:
             now = time.time()
             if self.started_at is not None:
                 self.elapsed_ms = int((now - self.started_at) * 1000)
+            self.last_update_ts = now
 
             for key in ("phase", "message", "current", "total", "files_scanned",
                         "bytes_scanned", "total_bytes", "skipped_files", "percent",
@@ -161,6 +166,7 @@ class Job:
             self.status = "running"
             self.phase = self.phase or "running"
             self.started_at = time.time()
+            self.last_update_ts = self.started_at
             self.message = self.message or "Working…"
             return True
 
@@ -222,6 +228,10 @@ class Job:
 
     def snapshot(self, include_result=False):
         with self._lock:
+            now = time.time()
+            since_update_ms = None
+            if self.last_update_ts is not None:
+                since_update_ms = max(0, int((now - self.last_update_ts) * 1000))
             data = {
                 "id": self.id,
                 "mode": self.mode,
@@ -242,6 +252,7 @@ class Job:
                 "eta_confidence": self.eta_confidence,
                 "stage": self.stage,
                 "stages": self.stages,
+                "since_update_ms": since_update_ms,
                 "error": self.error,
                 "created_at": self.created_at,
                 "started_at": self.started_at,

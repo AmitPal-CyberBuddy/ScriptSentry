@@ -464,6 +464,13 @@ body {
   font-size: 12.5px;
   line-height: 1.5;
 }
+
+/* Neutral inline note (e.g. "Analysis canceled.") — no danger styling. */
+.field-error.is-neutral {
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--muted);
+}
 .field-hint {
   margin: 8px 0 0;
   color: var(--muted);
@@ -936,6 +943,49 @@ select {
 .progress-stats b {
   color: #a5f3fc;
   font-weight: 600;
+}
+
+/* Quiet-scan hint: shown when the engine has not produced a progress event
+   for a while, so silence reads as "working on one big bundle", not as a
+   frozen page. The spinner swaps to amber while the engine is quiet. */
+.progress-hint {
+  display: block;
+  color: #fbbf24;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.progress-hint[hidden] {
+  display: none;
+}
+
+.loading.is-quiet .spinner {
+  border-top-color: #fbbf24;
+  animation-duration: 1.6s;
+}
+
+/* A scan carried over from the hosted page (via the #scan= hand-off link):
+   confirms that the request was received and is starting automatically. */
+.transfer-note {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.1);
+  color: #6ee7b7;
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.transfer-note.is-warn {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.1);
+  color: #fcd34d;
+}
+
+.transfer-note[hidden] {
+  display: none;
 }
 
 @keyframes spin {

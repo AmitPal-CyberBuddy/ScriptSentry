@@ -11,6 +11,84 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Honest scan progress — no more "is it stuck?" spinner
+- **The dashboard no longer declares a false timeout.** The browser poll loop
+  used to give up after exactly 10 minutes with *"Analysis timed out while
+  waiting for the local engine"* — while the engine was still scanning a large
+  target. The poll now waits as long as the engine keeps answering and
+  reporting: transient contact losses are tolerated for a 20-second grace
+  window, a restarted engine is reported as exactly that ("server.py was
+  probably restarted"), and long scans simply keep the live progress panel
+  open. Polling backs off while the tab is hidden.
+- **Every silent stretch now explains itself.** The engine reports a
+  heartbeat (`since_update_ms`) with each status poll. When a stage stays
+  quiet — normal for one big bundle being parsed or beautified — the progress
+  panel shows *"No new updates for Xs — large bundles can stay quiet…"*, the
+  spinner switches to amber, and after 90s the hint suggests lowering the
+  file cap or workers instead of leaving an endless spinner.
+- **Work is announced before it happens.** Files in flight are reported as
+  *"Scanning app.min.js…"* (the old UI could only say "Analyzed …" after the
+  fact, so a 30–60s bundle looked frozen), beautifying reports per-file
+  *"Normalizing … (3/12)"*, and runtime-evidence capture emits a heartbeat
+  while the headless browser runs.
+- **The progress bar can no longer jump to 100% and snap back.** Download
+  events used to bypass the weighted stage model, so the job derived
+  `percent = files_done/files_total` mid-download. All download and normalize
+  events now flow through the same weighted, monotonic percent.
+- **An unfetchable target is an error, not an empty report.** A page that
+  cannot be downloaded (wrong URL, network down, bot protection) fails the
+  scan with an actionable message instead of "completing" in seconds with a
+  blank dashboard; a page that loads but genuinely has no JavaScript explains
+  that in the report notes.
+- **Cancelling is no longer styled as an error.** A user-initiated cancel
+  shows a neutral inline note instead of painting the input red.
+- **URL scans are ~2x faster.** The same document was previously parsed by
+  esprima once per consumer (taint, attack surface, module discovery, AST
+  summary) — up to four full parse + AST-conversion passes per file, which is
+  where scans silently spent most of their time. A bounded, content-hash-keyed
+  parse cache (`core/js_parser.py`) now parses each unique document exactly
+  once and shares the read-only tree; one measured 335 KB bundle went from
+  142s to 26s (5.5x), and a full mock-site scan from 129s to 68s. The cache is
+  bounded by source bytes (256 KB/entry, 512 KB total) so large bundles can
+  never pin unbounded memory. `token_count` is now 0 because the token stream
+  is no longer collected (nothing consumed it; collecting it made conversion
+  ~2.5x slower).
+
+### The hosted page now hands your scan over — and honest setup steps
+- **No more re-entering the scan on the local dashboard.** The hosted page
+  (GitHub Pages) can never call `http://127.0.0.1:8000` — browsers block the
+  mixed-content request. Instead of sending you there empty-handed, the
+  pending analysis now travels **inside the hand-off link** (`#scan=`
+  fragment, which browsers never send to any server): target URL, profile,
+  depth, file cap, workers, pasted code, and even uploaded files (up to a
+  2 MB link budget; larger uploads are named and re-picked on the local
+  page). The engine's dashboard fills the console in and starts the scan
+  automatically once it is paired.
+- **The setup guide no longer claims the local dashboard is "already
+  paired".** It is not: the dashboard asks for the pairing token once, and
+  every setup path now says exactly where that token comes from (printed in
+  the engine's terminal, right under the dashboard address). The guide also
+  states plainly that `scriptsentry.py` and `server.py` start the *same*
+  engine — run one, not both.
+- **The 📋 Copy button copies commands only.** The `#` comment lines shown
+  next to the commands ("# downloads & starts the engine on first run") no
+  longer end up in your terminal.
+- **Hover tooltips no longer clip their first words.** The viewport nudge for
+  the floating `?` tips ran only for click/keyboard opens, so hovering the
+  left-column fields (Profile, Max files) could cut the tip off-screen; hover
+  and focus now nudge it back into view too.
+- **Direct `.js`/`.mjs` targets actually scan.** The URL field suggests
+  `https://example.com/app.js`, but the engine treated every target as an
+  HTML page — a direct script returned an empty "no JavaScript found"
+  report. A direct script target is now downloaded and analyzed itself
+  (bounded to the 2 MB per-file limit), its `import()`/chunk references are
+  followed recursively, and provenance keeps the real URL. A `.js` URL that
+  actually serves HTML (soft 404 wrapper) falls back to normal page
+  discovery, and an unreachable target fails with an actionable error.
+- Suite grown to **267 tests**: hand-off contracts (fragment-only transfer,
+  comment-free copy, token wording) and direct-target scans against a live
+  loopback site.
+
 ### End-to-end review hardening — risk chips, taint precision & transport
 - **Per-file risk chips now match the overall score.** A file's chip comes from
   the same evidence-weighted 0–100 model as the report score

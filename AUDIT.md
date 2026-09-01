@@ -146,6 +146,36 @@ An end-to-end review of the shipped dashboard and CLI closed the remaining gaps:
   shipping scanned code to a cloud contradicts the privacy-first design. The deterministic summary
   is the default and nothing AI-related is mandatory.
 
+## Honest scan progress & the parse cache
+
+A URL scan spends its time in three places: downloading, beautifying, and
+analyzing bundles. The original progress reporting failed exactly there, and
+the audit found four compounding causes:
+
+1. **Events fired after work, not before.** The analyze stage only spoke when
+   a file *finished*; a 30–60s bundle monopolized a worker silently. Fix:
+   `process_task` announces `Scanning <file>…` when work starts.
+2. **Beautify and download bypassed the weighted model.** `download_js` called
+   the raw job callback with only `current/total`, so `Job.update` derived
+   `percent = files/cap` and the bar jumped to 100% mid-download and snapped
+   back; `beautify` reported nothing. Fix: both emit events through
+   `analyze_url.notify`, so one weighted, monotonic percent governs the bar.
+3. **The client had a fixed 10-minute cap** on the status poll and reported
+   *"timed out waiting for the local engine"* while the engine was still
+   working. Fix: no wall-clock cap; the poll fails only on real contact loss
+   (20s of consecutive failures) or an unknown job id, and silences surface as
+   an explanatory "quiet" hint powered by a `since_update_ms` heartbeat.
+4. **The analyzer re-parsed the same document up to four times** (taint,
+   attack surface, module discovery, AST summary — parse + `toDict` each).
+   Fix: a bounded, content-hash-keyed cache in `core/js_parser.parse_raw`.
+   Trees are shared **read-only** (all consumers only walk nodes); the cache
+   is bounded by source bytes so a 2 MB bundle cannot pin gigabytes of AST.
+   Tokens are no longer collected — nothing consumed `token_count`, and
+   dropping the token stream made AST conversion ~2.5x cheaper.
+
+Known consequence: `token_count` is reported as 0 (the token stream is no
+longer part of the parsed tree). Nothing in the UI or tests consumed it.
+
 ## Deliberate limitations
 
 - Playwright is optional. When Chromium is unavailable ScriptSentry reports

@@ -27,6 +27,13 @@
   let lastJobId = null;
   let backendConnected = false;
   let backendChecked = false;
+  // The most recent analysis the user asked for. When the hosted page cannot
+  // reach the engine (browsers block https → http://127.0.0.1), this travels
+  // inside the handoff link so the local dashboard can fill in every setting
+  // — URL/code/files, profile, depth, cap, workers — and start the scan.
+  let currentScanRequest = null;
+  let pendingScanTransfer = null;
+  let transferPrompted = false;
 
   /* API base: same origin locally, or a hosted Python backend on Pages. */
   function apiBase() {
@@ -68,6 +75,99 @@
   function localDashboardUrl() {
     const base = apiBase() || "http://127.0.0.1:8000";
     return base.replace(/\/+$/, "") + "/";
+  }
+
+  /* ---- Scan hand-off (hosted page → the engine's own dashboard) ----
+   *
+   * A github.io page physically cannot call http://127.0.0.1 (mixed content).
+   * Until the request itself travelled with the user, "open the local
+   * dashboard" meant re-typing the URL and re-setting every scan option there.
+   * The pending request is now serialized into the link's #scan= fragment —
+   * fragments stay in the browser and are never sent to any server — and the
+   * local page picks it up, fills the form and starts the scan.
+   */
+  function toB64Url(text) {
+    const bytes = new TextEncoder().encode(text);
+    let bin = "";
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  function fromB64Url(text) {
+    let normalized = text.replace(/-/g, "+").replace(/_/g, "/");
+    while (normalized.length % 4) normalized += "=";
+    const bin = atob(normalized);
+    return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+  }
+
+  // Upper bound for a transferable request. Fragments of a few MB are fine in
+  // every modern browser, but pasted code is capped by the engine at 5 MB and
+  // uploads at 3 MB each — keep the link comfortably inside both limits.
+  const HANDOFF_LIMIT = 2 * 1024 * 1024;
+
+  function buildHandoffUrl() {
+    const base = localDashboardUrl();
+    if (!currentScanRequest) return base;
+    try {
+      const encoded = toB64Url(JSON.stringify(currentScanRequest));
+      if (encoded.length > HANDOFF_LIMIT) {
+        // Too big to carry (large upload): still hand off, minus the bodies.
+        const slim = currentScanRequest.mode === "files"
+          ? { mode: "files", files: [], tooLarge: true,
+              names: (currentScanRequest.files || []).map((f) => f.filename) }
+          : { mode: currentScanRequest.mode, tooLarge: true };
+        return `${base}#scan=${toB64Url(JSON.stringify(slim))}`;
+      }
+      return `${base}#scan=${encoded}`;
+    } catch {
+      return base;
+    }
+  }
+
+  function sanitizeScanRequest(req) {
+    if (!req || typeof req !== "object") return null;
+    const clamp = (value, lo, hi, dflt) => {
+      const n = parseInt(value, 10);
+      return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt;
+    };
+    if (req.tooLarge) {
+      // Bodies did not fit; just pre-select the right input mode.
+      return { mode: req.mode, tooLarge: true, names: Array.isArray(req.names) ? req.names.map(String).slice(0, 50) : [] };
+    }
+    if (req.mode === "url") {
+      if (!isValidHttpUrl(req.url)) return null;
+      return {
+        mode: "url",
+        url: String(req.url),
+        profile: ["fast", "balanced", "strict"].includes(req.profile) ? req.profile : "balanced",
+        max_depth: clamp(req.max_depth, 1, 10, 5),
+        max_files: clamp(req.max_files, 1, 1000, 50),
+        max_workers: clamp(req.max_workers, 1, 32, 6),
+      };
+    }
+    if (req.mode === "code" && typeof req.code === "string" && req.code.trim()) {
+      if (req.code.length > HANDOFF_LIMIT) return null;
+      const filename = String(req.filename || "inline.js").replace(/\x00/g, "").slice(0, 240) || "inline.js";
+      return { mode: "code", code: req.code, filename };
+    }
+    if (req.mode === "files" && Array.isArray(req.files)) {
+      const files = req.files
+        .filter((f) => f && typeof f.filename === "string" && typeof f.code === "string" && f.code.trim())
+        .slice(0, 50)
+        .map((f) => ({ filename: String(f.filename).slice(0, 240), code: f.code }));
+      if (!files.length) return null;
+      return { mode: "files", files };
+    }
+    return null;
+  }
+
+  function parseScanTransfer() {
+    if (!/^#scan=/.test(location.hash)) return null;
+    try {
+      return sanitizeScanRequest(JSON.parse(fromB64Url(location.hash.slice(6))));
+    } catch {
+      return null;
+    }
   }
 
   function authHeaders() {
@@ -146,6 +246,9 @@
         backendConnected = true;
         backendChecked = true;
         setEngineStatus("online", "Local engine connected · private analysis ready");
+        // A scan handed off from the hosted page can start as soon as the
+        // engine answers (a token stored in this tab counts as paired).
+        maybeRunPendingTransfer();
         return true;
       }
       throw new Error("health not ok");
@@ -191,13 +294,14 @@
 
   /* Replace the "paste a token here" promise with the truth when this page
    * physically cannot reach the engine.  Pairing controls are hidden (they
-   * cannot work) and the engine's own dashboard link takes their place. */
+   * cannot work) and the engine's own dashboard link takes their place —
+   * carrying the pending scan request so nothing has to be re-entered. */
   function showHostedHandoff() {
     const aside = $(".modal-col-aside");
     if (!aside || aside.dataset.handoff === "1") return;
     aside.dataset.handoff = "1";
 
-    const url = localDashboardUrl();
+    const url = buildHandoffUrl();
     const title = $(".aside-title");
     if (title) title.textContent = "Open your local dashboard";
 
@@ -206,17 +310,27 @@
       el.hidden = true;
     });
 
+    // One honest sentence about pairing: the local dashboard asks for the
+    // token once — it is printed in the terminal where the engine runs.
+    const carriedNote = currentScanRequest
+      ? `<p class="modal-note" style="margin:0 0 10px">✅ Your scan travels with that link — the local page fills in `
+        + `${currentScanRequest.mode === "url" ? "the target URL and scan settings"
+            : currentScanRequest.mode === "files" ? "your uploaded files"
+            : "your pasted code"} automatically and starts right after pairing.</p>`
+      : "";
     const note = document.createElement("div");
     note.className = "handoff-note";
     note.innerHTML =
       `<p class="modal-note" style="margin:0 0 10px">` +
       `Your browser blocks this <b>https://</b> page from calling the engine at ` +
-      `<code>${escapeHtml(url)}</code> (<b>mixed content</b>). That's a browser rule, ` +
+      `<code>${escapeHtml(localDashboardUrl())}</code> (<b>mixed content</b>). That's a browser rule, ` +
       `not a token problem — pasting the pairing token here can't fix it.</p>` +
-      `<p class="modal-note" style="margin:0 0 12px">The engine serves the ` +
-      `<b>same dashboard</b> itself, already paired. Use that:</p>` +
+      carriedNote +
+      `<p class="modal-note" style="margin:0 0 12px">The engine serves the <b>same dashboard</b> itself. `
+      + `Open it, then paste the <b>pairing token</b> once when it asks — the token is printed in the `
+      + `terminal where the engine is running:</p>` +
       `<a class="btn" id="open-local-dashboard" href="${escapeHtml(url)}" target="_blank" rel="noopener">` +
-      `🚀 Open ${escapeHtml(url)}</a>`;
+      `🚀 Open ${escapeHtml(localDashboardUrl())}</a>`;
 
     const status = $("#engine-status-aside");
     if (status) aside.insertBefore(note, status);
@@ -274,6 +388,9 @@
   // open the setup modal when the engine itself is unreachable/unpaired.
   async function handleAnalysisError(error, { urlMode } = {}) {
     const msg = (error && error.message) || "Analysis failed.";
+    // A cancel is the user's own action, not a failure — report it without
+    // error styling (and without painting the input red).
+    const canceled = /cancel/i.test(msg);
     setEngineStatus("checking", msg);
     if (isConnectionFailure(error)) {
       showConnectionError(error);
@@ -283,9 +400,9 @@
     // The engine responded but rejected/failed the analysis — show inline.
     closePrivacyModal();
     if (urlMode) {
-      setFieldError("#url-input", "#url-error", msg);
+      setFieldError("#url-input", "#url-error", msg, { neutral: canceled });
     } else {
-      setFieldError("#code-input", "#code-error", msg);
+      setFieldError("#code-input", "#code-error", msg, { neutral: canceled });
     }
   }
 
@@ -595,6 +712,12 @@
 
       tip.addEventListener("click", toggle);
 
+      // Hover and keyboard focus show the tip through CSS alone; nudge it
+      // back into the viewport at the same moment, or the first words of a
+      // tip on a left-column field ("Profile ?") are clipped off-screen.
+      tip.addEventListener("mouseenter", () => nudgeIntoView(tip));
+      tip.addEventListener("focus", () => nudgeIntoView(tip));
+
       // A <span> does not fire click for Enter/Space the way a button
       // does, so keyboard activation is wired up explicitly.
       tip.addEventListener("keydown", (event) => {
@@ -671,6 +794,91 @@
     if (field && field.value.trim()) setApiToken(field.value);
     const ok = await checkBackend();
     if (ok) closePrivacyModal();
+  }
+
+  /* ---- Picking up a scan handed off from the hosted page ---- */
+
+  function selectInputPane(which) {
+    // which: "url" | "paste" | "files"
+    if (which === "url") {
+      const tab = $('.tab[data-pane="url"]');
+      if (tab) tab.click();
+      return;
+    }
+    const codeTab = $('.tab[data-pane="code"]');
+    if (codeTab) codeTab.click();
+    const inline = $(`.inline-tab[data-input="${which === "files" ? "upload" : "paste"}"]`);
+    if (inline) inline.click();
+  }
+
+  function showTransferNote(text, isWarning = false) {
+    const node = $("#transfer-note");
+    if (!node) return;
+    node.textContent = text;
+    node.classList.toggle("is-warn", !!isWarning);
+    node.hidden = false;
+    if (!isWarning) {
+      setTimeout(() => { node.hidden = true; }, 15000);
+    }
+  }
+
+  // Fill the console from a transferred request and start the scan the user
+  // already launched on the hosted page. Runs only once, and only when the
+  // engine is connected *and* paired (a token in this tab counts).
+  async function maybeRunPendingTransfer() {
+    if (!pendingScanTransfer || !backendConnected) return;
+    const req = pendingScanTransfer;
+    pendingScanTransfer = null;
+    try {
+      // An oversized request arrived without its bodies (the link budget was
+      // exceeded). Pre-selecting the right tab is all we can honestly do —
+      // filling the inputs with "undefined" would scan the wrong thing.
+      if (req.tooLarge) {
+        selectInputPane(req.mode === "url" ? "url" : req.mode === "files" ? "files" : "paste");
+        const names = Array.isArray(req.names) && req.names.length
+          ? ` Re-pick: ${req.names.join(", ")}.` : "";
+        showTransferNote(
+          "The hosted page could not fit this request inside the hand-off link (too large). "
+          + "Please enter it again here." + names,
+          true,
+        );
+        return;
+      }
+      if (req.mode === "url") {
+        selectInputPane("url");
+        $("#url-input").value = req.url;
+        if (req.profile) $("#profile").value = req.profile;
+        if (req.max_depth) $("#max-depth").value = String(req.max_depth);
+        if (req.max_files) $("#max-files").value = String(req.max_files);
+        if (req.max_workers) $("#workers").value = String(req.max_workers);
+        showTransferNote(`✅ Scan carried over from the hosted page — target ${req.url}. Starting…`);
+        $("#console").scrollIntoView({ behavior: "smooth", block: "start" });
+        await new Promise((r) => setTimeout(r, 400));
+        await analyzeUrl();
+      } else if (req.mode === "code") {
+        selectInputPane("paste");
+        $("#code-input").value = req.code;
+        if (req.filename) $("#filename-input").value = req.filename;
+        showTransferNote("✅ Your pasted code was carried over from the hosted page. Starting…");
+        $("#console").scrollIntoView({ behavior: "smooth", block: "start" });
+        await new Promise((r) => setTimeout(r, 400));
+        await analyzeCode();
+      } else if (req.mode === "files") {
+        selectInputPane("files");
+        pendingFiles = req.files.map((f) => ({
+          name: f.filename,
+          size: new Blob([f.code]).size,
+          content: f.code,
+        }));
+        updateFileList();
+        showTransferNote(`✅ ${req.files.length} file(s) carried over from the hosted page. Starting…`);
+        $("#console").scrollIntoView({ behavior: "smooth", block: "start" });
+        await new Promise((r) => setTimeout(r, 400));
+        await analyzeFiles();
+      }
+    } catch (err) {
+      showTransferNote(`Could not carry the scan over automatically: ${err && err.message ? err.message : err}`, true);
+    }
   }
 
   /* ---------------- Core helpers ---------------- */
@@ -767,6 +975,34 @@
     text.textContent = job.message || (job.phase || "Working…");
     fill.style.width = `${pct}%`;
     renderStages(job);
+
+    // How long since the engine last reported?  A quiet stretch usually means
+    // one big bundle is being parsed or beautified — normal work that simply
+    // produces no events — while a *failed* poll means the engine is gone.
+    // Show the age so "still working" and "lost contact" are distinguishable
+    // at a glance instead of both looking like an endless spinner.
+    const running = job.status === "running" || job.status === "queued";
+    const quietMs = running ? Math.max(0, Number(job.since_update_ms || 0)) : 0;
+    const quiet = quietMs >= QUIET_HINT_MS;
+    const panel = $("#loading");
+    if (panel) panel.classList.toggle("is-quiet", quiet);
+
+    const hint = $("#progress-hint");
+    if (hint) {
+      if (quiet && quietMs < QUIET_LOUD_MS) {
+        hint.textContent = `No new updates for ${formatDuration(quietMs)} — large bundles can stay quiet for a while during one stage. Elapsed ${formatDuration(job.elapsed_ms)}.`;
+        hint.hidden = false;
+      } else if (quiet) {
+        hint.textContent = `Still working — no stage change for ${formatDuration(quietMs)}. If this stage never finishes, Cancel and retry with a lower file cap or fewer workers.`;
+        hint.hidden = false;
+      } else if (running && Number(job.elapsed_ms || 0) >= LONG_SCAN_NOTE_MS) {
+        hint.textContent = "Large targets can take several minutes. Keep this tab open, or Cancel to stop early — results are only written when the scan finishes.";
+        hint.hidden = false;
+      } else {
+        hint.hidden = true;
+      }
+    }
+
     // An ETA measured over a couple of seconds is a guess, not an estimate.
     // Say so instead of printing a number that looks authoritative.
     const confidence = Number(job.eta_confidence || 0);
@@ -776,6 +1012,9 @@
     }
     // `total` is the engine's current work estimate, not the file cap.
     const files = job.total ? `${job.files_scanned || 0}/${job.total}` : `${job.files_scanned || 0}`;
+    const lastUpdate = running
+      ? (quietMs >= 5000 ? `${formatDuration(quietMs)} ago` : "just now")
+      : "—";
     stats.innerHTML = [
       ["stage", job.stage || job.phase || "queued"],
       ["files", files],
@@ -783,24 +1022,38 @@
       ["pct", `${pct.toFixed(0)}%`],
       ["elapsed", formatDuration(job.elapsed_ms)],
       ["eta", eta],
+      ["last update", lastUpdate],
     ].map(([k, v]) => `<b>${escapeHtml(k)}</b>: ${escapeHtml(String(v))}`).join(" · ");
   }
 
   function showLoading(text) {
-    $("#loading").classList.add("show");
+    const panel = $("#loading");
+    if (panel) {
+      panel.classList.add("show");
+      panel.classList.remove("is-quiet");
+    }
     $("#loading-text").textContent = text || "Analyzing…";
     $("#analyze-code").disabled = true;
     $("#analyze-url").disabled = true;
   }
 
   function hideLoading() {
-    $("#loading").classList.remove("show");
+    const panel = $("#loading");
+    if (panel) {
+      panel.classList.remove("show");
+      panel.classList.remove("is-quiet");
+    }
     $("#analyze-code").disabled = false;
     $("#analyze-url").disabled = false;
     const fill = $("#progress-fill");
     const stats = $("#progress-stats");
+    const hint = $("#progress-hint");
     if (fill) fill.style.width = "0%";
     if (stats) stats.innerHTML = "";
+    if (hint) {
+      hint.hidden = true;
+      hint.textContent = "";
+    }
   }
 
   function animateNumber(el, target, suffix = "") {
@@ -960,18 +1213,68 @@ function dangerous() {
 CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 `;
 
+  /* Poll /api/status until the job reaches a terminal state.
+   *
+   * The old loop threw "timed out while waiting for the local engine" after
+   * 1200 polls (10 minutes flat) whether or not the engine was still making
+   * progress — on a large target the dashboard declared failure while the
+   * scan kept running. The rules now match reality:
+   *   - No fixed wall-clock cap: a scan may take as long as the engine keeps
+   *     answering and reporting. Real bundle-heavy sites need more than ten
+   *     minutes; the engine, not the browser, decides when it is done.
+   *   - Transient poll failures (a busy worker pool, laptop sleep, a dropped
+   *     connection) are tolerated for a grace window before giving up.
+   *   - A job id the engine no longer knows (server restarted) is reported
+   *     as exactly that instead of a generic timeout.
+   *   - Long silences are surfaced as "quiet since …" hints in the progress
+   *     panel (see renderProgress), never as an error, because a silent
+   *     minute while a large bundle is parsed is normal work. */
+  const POLL_INTERVAL_MS = 500;
+  const POLL_FAILURE_GRACE_MS = 20000;   // tolerated loss of contact
+  const QUIET_HINT_MS = 15000;           // no engine update → explain, don't panic
+  const QUIET_LOUD_MS = 90000;           // stronger wording for long silences
+  const LONG_SCAN_NOTE_MS = 3 * 60000;   // gentle "big scans take a while" note
+
   async function pollJob(jobId) {
-    let latest = null;
-    for (let i = 0; i < 1200; i++) {
-      const status = await getJSON(`/api/status?job_id=${encodeURIComponent(jobId)}`);
-      latest = status.job;
-      renderProgress(latest);
-      if (latest.status === "done") return latest;
-      if (latest.status === "error") throw new Error(latest.error || "Analysis failed.");
-      if (latest.status === "canceled") throw new Error("Analysis canceled.");
-      await new Promise((r) => setTimeout(r, 500));
+    const startedAt = performance.now();
+    let lastGoodPoll = startedAt;
+    while (true) {
+      let status;
+      try {
+        status = await getJSON(`/api/status?job_id=${encodeURIComponent(jobId)}`);
+        lastGoodPoll = performance.now();
+      } catch (err) {
+        const msg = String((err && err.message) || "");
+        if (/unknown job/i.test(msg)) {
+          throw new Error(
+            "The engine no longer knows this scan job — server.py was probably restarted. Start the scan again.",
+          );
+        }
+        if (performance.now() - lastGoodPoll > POLL_FAILURE_GRACE_MS) {
+          throw new Error(
+            `Lost contact with the local engine during the scan (${formatDuration(performance.now() - startedAt)} in). `
+            + "Is server.py still running? Check its window for errors, then start the scan again.",
+          );
+        }
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        continue;
+      }
+      const job = status && status.job;
+      if (!job) {
+        throw new Error(
+          "The engine sent a status response without a job record — server.py was probably restarted. Start the scan again.",
+        );
+      }
+      renderProgress(job);
+      if (job.status === "done") return job;
+      if (job.status === "error") throw new Error(job.error || "Analysis failed.");
+      if (job.status === "canceled") throw new Error("Analysis canceled.");
+      // Back off politely while the tab is hidden; browsers throttle timers
+      // here anyway, and the engine does not need us polling it every 500ms
+      // while nobody is watching.
+      const interval = document.hidden ? POLL_INTERVAL_MS * 4 : POLL_INTERVAL_MS;
+      await new Promise((r) => setTimeout(r, interval));
     }
-    throw new Error("Analysis timed out while waiting for the local engine.");
   }
 
   async function cancelCurrentJob() {
@@ -994,15 +1297,16 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  function setFieldError(inputId, errorId, message) {
+  function setFieldError(inputId, errorId, message, { neutral = false } = {}) {
     const err = $(errorId);
     const input = $(inputId);
     if (err) {
       err.textContent = message || "";
       err.hidden = !message;
+      err.classList.toggle("is-neutral", neutral);
     }
-    if (input) input.classList.toggle("input-invalid", !!message);
-    if (message && input) {
+    if (input) input.classList.toggle("input-invalid", !!message && !neutral);
+    if (message && !neutral && input) {
       input.focus();
       input.setAttribute("aria-invalid", "true");
     } else if (input) {
@@ -1033,15 +1337,19 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       return;
     }
     setFieldError("#code-input", "#code-error", "");
+    // Build the request before the connectivity check so that, when the
+    // hosted page hands off to the local dashboard, the exact analysis the
+    // user asked for travels with the link.
+    const query = {
+      mode: "code",
+      code,
+      filename: $("#filename-input").value || "inline.js",
+    };
+    lastQuery = query;
+    currentScanRequest = query;
     if (!(await ensureBackend())) return;
     showLoading("Analyzing JavaScript…");
     try {
-      const query = {
-        mode: "code",
-        code,
-        filename: $("#filename-input").value || "inline.js",
-      };
-      lastQuery = query;
       const data = await postJSON("/api/analyze", query);
       lastJobId = data.job_id;
       renderProgress(data.job || { percent: 0, message: "Starting…" });
@@ -1069,19 +1377,24 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       return;
     }
     const url = rawUrl;
+    // Build the request before the connectivity check (see analyzeCode):
+    // a hand-off to the local dashboard must carry the exact target settings.
+    const query = {
+      mode: "url",
+      url,
+      profile: $("#profile").value,
+      max_depth: parseInt($("#max-depth").value, 10),
+      max_files: parseInt($("#max-files").value, 10),
+      max_workers: parseInt($("#workers").value, 10),
+      timeout: 30,
+    };
+    lastQuery = query;
+    currentScanRequest = query;
     if (!(await ensureBackend())) return;
-    showLoading("Discovering and scanning JavaScript… this can take a moment.");
+    // Real stage messages take over from this line within ~200ms — the engine
+    // reports recon/discover/download before the first poll lands.
+    showLoading("Starting scan — the engine will report each stage below.");
     try {
-      const query = {
-        mode: "url",
-        url,
-        profile: $("#profile").value,
-        max_depth: parseInt($("#max-depth").value, 10),
-        max_files: parseInt($("#max-files").value, 10),
-        max_workers: parseInt($("#workers").value, 10),
-        timeout: 30,
-      };
-      lastQuery = query;
       const data = await postJSON("/api/analyze", query);
       lastJobId = data.job_id;
       renderProgress(data.job || { percent: 0, message: "Starting…" });
@@ -1184,12 +1497,15 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       setFieldError("#dropzone", "#file-error", "Choose at least one JavaScript file to analyze.");
       return;
     }
-    if (!(await ensureBackend())) return;
-    // Read files locally in the browser; only the text content is sent to the
-    // local engine (same authenticated channel as paste — nothing is uploaded
-    // to a cloud).
+    // Read files locally in the browser BEFORE the connectivity check, so a
+    // hosted-page hand-off can carry the exact files in the transfer link
+    // (they stay in the browser either way — nothing is uploaded to a cloud).
     const payloadFiles = [];
     for (const f of pendingFiles) {
+      if (typeof f.content === "string" && f.content.trim()) {
+        payloadFiles.push({ filename: f.name, code: f.content });
+        continue;
+      }
       if (!f.handle) continue;
       try {
         const text = await f.handle.text();
@@ -1203,10 +1519,12 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       setFieldError("#dropzone", "#file-error", "Could not read the selected files.");
       return;
     }
+    const query = { mode: "code", files: payloadFiles };
+    lastQuery = query;
+    currentScanRequest = query;
+    if (!(await ensureBackend())) return;
     showLoading(`Analyzing ${payloadFiles.length} local file(s)…`);
     try {
-      const query = { mode: "code", files: payloadFiles };
-      lastQuery = query;
       const data = await postJSON("/api/analyze", query);
       lastJobId = data.job_id;
       renderProgress(data.job || { percent: 0, message: "Starting…" });
@@ -1269,7 +1587,28 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     const node = $("#engine-notes");
     if (!node || !payload) return;
     const notes = [];
-    const parser = (payload.meta || {}).ast_parser || {};
+    const meta = payload.meta || {};
+    const parser = meta.ast_parser || {};
+    // An empty URL scan used to look identical to a successful one. Say why
+    // nothing was analyzed instead of showing an empty dashboard.
+    const summary = payload.summary || {};
+    if (meta.analysis_mode === "url" && Number(summary.total_files || 0) === 0) {
+      const scanSummary = meta.scan_summary || {};
+      const page = scanSummary.page || {};
+      if (page.page_fetch === "failed") {
+        notes.push(
+          "<b>Nothing was analyzed — the page could not be downloaded.</b> The site may be unreachable, "
+          + "blocked the engine's request (bot protection), or the URL may be wrong. Check the address "
+          + "and your connection, then scan again.",
+        );
+      } else {
+        notes.push(
+          "<b>No JavaScript was discovered on this page.</b> The page may genuinely have none, or its "
+          + "scripts may be injected at runtime by a loader. The optional runtime pass (headless browser) "
+          + "can catch scripts that only appear after execution.",
+        );
+      }
+    }
     if (parser.available === false) {
       // Say what it *costs*, not just that something is missing: in fallback
       // mode confidence is capped and some flows are never found, so results
@@ -2260,8 +2599,23 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     initParticles();
     initChrome();
     initChartResponsiveness();
-    if (isToolPage()) initTool();
-    checkBackend().then(scheduleEnginePoll);
+    if (isToolPage()) {
+      initTool();
+    } else if (location.hash.startsWith("#scan=") && isLocalPage()) {
+      // A hand-off link landed on a non-tool page. On the engine's own server
+      // the console lives at "/", so carry the fragment over there.
+      location.replace("/" + location.hash);
+      return;
+    }
+    checkBackend().then((ok) => {
+      scheduleEnginePoll();
+      // A transferred scan needs pairing before it can start: open the setup
+      // dialog once, with the token field ready, instead of waiting silently.
+      if (!ok && pendingScanTransfer && !transferPrompted) {
+        transferPrompted = true;
+        openPrivacyModal();
+      }
+    });
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden && !backendConnected) checkBackend();
     });
@@ -2274,6 +2628,16 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     initTabs();
     initViews();
     initUpload();
+
+    // A scan handed off from the hosted page arrives in the #scan= fragment
+    // (the fragment never leaves the browser, so the code/URL stays local).
+    // Consume it once and let it run as soon as the engine is paired.
+    const transfer = parseScanTransfer();
+    if (transfer) {
+      history.replaceState(null, "", location.pathname + location.search);
+      pendingScanTransfer = transfer;
+    }
+    maybeRunPendingTransfer();
 
     // Paste / Upload sub-tab toggle inside the Paste Code pane.
     $$(".inline-tab").forEach((tab) => {
@@ -2307,7 +2671,15 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       btn.addEventListener("click", () => {
         const target = btn.getAttribute("data-copy");
         const node = target ? document.getElementById(target) : null;
-        const code = node ? node.textContent : "";
+        // Copy commands only: shell comments in the sample (e.g. "# downloads
+        // & starts the engine on first run") explain the command in the UI but
+        // should not end up in the terminal.
+        const raw = node ? node.textContent : "";
+        const code = raw
+          .split("\n")
+          .filter((line) => !/^\s*#/.test(line))
+          .join("\n")
+          .trim();
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(code);
         } else {
