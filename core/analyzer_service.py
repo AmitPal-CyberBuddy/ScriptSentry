@@ -23,7 +23,7 @@ from core.source_maps import inspect_source_map
 from core.runtime_evidence import attach_runtime_evidence, capture_runtime_evidence, runtime_evidence_enabled
 from core.pipeline import ProgressModel, stage_plan
 from core.js_parser import clear_parse_cache
-from core.scanner import scan_file
+from core.scanner import ScanCancelled, scan_file
 
 # Compatibility references keep older integrations that patch the two legacy
 # discovery functions working, while normal scans use one cached page fetch.
@@ -40,16 +40,12 @@ REQUEST_HEADERS = {
 }
 
 
-class ScanCancelled(Exception):
-    """Raised internally when a user cancels an in-flight scan."""
-
-
 def _check_cancel(cancel_check):
     if cancel_check and cancel_check():
         raise ScanCancelled("Scan cancelled by user")
 
 
-def _scan_document(path, content, source_url=""):
+def _scan_document(path, content, source_url="", cancel_check=None):
     """Run all analyzers for one document and retain provenance.
 
     Provenance is essential for first/third-party classification and for
@@ -57,7 +53,7 @@ def _scan_document(path, content, source_url=""):
     must never be used as a substitute for the script's actual origin.
     """
     content = content or ""
-    data = scan_file(path, content=content)
+    data = scan_file(path, content=content, cancel_check=cancel_check)
     if data.get("source_map", {}).get("present"):
         try:
             data["source_map"] = inspect_source_map(content, source_url, timeout=10)
@@ -71,7 +67,7 @@ def _scan_document(path, content, source_url=""):
     return data
 
 
-def _merge_into(results, path, content, seen_hashes=None, source_url=""):
+def _merge_into(results, path, content, seen_hashes=None, source_url="", cancel_check=None):
     """Run the full scanner plus crypto extractor for a single JS document.
 
     ``seen_hashes`` lets a URL scan skip duplicate content (mirrored bundles,
@@ -90,7 +86,7 @@ def _merge_into(results, path, content, seen_hashes=None, source_url=""):
         if digest in seen_hashes:
             return False
         seen_hashes.add(digest)
-    data = _scan_document(path, content, source_url=source_url)
+    data = _scan_document(path, content, source_url=source_url, cancel_check=cancel_check)
     results[path] = data
     return True
 
@@ -110,7 +106,7 @@ def analyze_content(code, filename="inline.js", progress_callback=None, cancel_c
 
     notify("analyze", "Analyzing pasted JavaScript", current=0, total=1)
     results = {}
-    _merge_into(results, filename, code)
+    _merge_into(results, filename, code, cancel_check=cancel_check)
     _check_cancel(cancel_check)
     notify("correlate", "Correlating findings", current=1, total=1)
     progress.complete_stage()
@@ -173,7 +169,7 @@ def analyze_files(files, progress_callback=None, cancel_check=None):
             unique = f"{stem}-{n}{ext or '.js'}"
             n += 1
         used_names.add(unique)
-        _merge_into(results, unique, code, seen_hashes=seen_hashes)
+        _merge_into(results, unique, code, seen_hashes=seen_hashes, cancel_check=cancel_check)
         notify("analyze", f"Analyzed {unique} ({index + 1}/{total})",
                current=index + 1, total=total)
     progress.complete_stage()
@@ -194,7 +190,7 @@ def _download_chunk(url, output_dir=None, timeout=20, cancel_check=None):
         return None
     output_dir = output_dir or BEAUTIFY_DIR
     try:
-        response = safe_get(url, timeout=timeout, headers=REQUEST_HEADERS)
+        response = safe_get(url, timeout=timeout, headers=REQUEST_HEADERS, cancel_check=cancel_check)
         if response is None or response.status_code != 200:
             return None
         content = read_response_text(response, max_bytes=int(FILE_RULES.get("max_js_size", 2_000_000)))
@@ -329,6 +325,7 @@ def _walk_imports(
     visited=None,
     progress_callback=None,
     state=None,
+    cancel_check=None,
 ):
     if depth >= max_depth:
         return
@@ -338,6 +335,7 @@ def _walk_imports(
     state = state if state is not None else {}
     skipped = state.setdefault("skipped_files", 0)
     for ref in extract_script_refs(content):
+        _check_cancel(cancel_check)
         if len(results) >= max_files:
             state["skipped_files"] = skipped = skipped + 1
             state.setdefault("skipped_reasons", []).append("scanned_files_limit")
@@ -360,7 +358,7 @@ def _walk_imports(
             state["skipped_files"] = skipped = skipped + 1
             state.setdefault("skipped_reasons", []).append("oversized_script")
             continue
-        if not _merge_into(results, next_path, next_content, seen_hashes=seen_hashes):
+        if not _merge_into(results, next_path, next_content, seen_hashes=seen_hashes, cancel_check=cancel_check):
             state["skipped_files"] = skipped = skipped + 1
             state.setdefault("skipped_reasons", []).append("duplicate_content")
             continue
@@ -384,6 +382,7 @@ def _walk_imports(
             visited=visited,
             progress_callback=progress_callback,
             state=state,
+            cancel_check=cancel_check,
         )
 
 
@@ -455,7 +454,7 @@ def _attach_runtime(results, url, timeout=15, max_files=50, progress_callback=No
         if digest in seen:
             continue
         path = f"runtime://{get_safe_filename(script_url)}"
-        data = _scan_document(path, script_content, source_url=script_url)
+        data = _scan_document(path, script_content, source_url=script_url, cancel_check=cancel_check)
         results[path] = data
         seen.add(digest)
     # The verify stage is the one stage whose outcome is not guaranteed; report
@@ -472,7 +471,7 @@ def _attach_runtime(results, url, timeout=15, max_files=50, progress_callback=No
     return attach_runtime_evidence(results, runtime, target_url=url)
 
 
-def _fetch_target_script(url, timeout=15):
+def _fetch_target_script(url, timeout=15, cancel_check=None):
     """Download one JS document when the *target itself* is a script.
 
     Returns the source text, or None when the URL did not yield JavaScript
@@ -480,8 +479,10 @@ def _fetch_target_script(url, timeout=15):
     back to normal page discovery, so a wrapper page served at a ``.js`` URL
     still works.
     """
+    if cancel_check and cancel_check():
+        return None
     try:
-        response = safe_get(url, timeout=timeout, headers=REQUEST_HEADERS)
+        response = safe_get(url, timeout=timeout, headers=REQUEST_HEADERS, cancel_check=cancel_check)
         if response is None or response.status_code != 200:
             return None
         content = read_response_text(response, max_bytes=int(FILE_RULES.get("max_js_size", 2_000_000)))
@@ -611,12 +612,12 @@ def analyze_url(
     # ``https://example.com/app.js`` reported an empty "no JavaScript found"
     # result: a broken promise for a URL the input field explicitly suggests.
     direct_script = urlparse(url).path.lower().endswith((".js", ".mjs"))
-    direct_script_body = _fetch_target_script(url, timeout=timeout) if direct_script else None
+    direct_script_body = _fetch_target_script(url, timeout=timeout, cancel_check=cancel_check) if direct_script else None
 
     # Keep the two compatibility entry points (older callers patch these),
     # while discovery itself reuses its bounded page fetch cache.
     if extract_js is _DISCOVERY_EXTRACT_JS and extract_inline_scripts is _DISCOVERY_EXTRACT_INLINE:
-        js_links, inline_scripts, page_metadata = extract_page_assets(url, timeout=timeout)
+        js_links, inline_scripts, page_metadata = extract_page_assets(url, timeout=timeout, cancel_check=cancel_check)
     else:
         # Backward-compatible seam for embedders/tests that provide their own
         # page discovery implementation.
@@ -766,7 +767,7 @@ def analyze_url(
                 state["skipped_reasons"].add("duplicate_content")
                 return "duplicate_content"
             seen_hashes.add(digest)
-        data = _scan_document(path, content, source_url=base_url)
+        data = _scan_document(path, content, source_url=base_url, cancel_check=cancel_check)
         with lock:
             results[path] = data
             state["path_to_url"][path] = base_url

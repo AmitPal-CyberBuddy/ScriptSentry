@@ -10,6 +10,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import socket
+import threading
 from typing import Iterable, Optional
 from urllib.parse import urljoin, urlparse
 
@@ -167,7 +168,7 @@ def _validate_and_pin(url: str):
     return True, "", tuple(addresses)
 
 
-def safe_get(url: str, *, timeout=15, headers=None, max_redirects=MAX_REDIRECTS, **kwargs):
+def safe_get(url: str, *, timeout=15, headers=None, max_redirects=MAX_REDIRECTS, cancel_check=None, **kwargs):
     """GET a public URL without following an unsafe redirect.
 
     The returned object is a normal ``requests.Response``.  Callers decide how
@@ -176,13 +177,36 @@ def safe_get(url: str, *, timeout=15, headers=None, max_redirects=MAX_REDIRECTS,
     Each hop is validated and resolved *once*; the request is pinned to the
     validated IP so the destination cannot change between the check and the
     connection (DNS rebinding).
+
+    ``cancel_check`` (a zero-argument callable returning a truthy value once
+    the scan is cancelled) makes the request abortable: a quiet watcher thread
+    closes the underlying session the moment cancellation is signalled, so a
+    slow page or a stalled download stops waiting instead of holding the cancel
+    button hostage until ``timeout`` expires.
     """
     if requests is None:
         return None
     current = str(url)
     session = requests.Session()
+    stop_watch = threading.Event()
+
+    def _watch():
+        while not stop_watch.wait(0.1):
+            if cancel_check and cancel_check():
+                try:
+                    session.close()
+                except Exception:
+                    pass
+                return
+
+    watcher = None
+    if cancel_check:
+        watcher = threading.Thread(target=_watch, name="scriptsentry-cancel-watch", daemon=True)
+        watcher.start()
     try:
         for _ in range(max(0, int(max_redirects)) + 1):
+            if cancel_check and cancel_check():
+                raise ValueError("Request cancelled")
             valid, reason, pinned_ips = _validate_and_pin(current)
             if not valid:
                 raise ValueError(reason)
@@ -216,6 +240,7 @@ def safe_get(url: str, *, timeout=15, headers=None, max_redirects=MAX_REDIRECTS,
                 continue
             return response
     finally:
+        stop_watch.set()
         session.close()
     raise ValueError("Too many redirects")
 

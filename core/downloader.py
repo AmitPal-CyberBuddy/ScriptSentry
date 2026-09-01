@@ -47,7 +47,7 @@ def download_file(url, output_dir=None, timeout=15, cancel_check=None):
         if cancel_check and cancel_check():
             return None
         try:
-            response = safe_get(url, timeout=timeout, headers=REQUEST_HEADERS)
+            response = safe_get(url, timeout=timeout, headers=REQUEST_HEADERS, cancel_check=cancel_check)
             if response is None or response.status_code != 200:
                 continue
             content = _response_text(response, max_size)

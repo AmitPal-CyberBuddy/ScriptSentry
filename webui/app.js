@@ -34,6 +34,23 @@
   let currentScanRequest = null;
   let pendingScanTransfer = null;
   let transferPrompted = false;
+  // Progress-display state shared by the poll loop and the client-side
+  // ticker. The engine only advances `elapsed_ms` / `since_update_ms` when it
+  // emits an event, so a long quiet stage (one big bundle being parsed) would
+  // otherwise show a frozen clock — the exact "is it stuck?" moment. The
+  // ticker extrapolates those two timestamps between polls so the clock and
+  // the "last update … ago" readout keep moving even while the engine is
+  // silent, and it stops the moment the engine re-reports.
+  let lastJobSnapshot = null;
+  let lastRenderAt = 0;
+  let progressTicker = null;
+  // Optimistic cancellation: set the instant the user clicks Cancel, before
+  // (and regardless of) the engine acknowledging it, so the UI flips to
+  // "Canceling…" immediately instead of waiting for the next poll.
+  let cancelRequested = false;
+  let cancelRequestedAt = 0;
+  // The scan's recent events, in order, for the activity log.
+  let activityLog = [];
 
   /* API base: same origin locally, or a hosted Python backend on Pages. */
   function apiBase() {
@@ -966,30 +983,114 @@
     }).join("");
   }
 
+  // Record one engine message in the activity log. Consecutive duplicates are
+  // merged (with a refreshed timestamp) so a scan re-reporting "Normalizing
+  // 1/2 … 2/2" reads as movement, while a stuck stage shows only its last
+  // concrete announcement instead of a wall of identical lines.
+  function recordActivity(job) {
+    const message = String((job && job.message) || "").trim();
+    if (!message) return;
+    const last = activityLog[activityLog.length - 1];
+    if (last && last.message === message) {
+      last.at = Date.now();
+      return;
+    }
+    activityLog.push({ message, at: Date.now() });
+    if (activityLog.length > 8) activityLog.shift();
+  }
+
+  function renderActivity(job) {
+    const host = $("#progress-activity");
+    if (!host) return;
+    if (!activityLog.length) {
+      host.hidden = true;
+      host.innerHTML = "";
+      return;
+    }
+    // The engine reports `started_at` as an epoch (seconds); accept an ISO
+    // string too, and fall back to "now − elapsed" so the relative timestamps
+    // are always anchored to the real scan start.
+    let startAt = 0;
+    if (typeof job.started_at === "number") {
+      startAt = job.started_at * 1000;
+    } else if (job.started_at) {
+      startAt = Date.parse(job.started_at);
+    }
+    if (!startAt) startAt = Date.now() - Number(job.elapsed_ms || 0);
+    host.hidden = false;
+    host.innerHTML = activityLog.map((entry, i) => {
+      const rel = Math.max(0, entry.at - startAt);
+      const latest = i === activityLog.length - 1;
+      return `<span class="activity-line${latest ? " is-latest" : ""}">`
+        + `<span class="activity-time">+${formatDuration(rel)}</span> ${escapeHtml(entry.message)}</span>`;
+    }).join("");
+    // Keep the newest line in view.
+    host.scrollTop = host.scrollHeight;
+  }
+
+  // The poll loop owns the snapshot; the ticker only extrapolates the two
+  // wall-clock fields (elapsed / last-update) between polls. That way the
+  // engine remains the source of truth and the clock never freezes during a
+  // quiet stage.
   function renderProgress(job) {
-    const text = $("loading-text");
+    lastJobSnapshot = job;
+    lastRenderAt = performance.now();
+    recordActivity(job);
+    drawProgress(job);
+  }
+
+  function tickProgress() {
+    if (!lastJobSnapshot) return;
+    const dt = Math.max(0, performance.now() - lastRenderAt);
+    drawProgress({
+      ...lastJobSnapshot,
+      elapsed_ms: Number(lastJobSnapshot.elapsed_ms || 0) + dt,
+      since_update_ms: Number(lastJobSnapshot.since_update_ms || 0) + dt,
+    });
+  }
+
+  function drawProgress(job) {
+    const text = $("#loading-text");
     const fill = $("#progress-fill");
     const stats = $("#progress-stats");
     if (!text || !fill || !stats) return;
     const pct = Math.max(0, Math.min(100, Number(job.percent || 0)));
-    text.textContent = job.message || (job.phase || "Working…");
+
+    // A cancel is the user's own action. The instant it is requested (locally
+    // or by the engine) the headline switches to "Canceling…" and stays there,
+    // overriding late scan messages, until the poll loop receives the terminal
+    // "canceled" status and hides the panel.
+    const running = job.status === "running" || job.status === "queued";
+    const canceling = (cancelRequested || job.canceling) && running;
+    const panel = $("#loading");
+    const cancelBtn = $("#cancel-scan");
+    if (panel) panel.classList.toggle("is-canceling", canceling);
+    if (cancelBtn) cancelBtn.disabled = canceling;
+    if (canceling) {
+      text.textContent = "Canceling scan — stopping the current work…";
+    } else {
+      text.textContent = job.message || (job.phase || "Working…");
+    }
     fill.style.width = `${pct}%`;
     renderStages(job);
+    renderActivity(job);
 
     // How long since the engine last reported?  A quiet stretch usually means
     // one big bundle is being parsed or beautified — normal work that simply
     // produces no events — while a *failed* poll means the engine is gone.
     // Show the age so "still working" and "lost contact" are distinguishable
     // at a glance instead of both looking like an endless spinner.
-    const running = job.status === "running" || job.status === "queued";
     const quietMs = running ? Math.max(0, Number(job.since_update_ms || 0)) : 0;
-    const quiet = quietMs >= QUIET_HINT_MS;
-    const panel = $("#loading");
+    const quiet = !canceling && quietMs >= QUIET_HINT_MS;
     if (panel) panel.classList.toggle("is-quiet", quiet);
 
     const hint = $("#progress-hint");
     if (hint) {
-      if (quiet && quietMs < QUIET_LOUD_MS) {
+      if (canceling) {
+        const since = Date.now() - (cancelRequestedAt || Date.now());
+        hint.textContent = `Waiting for the engine to stop (${formatDuration(since)}). A large bundle may need a few seconds to wind down.`;
+        hint.hidden = false;
+      } else if (quiet && quietMs < QUIET_LOUD_MS) {
         hint.textContent = `No new updates for ${formatDuration(quietMs)} — large bundles can stay quiet for a while during one stage. Elapsed ${formatDuration(job.elapsed_ms)}.`;
         hint.hidden = false;
       } else if (quiet) {
@@ -1016,7 +1117,7 @@
       ? (quietMs >= 5000 ? `${formatDuration(quietMs)} ago` : "just now")
       : "—";
     stats.innerHTML = [
-      ["stage", job.stage || job.phase || "queued"],
+      ["stage", canceling ? "canceling" : (job.stage || job.phase || "queued")],
       ["files", files],
       ["bytes", formatBytes(job.bytes_scanned)],
       ["pct", `${pct.toFixed(0)}%`],
@@ -1031,20 +1132,55 @@
     if (panel) {
       panel.classList.add("show");
       panel.classList.remove("is-quiet");
+      panel.classList.remove("is-canceling");
     }
+    // New scan: reset the previous run's cancellation and activity state.
+    cancelRequested = false;
+    cancelRequestedAt = 0;
+    lastJobSnapshot = null;
+    lastRenderAt = 0;
+    activityLog = [];
+    const cancelBtn = $("#cancel-scan");
+    if (cancelBtn) cancelBtn.disabled = false;
     $("#loading-text").textContent = text || "Analyzing…";
     $("#analyze-code").disabled = true;
     $("#analyze-url").disabled = true;
+    const activity = $("#progress-activity");
+    if (activity) {
+      activity.hidden = true;
+      activity.innerHTML = "";
+    }
+    const stages = $("#progress-stages");
+    if (stages) {
+      stages.hidden = true;
+      stages.innerHTML = "";
+    }
+    // Client-side clock: keeps "elapsed" and "last update … ago" moving while
+    // the engine is quietly parsing one big bundle (it only advances those
+    // fields when it emits an event).
+    if (progressTicker) clearInterval(progressTicker);
+    progressTicker = setInterval(tickProgress, 250);
   }
 
   function hideLoading() {
+    if (progressTicker) {
+      clearInterval(progressTicker);
+      progressTicker = null;
+    }
+    lastJobSnapshot = null;
+    lastRenderAt = 0;
+    cancelRequested = false;
+    cancelRequestedAt = 0;
     const panel = $("#loading");
     if (panel) {
       panel.classList.remove("show");
       panel.classList.remove("is-quiet");
+      panel.classList.remove("is-canceling");
     }
     $("#analyze-code").disabled = false;
     $("#analyze-url").disabled = false;
+    const cancelBtn = $("#cancel-scan");
+    if (cancelBtn) cancelBtn.disabled = false;
     const fill = $("#progress-fill");
     const stats = $("#progress-stats");
     const hint = $("#progress-hint");
@@ -1279,10 +1415,20 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
   async function cancelCurrentJob() {
     if (!lastJobId) return;
+    // Optimistic: flip to "Canceling…" immediately (before the engine replies)
+    // so the button feels alive even if the next poll is a half-second away.
+    // The engine sets job.canceling on the next status snapshot; renderProgress
+    // keeps the "Canceling…" headline from then on and disables the button.
+    cancelRequested = true;
+    cancelRequestedAt = Date.now();
+    if (lastJobSnapshot) drawProgress(lastJobSnapshot);
     try {
       await postJSON("/api/cancel", { job_id: lastJobId });
-      $("#loading-text").textContent = "Canceling scan…";
     } catch (err) {
+      // The engine may have already finished (or never existed); the poll loop
+      // still owns the terminal state. Undo the optimistic flag so a transient
+      // failure doesn't leave the panel stuck on "Canceling…".
+      cancelRequested = false;
       showConnectionError(err);
     }
   }
@@ -1727,6 +1873,17 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     }).join("");
   }
 
+  // The engine is not consistent about the shape of a finding's `evidence`:
+  // coarse risk signals carry an array of strings, while source-to-sink
+  // findings carry a single string. Normalise before joining so a string never
+  // reaches `.join()` (which would throw and abort the whole dashboard render).
+  function evidenceList(evidence) {
+    if (Array.isArray(evidence)) return evidence.map((x) => String(x == null ? "" : x));
+    if (evidence == null) return [];
+    if (typeof evidence === "string") return evidence.trim() ? [evidence] : [];
+    return [String(evidence)];
+  }
+
   function renderSignals() {
     // Observations = interesting behavior that is not a proven vulnerability:
     // coarse risk signals plus informational/sanitized findings. This keeps
@@ -1742,7 +1899,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       return `<li style="animation-delay:${i * 0.04}s">
         <span class="risk-dot" style="color:${isFlow ? "#fb7185" : color}"></span>
         <span><b>${escapeHtml(s.title || s.id)}</b> · ${escapeHtml(s.file || "")}<br>
-        <span style="color:#8ea2c1">${escapeHtml((s.evidence || []).slice(0, 2).join(" · "))}</span>
+        <span style="color:#8ea2c1">${escapeHtml(evidenceList(s.evidence).slice(0, 2).join(" · "))}</span>
         <span class="quality-chip">${escapeHtml(s.confidence || "low")} confidence</span></span>
       </li>`;
     });
@@ -1872,7 +2029,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       ["Storage & Cookies", detail(evidence.storage_writes).concat(detail(evidence.storage_reads)).concat((evidence.cookie_names || []).map((n) => `cookie: ${n}`)).concat((evidence.local_storage_keys || []).map((n) => `localStorage key: ${n}`)).concat((evidence.session_storage_keys || []).map((n) => `sessionStorage key: ${n}`)).slice(0, 30), "#8b5cf6"],
       ["Messages", detail([...(evidence.post_messages || []), ...(evidence.message_listeners || [])]).slice(0, 20), "#c084fc"],
       ["Dynamic Scripts / Frames", detail([...(evidence.scripts || []), ...(evidence.frames || [])]).slice(0, 30), "#60a5fa"],
-      ["Runtime Findings", findings.map((f) => `${f.severity || "MEDIUM"} · ${f.type || f.id} · ${(f.evidence || []).join(" · ")}`).slice(0, 20), "#ff4d6d"],
+      ["Runtime Findings", findings.map((f) => `${f.severity || "MEDIUM"} · ${f.type || f.id} · ${evidenceList(f.evidence).join(" · ")}`).slice(0, 20), "#ff4d6d"],
     ].filter(([, v]) => v && v.length);
 
     panel.innerHTML = `
