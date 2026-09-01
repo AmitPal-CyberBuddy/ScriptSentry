@@ -467,7 +467,7 @@
             <ol class="setup-steps">
               <li><b>Download</b> the launcher above (or copy it straight from GitHub).</li>
               <li><b>Run it:</b> <code>python3 scriptsentry.py --port 8000</code> — the first run downloads the engine.</li>
-              <li><b>Paste the pairing token</b> it prints into the field below.</li>
+              <li><b>Open the dashboard it prints</b> — <code>http://127.0.0.1:8000</code>. The engine serves the same UI, already paired.</li>
             </ol>
             <div class="code-box">
               <pre id="setup-code-easy-modal"># downloads &amp; starts the engine on first run
@@ -482,7 +482,7 @@ python3 scriptsentry.py --port 8000</pre>
               <li><b>Open a terminal</b> inside the project folder.</li>
               <li><b>Install deps:</b> <code>pip install -r requirements.txt</code></li>
               <li><b>Start the server:</b> <code>python3 server.py --port 8000</code></li>
-              <li><b>Keep this page open</b> and press <em>Retry Connection</em>.</li>
+              <li><b>Open <code>http://127.0.0.1:8000</code></b> — the engine serves this same dashboard, already paired.</li>
             </ol>
             <div class="code-box">
               <pre id="setup-code-clone-modal">git clone https://github.com/AmitPal-CyberBuddy/ScriptSentry.git
@@ -498,14 +498,16 @@ python3 server.py --port 8000</pre>
             permission to test. You are responsible for lawful use.
           </p>
           <p class="modal-note">
-            ⚠️ If you change the port, update <code>webui/config.js</code> to the same port.
-            The engine prints a pairing token at startup; it stays in this tab only.
+            ⚠️ Browsers block this <code>https://</code> page from calling <code>http://127.0.0.1</code>
+            (mixed content), so work in the dashboard the engine serves at
+            <code>http://127.0.0.1:8000</code>. The pairing token below only applies when this page is
+            itself served over <code>http://localhost</code>.
           </p>
         </div>
 
         <div class="modal-col modal-col-aside">
           <h3 class="aside-title">Pair the engine</h3>
-          <p class="modal-note" style="margin:0 0 10px">
+          <p class="modal-note js-pairing-copy" style="margin:0 0 10px">
             The token is printed in your terminal when the engine starts. It is kept in this
             browser tab only — never in the URL, never in a report.
           </p>

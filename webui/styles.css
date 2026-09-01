@@ -3767,3 +3767,24 @@ main[id] {
     padding: 4px 0;
   }
 }
+
+/* ---------------- Hosted → local dashboard handoff ---------------- */
+
+/* Shown in the setup dialog when the page is on HTTPS (GitHub Pages) and the
+   engine is plain-HTTP loopback: the browser blocks that call outright, so the
+   pairing field is replaced by a link to the dashboard the engine serves. */
+.handoff-note {
+  margin-top: 4px;
+}
+
+.handoff-note code {
+  word-break: break-all;
+}
+
+.handoff-note .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  text-decoration: none;
+}
