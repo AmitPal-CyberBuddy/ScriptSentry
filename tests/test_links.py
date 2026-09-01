@@ -192,6 +192,57 @@ class RelativeDepthTest(unittest.TestCase):
                 )
 
 
+class SiteRootTest(unittest.TestCase):
+    """The site root must be a real page, not a 404.
+
+    GitHub Pages serves webui/ at https://<user>.github.io/ScriptSentry/, and
+    there was no index.html there -- so the project's own headline URL, the
+    one that gets shared and indexed, returned the 404 page. The three real
+    pages live one directory deep (home/, tool/, changelog/), which is why
+    nothing at the root was noticed.
+
+    server.py routes "/" to the console itself, so this file only affects the
+    hosted site.
+    """
+
+    ROOT = os.path.join(WEBUI, "index.html")
+
+    def test_root_index_exists(self):
+        self.assertTrue(
+            os.path.isfile(self.ROOT),
+            "webui/index.html is missing: the Pages site root would 404.",
+        )
+
+    def test_root_redirects_to_a_real_page(self):
+        with open(self.ROOT, encoding="utf-8") as fh:
+            src = fh.read()
+        # Both paths matter: JS for speed, meta refresh for no-JS visitors.
+        self.assertIn('http-equiv="refresh"', src)
+        self.assertIn("location.replace", src)
+        for target in ("home/", "tool/", "changelog/"):
+            self.assertTrue(
+                os.path.isfile(os.path.join(WEBUI, target, "index.html")),
+                f"root page links to {target}, which does not exist.",
+            )
+
+    def test_root_links_are_relative_to_the_root(self):
+        """The root sits above the page directories, so no ../ and no /prefix."""
+        with open(self.ROOT, encoding="utf-8") as fh:
+            src = fh.read()
+        for href in re.findall(r'href="([^"]+)"', src):
+            if href.startswith(("http", "#")):
+                continue
+            self.assertFalse(
+                href.startswith("../"),
+                f"{href}: the site root has no parent to climb to.",
+            )
+            self.assertFalse(
+                href.startswith("/"),
+                f"{href}: an absolute path breaks under the /ScriptSentry/ "
+                "project prefix.",
+            )
+
+
 class NotFoundPageTest(unittest.TestCase):
     """The 404 page must be able to rescue a visitor from *any* address.
 
