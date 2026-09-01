@@ -50,6 +50,10 @@ class Job:
         # the age to tell "working quietly on a big bundle" apart from
         # "contact with the engine was lost".
         self.last_update_ts = None
+        # Wall-clock time the user requested cancellation (None until then).
+        # The UI uses this to show "Canceling…" immediately and measure how
+        # long the worker has taken to wind down, instead of looking stuck.
+        self.cancel_requested_at = None
         self._lock = threading.Lock()
         self.cancel_event = threading.Event()
         # ETA state: a bounded window of (timestamp, fraction) samples plus an
@@ -123,13 +127,24 @@ class Job:
         ), 2)
 
     def update(self, **kwargs):
-        if self.cancel_event.is_set():
-            return
         with self._lock:
             now = time.time()
             if self.started_at is not None:
                 self.elapsed_ms = int((now - self.started_at) * 1000)
             self.last_update_ts = now
+
+            # While a cancel is winding down, keep refreshing the heartbeat and
+            # counters (the worker is still alive), but do not let a late
+            # progress event overwrite the "Canceling…" state the user just
+            # asked for.
+            if self.cancel_event.is_set():
+                for key in ("current", "total", "files_scanned", "bytes_scanned",
+                            "total_bytes", "skipped_files", "stage", "stages"):
+                    if key in kwargs:
+                        setattr(self, key, kwargs[key])
+                if kwargs.get("percent") is not None:
+                    self.percent = max(0.0, min(100.0, float(kwargs["percent"])))
+                return
 
             for key in ("phase", "message", "current", "total", "files_scanned",
                         "bytes_scanned", "total_bytes", "skipped_files", "percent",
@@ -215,15 +230,23 @@ class Job:
             self.eta_confidence = 0.0
 
     def cancel(self):
-        """Request cooperative cancellation; active network calls finish at timeout."""
+        """Request cooperative cancellation; in-flight work stops at the next check.
+
+        The worker observes ``cancel_event`` between downloads, between files
+        and inside each file's analysis passes (see ``core.scanner``), so the
+        scan winds down promptly.  Network calls are aborted by the
+        ``safe_get`` watcher the moment the flag flips.
+        """
         self.cancel_event.set()
         with self._lock:
+            self.cancel_requested_at = time.time()
             if self.status == "queued":
                 self.status = "canceled"
                 self.phase = "canceled"
                 self.message = "Canceled"
                 self.finished_at = time.time()
             elif self.status == "running":
+                self.phase = "canceling"
                 self.message = "Canceling…"
 
     def snapshot(self, include_result=False):
@@ -253,6 +276,8 @@ class Job:
                 "stage": self.stage,
                 "stages": self.stages,
                 "since_update_ms": since_update_ms,
+                "canceling": self.cancel_event.is_set() and self.status not in ("canceled", "done", "error"),
+                "cancel_requested_at": self.cancel_requested_at,
                 "error": self.error,
                 "created_at": self.created_at,
                 "started_at": self.started_at,

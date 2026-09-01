@@ -18,10 +18,10 @@ from core.url_policy import MAX_PAGE_BYTES, safe_get, read_response_text
 
 
 
-def fetch_url(url, timeout=15):
+def fetch_url(url, timeout=15, cancel_check=None):
     """Fetch one public page, bounded to avoid retaining an unbounded body."""
     try:
-        response = safe_get(url, timeout=timeout, headers=REQUEST_HEADERS)
+        response = safe_get(url, timeout=timeout, headers=REQUEST_HEADERS, cancel_check=cancel_check)
         if response is not None and response.status_code == 200:
             return read_response_text(response, max_bytes=MAX_PAGE_BYTES) or ""
     except Exception:
@@ -82,9 +82,9 @@ def _extract_assets(html, url):
     return sorted(js_files), inline_scripts
 
 
-def extract_page_assets(url, timeout=15):
+def extract_page_assets(url, timeout=15, cancel_check=None):
     """Return ``(external_scripts, inline_scripts, page metadata)`` in one fetch."""
-    html = fetch_url(url, timeout=timeout)
+    html = fetch_url(url, timeout=timeout, cancel_check=cancel_check)
     if not html:
         return [], [], {"page_fetch": "failed", "page_bytes": 0}
     scripts, inline = _extract_assets(html, url)

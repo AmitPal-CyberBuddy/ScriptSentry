@@ -16,6 +16,21 @@ from core.taint import analyze_taint
 from core.source_maps import source_map_reference
 
 
+class ScanCancelled(Exception):
+    """Raised inside an analysis pass when the user cancels the scan.
+
+    A single 2 MB minified bundle can take many seconds to analyze, so the
+    cancel flag is checked *between* analysis passes as well as between files.
+    Without that, the cancel button appears dead while one worker chews through
+    one big file.
+    """
+
+
+def _raise_if_cancelled(cancel_check):
+    if cancel_check and cancel_check():
+        raise ScanCancelled("Scan cancelled by user")
+
+
 # Keys that are *designed* to ship inside a browser bundle.  They identify a
 # project rather than authenticate it (they are restricted by referrer/domain),
 # so reporting them as HIGH hardcoded secrets is a guaranteed false positive.
@@ -120,7 +135,7 @@ def _credible_secret(candidate):
     return len(value) >= 10 and _shannon_entropy(value) >= 3.2 and classes >= 2
 
 
-def _run_additional_analyzers(content, results):
+def _run_additional_analyzers(content, results, cancel_check=None):
     analyzers = [
         ("secret_analyzer", "secret_analysis"),
         ("crypto_analyzer", "crypto_analysis"),
@@ -135,6 +150,7 @@ def _run_additional_analyzers(content, results):
     ]
 
     for module_name, result_key in analyzers:
+        _raise_if_cancelled(cancel_check)
         try:
             module = importlib.import_module(f"analyzers.{module_name}")
             payload = module.analyze(content, previous=results)
@@ -149,7 +165,7 @@ def _run_additional_analyzers(content, results):
             results[result_key] = [] if result_key != "obfuscation_analysis" else {}
 
 
-def scan_file(file_path, content=None):
+def scan_file(file_path, content=None, cancel_check=None):
     results = {
         "secrets": [],
         "credible_secrets": [],
@@ -197,6 +213,7 @@ def scan_file(file_path, content=None):
         except Exception:
             return results
 
+    _raise_if_cancelled(cancel_check)
     content = content or ""
     source_map = source_map_reference(content)
     if source_map:
@@ -232,6 +249,10 @@ def scan_file(file_path, content=None):
 
     raw_secrets = []
     for pattern in secret_patterns:
+        # A regex over a 2 MB minified bundle is fast, but a dozen of them in
+        # a row is not free; check the flag every pass so cancel interrupts a
+        # single huge file, not only the gaps between files.
+        _raise_if_cancelled(cancel_check)
         raw_secrets.extend(re.findall(pattern, content, re.I))
 
     # Deduplicate on the *assigned value* rather than the matched text: three
@@ -292,6 +313,7 @@ def scan_file(file_path, content=None):
     # =========================================
     # 🔐 DEOBFUSCATION / DECODED VALUES
     # =========================================
+    _raise_if_cancelled(cancel_check)
     results["decoded_strings"] = decode_candidate_strings(content)
     results["decoded_strings"] += extract_hidden_values(content)
     results["decoded_strings"] = list(dict.fromkeys(results["decoded_strings"]))[:30]
@@ -450,6 +472,7 @@ def scan_file(file_path, content=None):
     # =========================================
     # 🧠 AST INTELLIGENCE
     # =========================================
+    _raise_if_cancelled(cancel_check)
     try:
         results["ast_analysis"] = analyze_ast(content, filename=results.get("loc_id", "inline.js"))
     except Exception as exc:
@@ -538,11 +561,13 @@ def scan_file(file_path, content=None):
             dependency_scan.append({"name": name, "kind": kind, "source": marker, "evidence": "bundle alias"})
     results["dependency_scan"] = dependency_scan[:40]
 
-    _run_additional_analyzers(content, results)
+    _raise_if_cancelled(cancel_check)
+    _run_additional_analyzers(content, results, cancel_check=cancel_check)
 
     # =========================================
     # 📊 SCORING SYSTEM (EXTENDED)
     # =========================================
+    _raise_if_cancelled(cancel_check)
     score = 0
     if results.get("credible_secrets"):
         score += 3
@@ -653,6 +678,7 @@ def scan_file(file_path, content=None):
     # =========================================
     # 🔁 SOURCE→SINK DATA FLOWS & FRAMEWORK RULES
     # =========================================
+    _raise_if_cancelled(cancel_check)
     filename = results.get("loc_id", "inline.js")
     try:
         results["dataflows"] = analyze_taint(content, filename=filename)
@@ -666,6 +692,7 @@ def scan_file(file_path, content=None):
     # =========================================
     # 🎯 ATTACK SURFACE
     # =========================================
+    _raise_if_cancelled(cancel_check)
     try:
         results["attack_surface"] = extract_attack_surface(content, filename=filename)
     except Exception:
@@ -674,6 +701,7 @@ def scan_file(file_path, content=None):
     # Unify findings (taint > framework > coarse risk signals) for UI/reports.
     # Correlation is centralised in core.analysis_model so every consumer receives
     # the same evidence-based, de-duplicated view.
+    _raise_if_cancelled(cancel_check)
     results["findings"] = correlate_findings(
         results["dataflows"],
         results["framework_findings"],
@@ -686,7 +714,7 @@ def scan_file(file_path, content=None):
     return results
 
 
-def scan_content(content, filename="inline.js"):
+def scan_content(content, filename="inline.js", cancel_check=None):
     """Analyze JavaScript that did not necessarily come from a file on disk."""
     if isinstance(content, bytes):
         content = content.decode("utf-8", errors="ignore")
@@ -706,7 +734,7 @@ def scan_content(content, filename="inline.js"):
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)
-        return scan_file(tmp_path)
+        return scan_file(tmp_path, cancel_check=cancel_check)
     finally:
         try:
             os.unlink(tmp_path)

@@ -964,6 +964,55 @@ select {
   animation-duration: 1.6s;
 }
 
+/* Recent-activity log: the scan's own words in order, each with a relative
+   timestamp. When one big bundle keeps the engine quiet for a while, the last
+   line still shows the most recent concrete thing it was doing — the stage
+   strip says "Analyze", the activity line says *which file it announced
+   before going quiet*. */
+.progress-activity {
+  display: block;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #64748b;
+  max-height: 88px;
+  overflow-y: auto;
+  border-left: 2px solid rgba(34, 211, 238, 0.18);
+  padding-left: 8px;
+  margin-top: 2px;
+}
+
+.progress-activity[hidden] {
+  display: none;
+}
+
+.progress-activity .activity-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.progress-activity .activity-line.is-latest {
+  color: #a5f3fc;
+}
+
+.progress-activity .activity-time {
+  color: #22d3ee;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Cancellation requested: the engine is winding down cooperatively. Amber
+   spinner (same as "quiet") communicates "settling", distinct from both the
+   active cyan spinner and the error red. */
+.loading.is-canceling .spinner {
+  border-top-color: #fbbf24;
+  animation-duration: 1.2s;
+}
+
+.cancel-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* A scan carried over from the hosted page (via the #scan= hand-off link):
    confirms that the request was received and is starting automatically. */
 .transfer-note {
