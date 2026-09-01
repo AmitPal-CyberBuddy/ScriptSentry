@@ -48,8 +48,8 @@ PAGE_DESCRIPTION = (
 # so the pill is dropped and "Setup" joins the navigation instead. Keeping a
 # single header button (Go to tool) also stops the actions crowding at 320px.
 PILL_RE = re.compile(r'\s*<button class="engine-pill".*?</button>', re.S)
-SETUP_NAV_LINK = '\n        <a href="home/#setup">Setup</a>'
-CONNECT_NAV_LINK = '<a href="home/#connect">Connect</a>'
+SETUP_NAV_LINK = '\n        <a href="../home/#setup">Setup</a>'
+CONNECT_NAV_LINK = '<a href="../home/#connect">Connect</a>'
 
 
 # --------------------------------------------------------------------------
@@ -220,9 +220,12 @@ def relink(chrome: str) -> str:
     """Point landing-page anchors at the page they actually live on."""
     # In-page anchors ("#features") belong to the overview page, not here.
     # The overview lives at the clean URL /home/ on the hosted site.
-    chrome = re.sub(r'href="#(?!top")([^"]+)"', r'href="home/#\1"', chrome)
+    # Every generated page sits one directory deep (webui/changelog/), so
+    # sibling links must be parent-relative. Emitting "home/" here produced
+    # /changelog/home/ and 404'd every nav item on this page.
+    chrome = re.sub(r'href="#(?!top")([^"]+)"', r'href="../home/#\1"', chrome)
     # The brand mark is "back to the top" on the landing page; here it is home.
-    chrome = chrome.replace('href="#top"', 'href="home/"')
+    chrome = chrome.replace('href="#top"', 'href="../home/"')
     return chrome
 
 
@@ -252,7 +255,7 @@ def adapt_footer(footer: str) -> str:
                 + match.group(1)
             )
     footer = footer.replace(
-        '<a href="changelog/">', '<a href="changelog/" aria-current="page">'
+        '<a href="../changelog/">', '<a href="../changelog/" aria-current="page">'
     )
     return footer
 
@@ -289,7 +292,7 @@ def adapt_head(head: str) -> str:
     if 'rel="canonical"' not in head:
         head = head.replace(
             '  <link rel="stylesheet" href="../styles.css" />',
-            '  <link rel="canonical" href="changelog/" />\n'
+            '  <link rel="canonical" href="../changelog/" />\n'
             '  <link rel="stylesheet" href="../styles.css" />',
         )
     return head
@@ -341,8 +344,8 @@ def build() -> str:
     </div>
 
     <p class="changelog-back">
-      <a href="home/">← Back to the overview</a> ·
-      <a href="tool/">Open the analyzer →</a>
+      <a href="../home/">← Back to the overview</a> ·
+      <a href="../tool/">Open the analyzer →</a>
     </p>
   </main>
 

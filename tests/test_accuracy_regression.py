@@ -171,5 +171,74 @@ class AccuracyContractTest(unittest.TestCase):
                 self.assertNotEqual(f.get("status"), "confirmed")
 
 
+@requires_ast_parser
+class StringTransformTaintTest(unittest.TestCase):
+    """Reshaping a string does not clean it.
+
+    `location.hash.substring(1)` is how a fragment is almost always read --
+    you strip the leading '#'. Treating that call as untracked meant the
+    textbook DOM-XSS flow was reported at 'medium' confidence, and once a
+    second flow existed in the same file it disappeared from the results
+    altogether. These cases pin the taint to the source through common
+    string methods, and pin the restraint that keeps them from firing on
+    ordinary string handling.
+    """
+
+    def _ids(self, code):
+        return {(f.get("id"), f.get("confidence")) for f in analyze_taint(code)}
+
+    def test_substring_preserves_source_and_confidence(self):
+        for expr in (
+            "location.hash.substring(1)",
+            "location.hash.slice(1)",
+            "location.search.substr(1)",
+            "location.hash.substring(1).toLowerCase()",
+            "location.search.split('=')[1]",
+        ):
+            with self.subTest(expr=expr):
+                found = self._ids(
+                    f"var q = {expr};\ndocument.body.innerHTML = q;")
+                self.assertIn(
+                    ("dom_injection", "high"), found,
+                    f"{expr} must stay a high-confidence source-to-sink flow",
+                )
+
+    def test_document_url_is_a_source(self):
+        self.assertIn(
+            ("dom_injection", "high"),
+            self._ids("var q = document.URL;\ndocument.body.innerHTML = q;"),
+        )
+
+    def test_transforms_do_not_invent_sources(self):
+        """Restraint: a transform on untainted data stays untainted."""
+        for code in (
+            'var q = "hello".substring(1);\ndocument.body.innerHTML = q;',
+            "var v = config.name.trim();\ndocument.body.innerHTML = v;",
+            "var n = (5).toString();\ndocument.body.innerHTML = n;",
+        ):
+            with self.subTest(code=code):
+                self.assertEqual(set(), self._ids(code))
+
+    def test_sanitizer_still_downgrades_a_transformed_source(self):
+        findings = analyze_taint(
+            "var q = DOMPurify.sanitize(location.hash.substring(1));"
+            "\ndocument.body.innerHTML = q;")
+        self.assertTrue(findings)
+        for f in findings:
+            self.assertTrue(f.get("sanitization_detected"))
+            self.assertEqual(f.get("confidence"), "low")
+
+    def test_a_second_flow_does_not_hide_the_first(self):
+        """Two independent flows in one file must both be reported."""
+        code = (
+            'var q = location.hash.substring(1);\n'
+            'document.getElementById("out").innerHTML = q;\n'
+            'var u = new URLSearchParams(location.search).get("next");\n'
+            "window.location.href = u;"
+        )
+        ids = {f.get("id") for f in analyze_taint(code)}
+        self.assertEqual({"dom_injection", "open_redirect"}, ids)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -102,7 +102,7 @@
 
   function setEngineStatus(state, text) {
     const stateClass = ENGINE_STATE_CLASS[state] || "is-online";
-    const label = text || "Local engine offline — run server.py";
+    const label = text || "Local engine offline — view the setup guide";
     [
       ["#engine-dot", "#engine-status-text"],
       ["#engine-dot-modal", "#engine-status-text-modal"],
@@ -152,7 +152,7 @@
     } catch {
       backendConnected = false;
       backendChecked = true;
-      setEngineStatus("offline", "Local engine offline — run server.py");
+      setEngineStatus("offline", "Local engine offline — view the setup guide");
       return false;
     } finally {
       clearTimeout(timer);
@@ -404,6 +404,40 @@
   }
 
   // Thin progress bar under the sticky header.
+  /* The sticky header sits over the page content, so once the page scrolls it
+   * needs a solid background and a shadow to stay legible against whatever
+   * passes underneath. The translucent blur alone is not enough over bright
+   * cards. A class toggle (not an inline style) keeps it in the stylesheet. */
+  function initStickyHeader() {
+    const header = $("#site-header");
+    if (!header) return;
+    let queued = false;
+    const apply = () => {
+      queued = false;
+      header.classList.toggle("is-stuck", window.scrollY > 8);
+    };
+    window.addEventListener("scroll", () => {
+      if (queued) return;
+      queued = true;
+      window.requestAnimationFrame(apply);
+    }, { passive: true });
+    apply();
+  }
+
+  // The footer "view the setup guide" link should open the dialog that
+  // actually contains the guide, not just scroll near it.
+  function initSetupLinks() {
+    $$(".js-open-setup").forEach((link) => {
+      link.addEventListener("click", (event) => {
+        // Only hijack it on pages that have the dialog; otherwise let the
+        // href do its normal cross-page navigation.
+        if (!$("#privacy-modal")) return;
+        event.preventDefault();
+        openPrivacyModal();
+      });
+    });
+  }
+
   function initScrollProgress() {
     const bar = $("#scroll-progress");
     if (!bar) return;
@@ -495,6 +529,8 @@
     });
 
     initReveal();
+    initStickyHeader();
+    initSetupLinks();
     initScrollProgress();
     initNavSpy();
     initMobileNav();
@@ -1235,10 +1271,15 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     const notes = [];
     const parser = (payload.meta || {}).ast_parser || {};
     if (parser.available === false) {
+      // Say what it *costs*, not just that something is missing: in fallback
+      // mode confidence is capped and some flows are never found, so results
+      // here are a floor rather than a complete picture.
       notes.push(
-        `<b>Reduced-depth analysis:</b> the optional JavaScript parser (<code>${escapeHtml(parser.name || "esprima")}</code>) `
-        + "is not installed, so this scan used the line-based fallback. Install it for full AST taint analysis: "
-        + `<code>${escapeHtml(parser.install_hint || "pip install esprima")}</code>.`,
+        `<b>Reduced-depth analysis — results are incomplete.</b> The JavaScript parser `
+        + `(<code>${escapeHtml(parser.name || "esprima")}</code>) is not installed, so this scan used `
+        + "line-based matching instead of full AST taint tracking. Source-to-sink flows are capped at "
+        + "<b>medium</b> confidence and some are missed entirely. Treat this as a lower bound, then install "
+        + `it and re-scan: <code>${escapeHtml(parser.install_hint || "pip install esprima")}</code>.`,
       );
     }
     const warnings = new Set();

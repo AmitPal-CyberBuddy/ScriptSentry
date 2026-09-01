@@ -2017,6 +2017,33 @@ main.wrap {
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   animation: slideDown 0.6s ease both;
+  transition: background 0.25s ease, box-shadow 0.25s ease,
+    border-color 0.25s ease;
+}
+
+/* Once the page scrolls, content passes *under* the header. The translucent
+   blur alone loses contrast over bright cards, so opacity and a shadow are
+   raised to keep the nav readable and visibly detached from the page. */
+.site-header.is-stuck {
+  background: rgba(6, 10, 19, 0.93);
+  border-bottom-color: rgba(99, 179, 255, 0.24);
+  box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.85);
+}
+
+/* backdrop-filter is unsupported (or disabled) in some browsers; without it
+   the 0.72 alpha background is see-through enough to make the nav unreadable.
+   Fall back to a near-opaque bar. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .site-header {
+    background: rgba(6, 10, 19, 0.97);
+  }
+}
+
+/* The sticky header must not eat the viewport on short/landscape screens. */
+@media (max-height: 420px) {
+  .site-header {
+    position: static;
+  }
 }
 
 .header-inner {

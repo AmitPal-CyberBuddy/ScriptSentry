@@ -42,19 +42,37 @@ for src in PAGES_SRC.values():
 def resolve(page, target):
     """Map a relative href target to a file under webui/, if it is one.
 
-    Directory-style targets ("home/", "tool/") resolve to the index.html
-    they contain; fragment-only links resolve to the page itself.
+    Every href is resolved *relative to the page that contains it*, exactly
+    as a browser does.  Getting this wrong is what let a whole broken
+    navigation ship: the pages live one directory deep (`home/`, `tool/`,
+    `changelog/`), so a link written as `tool/` inside `home/index.html`
+    resolves to `home/tool/` and 404s.  Treating directory targets as
+    root-relative made those links look fine to the test suite while every
+    one of them was dead in a browser.
+
+    Directory-style targets ("../tool/") resolve to the index.html they
+    contain; fragment-only links resolve to the page itself.
     """
     if not target:
         return page
+    if target.startswith("/"):
+        # Root-relative: independent of the containing page.
+        resolved = target.lstrip("/")
+        if target.endswith("/") or not resolved:
+            resolved += "index.html"
+        return os.path.normpath(resolved)
     if target.endswith("/"):
-        return target + "index.html"
-    if target.startswith(("../", "assets/")):
-        return os.path.normpath(os.path.join(os.path.dirname(page), target))
-    return target
+        target += "index.html"
+    return os.path.normpath(os.path.join(os.path.dirname(page), target))
 
 
 def links(src):
+    """Real <a> elements only.
+
+    Prose that *quotes* markup inside <code> (the changelog documents an old
+    `<a href="raw.githubusercontent.com/…">` bug) is escaped in the source, so
+    matching on the literal `<a ` tag never sees it.
+    """
     return [(m.group(1), m.group(2)) for m in
             re.finditer(r"<a\b[^>]*href=\"([^\"]*)\"[^>]*>(.*?)</a>", src, re.S)]
 
@@ -129,6 +147,49 @@ class LinkTargetTest(unittest.TestCase):
                 if not os.path.isfile(os.path.join(WEBUI, path)):
                     missing.append(f"{page}: {src_attr}")
         self.assertEqual([], missing, "Missing asset files.")
+
+
+class RelativeDepthTest(unittest.TestCase):
+    """The pages live one directory deep, so sibling links need `../`.
+
+    Regression guard for a whole broken navigation: every page linked to its
+    siblings as `tool/` / `changelog/`, which a browser resolves against the
+    *containing* directory (`/home/tool/`, `/tool/changelog/`) and 404s. The
+    suite missed it because its resolver treated those targets as
+    root-relative. These checks assert on the raw href, independently of the
+    resolver, so the two cannot be wrong in the same direction again.
+    """
+
+    SIBLINGS = ("home/", "tool/", "changelog/")
+
+    def test_sibling_page_links_are_parent_relative(self):
+        bad = []
+        for page, src in PAGES_SRC.items():
+            for href, _ in links(src):
+                if href.startswith(("#", "mailto:", "http", "../", "/")):
+                    continue
+                target = href.split("#")[0]
+                if target in self.SIBLINGS:
+                    bad.append(f"{page}: href=\"{href}\" resolves to "
+                               f"{os.path.dirname(page)}/{target} and 404s")
+        self.assertEqual(
+            [], bad,
+            "Sibling page links must be written as ../tool/ etc., because "
+            "each page sits inside its own directory.",
+        )
+
+    def test_every_page_can_reach_every_other_page(self):
+        """Navigation must actually connect the three pages."""
+        for page, src in PAGES_SRC.items():
+            hrefs = {h.split("#")[0] for h, _ in links(src)}
+            here = os.path.dirname(page) + "/"
+            for sibling in self.SIBLINGS:
+                if sibling == here:
+                    continue
+                self.assertIn(
+                    "../" + sibling, hrefs,
+                    f"{page} has no working link to {sibling}",
+                )
 
 
 class ExternalLinkTest(unittest.TestCase):

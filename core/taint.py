@@ -384,9 +384,24 @@ class TaintAnalyzer:
         if ntype in ("MemberExpression",) and node.get("computed"):
             obj_taint = self._taint_of_expr(node.get("object"), depth + 1)
             if obj_taint and obj_taint.sources:
-                prop_txt = self._node_simple_text(node.get("property"))
-                note = f"Dynamic/computed property access [{prop_txt or '?'}]; property resolution incomplete."
-                obj_taint.limit(note)
+                prop_node = node.get("property")
+                prop_txt = self._node_simple_text(prop_node)
+                # A *literal* index is not an unresolved lookup. `location
+                # .search.split('=')[1]` is a fully understood expression, and
+                # calling it "property resolution incomplete" downgraded one of
+                # the most common query-parsing idioms to medium confidence for
+                # no reason. Only genuinely dynamic keys (obj[userVar]) are a
+                # real gap in the model.
+                literal_index = (
+                    isinstance(prop_node, dict)
+                    and _node_kind_str(prop_node) == "Literal"
+                    and isinstance(prop_node.get("value"), (int, str))
+                    and not isinstance(prop_node.get("value"), bool)
+                )
+                if not literal_index:
+                    note = (f"Dynamic/computed property access [{prop_txt or '?'}]; "
+                            "property resolution incomplete.")
+                    obj_taint.limit(note)
                 return obj_taint
 
         # Member expression sources (location/search, storage, cookie, value...)
@@ -455,6 +470,40 @@ class TaintAnalyzer:
                 return _Taint([f"source:document.cookie"], False, [f"read {callee_txt}"], "high")
             if "referrer" in lower:
                 return _Taint(["source:document.referrer"], False, [f"read {callee_txt}"], "high")
+
+            # String reshaping keeps user input user input.
+            #
+            # `location.hash.substring(1)` is the single most common way a
+            # fragment is read (you almost always strip the leading '#'), and
+            # treating it as an untracked call meant the textbook DOM-XSS
+            # flow degraded to a medium-confidence guess -- or vanished
+            # entirely once another flow existed. These methods reshape a
+            # string without cleaning it, so taint must survive them, along
+            # with the source's own confidence.
+            string_transforms = (
+                ".substring", ".substr", ".slice", ".trim", ".tolowercase",
+                ".touppercase", ".replace", ".replaceall", ".split", ".join",
+                ".concat", ".padstart", ".padend", ".normalize", ".at",
+                ".charat", ".repeat", ".tostring", ".valueof",
+            )
+            if lower.endswith(string_transforms):
+                # The receiver carries the taint: `<tainted>.substring(1)`.
+                callee_node = node.get("callee", {})
+                receiver = callee_node.get("object") if isinstance(callee_node, dict) else None
+                inherited = self._taint_of_expr(receiver, depth + 1) if receiver else None
+                if inherited:
+                    result = inherited.copy()
+                    result.path.append(f"transform {callee_txt}")
+                    # `.replace()` is where sanitization is usually attempted;
+                    # flag it as reshaped but do not claim it is safe.
+                    return result
+                # A tainted *argument* also flows through (e.g. "".concat(x)).
+                for arg in node.get("arguments", []) or []:
+                    candidate = self._taint_of_expr(arg, depth + 1)
+                    if candidate:
+                        result = candidate.copy()
+                        result.path.append(f"transform {callee_txt}")
+                        return result
 
             # Transparent transforms retain a source for a downstream sink.
             if any(lower.endswith(name) or lower == name for name in ("json.stringify", "encodeuricomponent", "encodeuri", "btoa")):

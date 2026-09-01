@@ -82,7 +82,7 @@
           <span class="pulse-dot" id="engine-dot" aria-hidden="true"></span>
           <span class="engine-text" id="engine-status-text">Checking local engine…</span>
         </button>
-        <a class="btn btn-sm go-to-tool" href="tool/">⚡ Go to tool</a>
+        <a class="btn btn-sm go-to-tool" href="../tool/">⚡ Go to tool</a>
       </div>
       <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false"
               aria-controls="site-nav" aria-label="Open Navigation Menu">
@@ -104,7 +104,7 @@
         and data flows it hides. All of it runs on your machine.
       </p>
       <div class="hero-cta">
-        <a class="btn btn-lg" href="tool/">⚡ Open the Analyzer</a>
+        <a class="btn btn-lg" href="../tool/">⚡ Open the Analyzer</a>
         <button class="btn btn-lg ghost" id="hero-setup" type="button">🛠️ Setup Guide</button>
       </div>
       <div class="badges">
@@ -120,7 +120,7 @@
           <div class="notice-ico">🔒</div>
           <div>
             <b>Private by design.</b> This page is only the interface. I never see what you
-            analyze — the work happens on <b>your</b> machine, by <code>server.py</code> listening
+            analyze — the work happens on <b>your</b> machine, by the local engine listening
             on <code>localhost</code>. No uploads, no cloud, no account.
           </div>
         </div>
@@ -387,8 +387,8 @@ python3 server.py --port 8000</pre>
 
       <nav class="footer-col" aria-label="Product">
         <h3>Product</h3>
-        <a href="tool/">⚡ Open the Analyzer</a>
-        <a href="changelog/">📜 What's New</a>
+        <a href="../tool/">⚡ Open the Analyzer</a>
+        <a href="../changelog/">📜 What's New</a>
       </nav>
 
       <nav class="footer-col" aria-label="Connect">
@@ -408,7 +408,7 @@ python3 server.py --port 8000</pre>
       </p>
       <p class="footer-meta">
         ScriptSentry · JS Intelligence Studio · <strong>private &amp; free</strong> ·
-        run <code>python3 server.py</code> · no telemetry, no accounts, no cloud.
+        <a class="js-open-setup" href="#how">view the setup guide</a> · no telemetry, no accounts, no cloud.
       </p>
     </div>
   </footer>
@@ -497,7 +497,7 @@ python3 server.py --port 8000</pre>
           <div class="token-field">
             <span class="token-field-icon" aria-hidden="true">🔑</span>
             <input id="engine-token" class="token-input" type="password" autocomplete="off" spellcheck="false"
-                   placeholder="Paste the token printed by server.py" />
+                   placeholder="Paste the token printed by the engine" />
           </div>
           <p class="error-note" id="connection-error" hidden></p>
 

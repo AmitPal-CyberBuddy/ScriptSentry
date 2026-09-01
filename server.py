@@ -566,8 +566,10 @@ def main():
         print(f"AST parser: {status['name']} (full source-to-sink analysis)", flush=True)
     else:
         # Silent degradation was the bug: scans quietly ran in fallback mode.
+        # Name the concrete cost so this is not mistaken for a minor notice.
         print(
             f"AST parser: UNAVAILABLE — running in {status.get('mode', 'regex_fallback')} mode. "
+            "Source-to-sink flows will be capped at 'medium' confidence and some will be missed. "
             f"Install it for full analysis: {status.get('install_hint', 'pip install esprima')}",
             flush=True,
         )

@@ -290,7 +290,12 @@ class WebUICompletenessTest(unittest.TestCase):
 
     def test_landing_page_links_to_the_console(self):
         html = self._read("home", "index.html")
-        self.assertIn('href="tool/"', html)
+        # `../tool/`, not `tool/`: the landing page lives in webui/home/, so a
+        # bare `tool/` resolves to /home/tool/ and 404s. This assertion used to
+        # require the broken form, which is part of why the dead navigation
+        # survived so long.
+        self.assertIn('href="../tool/"', html)
+        self.assertNotIn('href="tool/"', html)
         # Brand assets referenced by <link rel="icon"> must exist on disk.
         root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "webui")
         for asset in ("assets/favicon.svg", "assets/site.webmanifest", "assets/og-card.png"):
