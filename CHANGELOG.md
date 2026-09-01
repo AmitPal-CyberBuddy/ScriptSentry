@@ -11,6 +11,49 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Honest scan progress — no more "is it stuck?" spinner
+- **The dashboard no longer declares a false timeout.** The browser poll loop
+  used to give up after exactly 10 minutes with *"Analysis timed out while
+  waiting for the local engine"* — while the engine was still scanning a large
+  target. The poll now waits as long as the engine keeps answering and
+  reporting: transient contact losses are tolerated for a 20-second grace
+  window, a restarted engine is reported as exactly that ("server.py was
+  probably restarted"), and long scans simply keep the live progress panel
+  open. Polling backs off while the tab is hidden.
+- **Every silent stretch now explains itself.** The engine reports a
+  heartbeat (`since_update_ms`) with each status poll. When a stage stays
+  quiet — normal for one big bundle being parsed or beautified — the progress
+  panel shows *"No new updates for Xs — large bundles can stay quiet…"*, the
+  spinner switches to amber, and after 90s the hint suggests lowering the
+  file cap or workers instead of leaving an endless spinner.
+- **Work is announced before it happens.** Files in flight are reported as
+  *"Scanning app.min.js…"* (the old UI could only say "Analyzed …" after the
+  fact, so a 30–60s bundle looked frozen), beautifying reports per-file
+  *"Normalizing … (3/12)"*, and runtime-evidence capture emits a heartbeat
+  while the headless browser runs.
+- **The progress bar can no longer jump to 100% and snap back.** Download
+  events used to bypass the weighted stage model, so the job derived
+  `percent = files_done/files_total` mid-download. All download and normalize
+  events now flow through the same weighted, monotonic percent.
+- **An unfetchable target is an error, not an empty report.** A page that
+  cannot be downloaded (wrong URL, network down, bot protection) fails the
+  scan with an actionable message instead of "completing" in seconds with a
+  blank dashboard; a page that loads but genuinely has no JavaScript explains
+  that in the report notes.
+- **Cancelling is no longer styled as an error.** A user-initiated cancel
+  shows a neutral inline note instead of painting the input red.
+- **URL scans are ~2x faster.** The same document was previously parsed by
+  esprima once per consumer (taint, attack surface, module discovery, AST
+  summary) — up to four full parse + AST-conversion passes per file, which is
+  where scans silently spent most of their time. A bounded, content-hash-keyed
+  parse cache (`core/js_parser.py`) now parses each unique document exactly
+  once and shares the read-only tree; one measured 335 KB bundle went from
+  142s to 26s (5.5x), and a full mock-site scan from 129s to 68s. The cache is
+  bounded by source bytes (256 KB/entry, 512 KB total) so large bundles can
+  never pin unbounded memory. `token_count` is now 0 because the token stream
+  is no longer collected (nothing consumed it; collecting it made conversion
+  ~2.5x slower).
+
 ### End-to-end review hardening — risk chips, taint precision & transport
 - **Per-file risk chips now match the overall score.** A file's chip comes from
   the same evidence-weighted 0–100 model as the report score

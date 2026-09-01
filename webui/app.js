@@ -274,6 +274,9 @@
   // open the setup modal when the engine itself is unreachable/unpaired.
   async function handleAnalysisError(error, { urlMode } = {}) {
     const msg = (error && error.message) || "Analysis failed.";
+    // A cancel is the user's own action, not a failure — report it without
+    // error styling (and without painting the input red).
+    const canceled = /cancel/i.test(msg);
     setEngineStatus("checking", msg);
     if (isConnectionFailure(error)) {
       showConnectionError(error);
@@ -283,9 +286,9 @@
     // The engine responded but rejected/failed the analysis — show inline.
     closePrivacyModal();
     if (urlMode) {
-      setFieldError("#url-input", "#url-error", msg);
+      setFieldError("#url-input", "#url-error", msg, { neutral: canceled });
     } else {
-      setFieldError("#code-input", "#code-error", msg);
+      setFieldError("#code-input", "#code-error", msg, { neutral: canceled });
     }
   }
 
@@ -767,6 +770,34 @@
     text.textContent = job.message || (job.phase || "Working…");
     fill.style.width = `${pct}%`;
     renderStages(job);
+
+    // How long since the engine last reported?  A quiet stretch usually means
+    // one big bundle is being parsed or beautified — normal work that simply
+    // produces no events — while a *failed* poll means the engine is gone.
+    // Show the age so "still working" and "lost contact" are distinguishable
+    // at a glance instead of both looking like an endless spinner.
+    const running = job.status === "running" || job.status === "queued";
+    const quietMs = running ? Math.max(0, Number(job.since_update_ms || 0)) : 0;
+    const quiet = quietMs >= QUIET_HINT_MS;
+    const panel = $("#loading");
+    if (panel) panel.classList.toggle("is-quiet", quiet);
+
+    const hint = $("#progress-hint");
+    if (hint) {
+      if (quiet && quietMs < QUIET_LOUD_MS) {
+        hint.textContent = `No new updates for ${formatDuration(quietMs)} — large bundles can stay quiet for a while during one stage. Elapsed ${formatDuration(job.elapsed_ms)}.`;
+        hint.hidden = false;
+      } else if (quiet) {
+        hint.textContent = `Still working — no stage change for ${formatDuration(quietMs)}. If this stage never finishes, Cancel and retry with a lower file cap or fewer workers.`;
+        hint.hidden = false;
+      } else if (running && Number(job.elapsed_ms || 0) >= LONG_SCAN_NOTE_MS) {
+        hint.textContent = "Large targets can take several minutes. Keep this tab open, or Cancel to stop early — results are only written when the scan finishes.";
+        hint.hidden = false;
+      } else {
+        hint.hidden = true;
+      }
+    }
+
     // An ETA measured over a couple of seconds is a guess, not an estimate.
     // Say so instead of printing a number that looks authoritative.
     const confidence = Number(job.eta_confidence || 0);
@@ -776,6 +807,9 @@
     }
     // `total` is the engine's current work estimate, not the file cap.
     const files = job.total ? `${job.files_scanned || 0}/${job.total}` : `${job.files_scanned || 0}`;
+    const lastUpdate = running
+      ? (quietMs >= 5000 ? `${formatDuration(quietMs)} ago` : "just now")
+      : "—";
     stats.innerHTML = [
       ["stage", job.stage || job.phase || "queued"],
       ["files", files],
@@ -783,24 +817,38 @@
       ["pct", `${pct.toFixed(0)}%`],
       ["elapsed", formatDuration(job.elapsed_ms)],
       ["eta", eta],
+      ["last update", lastUpdate],
     ].map(([k, v]) => `<b>${escapeHtml(k)}</b>: ${escapeHtml(String(v))}`).join(" · ");
   }
 
   function showLoading(text) {
-    $("#loading").classList.add("show");
+    const panel = $("#loading");
+    if (panel) {
+      panel.classList.add("show");
+      panel.classList.remove("is-quiet");
+    }
     $("#loading-text").textContent = text || "Analyzing…";
     $("#analyze-code").disabled = true;
     $("#analyze-url").disabled = true;
   }
 
   function hideLoading() {
-    $("#loading").classList.remove("show");
+    const panel = $("#loading");
+    if (panel) {
+      panel.classList.remove("show");
+      panel.classList.remove("is-quiet");
+    }
     $("#analyze-code").disabled = false;
     $("#analyze-url").disabled = false;
     const fill = $("#progress-fill");
     const stats = $("#progress-stats");
+    const hint = $("#progress-hint");
     if (fill) fill.style.width = "0%";
     if (stats) stats.innerHTML = "";
+    if (hint) {
+      hint.hidden = true;
+      hint.textContent = "";
+    }
   }
 
   function animateNumber(el, target, suffix = "") {
@@ -960,18 +1008,68 @@ function dangerous() {
 CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 `;
 
+  /* Poll /api/status until the job reaches a terminal state.
+   *
+   * The old loop threw "timed out while waiting for the local engine" after
+   * 1200 polls (10 minutes flat) whether or not the engine was still making
+   * progress — on a large target the dashboard declared failure while the
+   * scan kept running. The rules now match reality:
+   *   - No fixed wall-clock cap: a scan may take as long as the engine keeps
+   *     answering and reporting. Real bundle-heavy sites need more than ten
+   *     minutes; the engine, not the browser, decides when it is done.
+   *   - Transient poll failures (a busy worker pool, laptop sleep, a dropped
+   *     connection) are tolerated for a grace window before giving up.
+   *   - A job id the engine no longer knows (server restarted) is reported
+   *     as exactly that instead of a generic timeout.
+   *   - Long silences are surfaced as "quiet since …" hints in the progress
+   *     panel (see renderProgress), never as an error, because a silent
+   *     minute while a large bundle is parsed is normal work. */
+  const POLL_INTERVAL_MS = 500;
+  const POLL_FAILURE_GRACE_MS = 20000;   // tolerated loss of contact
+  const QUIET_HINT_MS = 15000;           // no engine update → explain, don't panic
+  const QUIET_LOUD_MS = 90000;           // stronger wording for long silences
+  const LONG_SCAN_NOTE_MS = 3 * 60000;   // gentle "big scans take a while" note
+
   async function pollJob(jobId) {
-    let latest = null;
-    for (let i = 0; i < 1200; i++) {
-      const status = await getJSON(`/api/status?job_id=${encodeURIComponent(jobId)}`);
-      latest = status.job;
-      renderProgress(latest);
-      if (latest.status === "done") return latest;
-      if (latest.status === "error") throw new Error(latest.error || "Analysis failed.");
-      if (latest.status === "canceled") throw new Error("Analysis canceled.");
-      await new Promise((r) => setTimeout(r, 500));
+    const startedAt = performance.now();
+    let lastGoodPoll = startedAt;
+    while (true) {
+      let status;
+      try {
+        status = await getJSON(`/api/status?job_id=${encodeURIComponent(jobId)}`);
+        lastGoodPoll = performance.now();
+      } catch (err) {
+        const msg = String((err && err.message) || "");
+        if (/unknown job/i.test(msg)) {
+          throw new Error(
+            "The engine no longer knows this scan job — server.py was probably restarted. Start the scan again.",
+          );
+        }
+        if (performance.now() - lastGoodPoll > POLL_FAILURE_GRACE_MS) {
+          throw new Error(
+            `Lost contact with the local engine during the scan (${formatDuration(performance.now() - startedAt)} in). `
+            + "Is server.py still running? Check its window for errors, then start the scan again.",
+          );
+        }
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        continue;
+      }
+      const job = status && status.job;
+      if (!job) {
+        throw new Error(
+          "The engine sent a status response without a job record — server.py was probably restarted. Start the scan again.",
+        );
+      }
+      renderProgress(job);
+      if (job.status === "done") return job;
+      if (job.status === "error") throw new Error(job.error || "Analysis failed.");
+      if (job.status === "canceled") throw new Error("Analysis canceled.");
+      // Back off politely while the tab is hidden; browsers throttle timers
+      // here anyway, and the engine does not need us polling it every 500ms
+      // while nobody is watching.
+      const interval = document.hidden ? POLL_INTERVAL_MS * 4 : POLL_INTERVAL_MS;
+      await new Promise((r) => setTimeout(r, interval));
     }
-    throw new Error("Analysis timed out while waiting for the local engine.");
   }
 
   async function cancelCurrentJob() {
@@ -994,15 +1092,16 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  function setFieldError(inputId, errorId, message) {
+  function setFieldError(inputId, errorId, message, { neutral = false } = {}) {
     const err = $(errorId);
     const input = $(inputId);
     if (err) {
       err.textContent = message || "";
       err.hidden = !message;
+      err.classList.toggle("is-neutral", neutral);
     }
-    if (input) input.classList.toggle("input-invalid", !!message);
-    if (message && input) {
+    if (input) input.classList.toggle("input-invalid", !!message && !neutral);
+    if (message && !neutral && input) {
       input.focus();
       input.setAttribute("aria-invalid", "true");
     } else if (input) {
@@ -1070,7 +1169,9 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     }
     const url = rawUrl;
     if (!(await ensureBackend())) return;
-    showLoading("Discovering and scanning JavaScript… this can take a moment.");
+    // Real stage messages take over from this line within ~200ms — the engine
+    // reports recon/discover/download before the first poll lands.
+    showLoading("Starting scan — the engine will report each stage below.");
     try {
       const query = {
         mode: "url",
@@ -1269,7 +1370,28 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     const node = $("#engine-notes");
     if (!node || !payload) return;
     const notes = [];
-    const parser = (payload.meta || {}).ast_parser || {};
+    const meta = payload.meta || {};
+    const parser = meta.ast_parser || {};
+    // An empty URL scan used to look identical to a successful one. Say why
+    // nothing was analyzed instead of showing an empty dashboard.
+    const summary = payload.summary || {};
+    if (meta.analysis_mode === "url" && Number(summary.total_files || 0) === 0) {
+      const scanSummary = meta.scan_summary || {};
+      const page = scanSummary.page || {};
+      if (page.page_fetch === "failed") {
+        notes.push(
+          "<b>Nothing was analyzed — the page could not be downloaded.</b> The site may be unreachable, "
+          + "blocked the engine's request (bot protection), or the URL may be wrong. Check the address "
+          + "and your connection, then scan again.",
+        );
+      } else {
+        notes.push(
+          "<b>No JavaScript was discovered on this page.</b> The page may genuinely have none, or its "
+          + "scripts may be injected at runtime by a loader. The optional runtime pass (headless browser) "
+          + "can catch scripts that only appear after execution.",
+        );
+      }
+    }
     if (parser.available === false) {
       // Say what it *costs*, not just that something is missing: in fallback
       // mode confidence is capped and some flows are never found, so results

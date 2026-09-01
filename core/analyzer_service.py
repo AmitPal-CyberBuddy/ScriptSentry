@@ -22,6 +22,7 @@ from core.url_policy import read_response_text, safe_get, validate_public_url
 from core.source_maps import inspect_source_map
 from core.runtime_evidence import attach_runtime_evidence, capture_runtime_evidence, runtime_evidence_enabled
 from core.pipeline import ProgressModel, stage_plan
+from core.js_parser import clear_parse_cache
 from core.scanner import scan_file
 
 # Compatibility references keep older integrations that patch the two legacy
@@ -96,6 +97,7 @@ def _merge_into(results, path, content, seen_hashes=None, source_url=""):
 
 def analyze_content(code, filename="inline.js", progress_callback=None, cancel_check=None):
     """Analyze pasted JavaScript and return raw per-file results."""
+    clear_parse_cache()
     _check_cancel(cancel_check)
     progress = ProgressModel(stage_plan(mode="code"))
 
@@ -140,6 +142,7 @@ def analyze_files(files, progress_callback=None, cancel_check=None):
     identical content (the same way URL scans dedupe mirrored bundles). Nothing
     here is written to disk or sent anywhere; inputs come from the local UI.
     """
+    clear_parse_cache()
     files = [f for f in (files or []) if isinstance(f, dict)]
     total = max(1, len(files))
     _check_cancel(cancel_check)
@@ -418,11 +421,27 @@ def _attach_runtime(results, url, timeout=15, max_files=50, progress_callback=No
         return attach_runtime_evidence(results, runtime, target_url=url)
 
     notify("verify", "Executing page in local headless browser", current=0, total=1)
-    runtime = capture_runtime_evidence(
-        url,
-        timeout_ms=max(2_000, int(float(timeout or 15) * 1000)),
-        max_requests=max(60, min(max(50, int(max_files or 50) * 6), 600)),
-    )
+    # The capture is one long, event-free call; without a heartbeat the stage
+    # looks frozen for its whole duration. A quiet side thread re-reports the
+    # elapsed time every few seconds so the UI can show forward motion.
+    capture_done = threading.Event()
+
+    def _capture_heartbeat():
+        seconds = 0
+        while not capture_done.wait(5.0):
+            seconds += 5
+            notify("verify", f"Capturing runtime evidence… {seconds}s elapsed", current=0, total=1)
+
+    beat = threading.Thread(target=_capture_heartbeat, name="scriptsentry-runtime-heartbeat", daemon=True)
+    beat.start()
+    try:
+        runtime = capture_runtime_evidence(
+            url,
+            timeout_ms=max(2_000, int(float(timeout or 15) * 1000)),
+            max_requests=max(60, min(max(50, int(max_files or 50) * 6), 600)),
+        )
+    finally:
+        capture_done.set()
     _check_cancel(cancel_check)
     # Analyze script responses observed only after page execution (lazy chunks,
     # DOM-injected scripts, and route bundles).  Their source is local-only and
@@ -475,6 +494,7 @@ def analyze_url(
     file cap or a per-file limit is hit, the asset is reported through
     ``__scan_summary__`` instead of being silently dropped.
     """
+    clear_parse_cache()
     max_files = int(max_files or 1000)
     if max_files <= 0:
         max_files = 1000
@@ -545,12 +565,16 @@ def analyze_url(
         with lock:
             return sum(data.get("file_size", 0) for data in results.values())
 
-    def scan_progress(phase, message):
+    def scan_progress(phase, message, current=None, total=None):
         # `max_files` is a *cap*, not the expected work; dividing by it makes a
         # 4-script site report 4%. Estimate the real workload instead: at least
         # the entry scripts, at most the cap, and never below what is done.
         expected = max(len(initial_tasks), len(results), 1)
-        notify(phase, message, current=len(results), total=min(int(max_files), expected))
+        if total is not None:
+            expected = max(expected, int(total))
+        notify(phase, message,
+               current=len(results) if current is None else int(current),
+               total=min(int(max_files), expected) if total is None else int(total))
 
     notify("recon", "Reading page and extracting script references", current=0, total=1)
     _check_cancel(cancel_check)
@@ -568,6 +592,16 @@ def analyze_url(
     state["page_metadata"] = page_metadata
     discovered = list(dict.fromkeys(js_links))
     if not discovered and not inline_scripts:
+        # A page that fetched fine but has no JS is a legitimate (empty)
+        # result. A page we could not fetch at all is not: without this the
+        # scan "completed" in seconds with an empty dashboard, which reads
+        # exactly like success and hides a network/bot-protection problem.
+        if (page_metadata or {}).get("page_fetch") == "failed":
+            raise ValueError(
+                f"Could not download the page at {url} — the site may be unreachable, "
+                "rate-limiting non-browser requests, or the URL may be wrong. "
+                "Check the address and your connection, then try again."
+            )
         return _finish_scan(
             results,
             url,
@@ -592,9 +626,19 @@ def analyze_url(
            current=0, total=len(discovered) or 1)
     notify("download", f"Downloading {len(discovered[:max_files])} script(s)",
            current=0, total=len(discovered[:max_files]) or 1)
+    # Route the downloader's raw per-file counters through ``notify`` so they
+    # keep the weighted, monotonic percent (and the stage strip) consistent.
+    # The downloader used to call the job callback directly with only
+    # ``current``/``total``; the job then derived percent = current/total, so
+    # the bar jumped to 100% on the last download and snapped back afterwards.
     downloads = download_js(
         discovered[:max_files],
-        progress_callback=progress_callback,
+        progress_callback=lambda **kw: notify(
+            "download",
+            kw.get("message") or f"Downloading scripts {kw.get('current', 0)}/{kw.get('total', 1)}",
+            current=kw.get("current"),
+            total=kw.get("total"),
+        ),
         output_dir=scan_js_dir,
         timeout=timeout,
         cancel_check=cancel_check,
@@ -602,8 +646,19 @@ def analyze_url(
     _check_cancel(cancel_check)
     beautified = []
     if downloads:
-        notify("normalize", "Normalizing downloaded bundles", current=0, total=len(downloads))
-        beautified = beautify(downloads, output_dir=scan_beautify_dir)
+        # ``beautify`` emits its own per-file start/finish events; they are
+        # funnelled through ``notify`` so the weighted percent stays monotonic.
+        beautified = beautify(
+            downloads,
+            output_dir=scan_beautify_dir,
+            progress_callback=lambda **kw: notify(
+                "normalize",
+                kw.get("message") or "Normalizing downloaded bundles",
+                current=kw.get("current"),
+                total=kw.get("total"),
+            ),
+            cancel_check=cancel_check,
+        )
         progress.complete_stage()
 
     _check_cancel(cancel_check)
@@ -694,6 +749,13 @@ def analyze_url(
     def process_task(task):
         _check_cancel(cancel_check)
         path, base_url, inline_content, phase, depth = task
+        name = os.path.basename(path) if path else "inline script"
+        if inline_content is None:
+            # Announce the work BEFORE it starts. The old code only spoke after
+            # a file finished, so a big bundle silently monopolized a worker
+            # for a minute or more while the UI showed nothing new -- the
+            # single most "is it stuck?" moment of a scan.
+            scan_progress(phase, f"Scanning {name}…")
         if inline_content is not None:
             content = inline_content
         else:
@@ -702,12 +764,13 @@ def analyze_url(
                     content = f.read()
             except Exception:
                 record_skip("read_error")
+                scan_progress(phase, f"Could not read {name} — skipped")
                 return []
         skipped = merge_document(path, base_url, content)
         if skipped:
-            scan_progress(phase, f"Skipping {skipped.replace('_', ' ')} {os.path.basename(path)}")
+            scan_progress(phase, f"Skipping {skipped.replace('_', ' ')} {name} ({len(results)}/{max_files})")
             return []
-        scan_progress(phase, f"Analyzing {os.path.basename(path)} ({len(results)}/{max_files})")
+        scan_progress(phase, f"Analyzed {name} ({len(results)}/{max_files})")
         return discover_tasks(content, base_url, depth)
 
     # Bounded-parallel BFS rounds. Each round scans current assets with a

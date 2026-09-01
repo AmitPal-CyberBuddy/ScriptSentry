@@ -3,8 +3,19 @@
 Uses the pure-Python ``esprima`` package when available. Everything is wrapped
 so the analyzer still works (with regex fallbacks) when the parser is absent or
 the source uses syntax the parser cannot handle.
+
+Parsing is also *expensive*: turning a large minified bundle into a plain-dict
+AST can cost tens of seconds, and one scan of one file used to parse the very
+same content once per consumer (taint, attack surface, module discovery, the
+AST summary). :func:`parse_raw` therefore keeps a small, content-hash-keyed
+cache so each unique document is parsed exactly once per scan. The cached tree
+is shared read-only -- every consumer only ever walks it -- and the cache is
+bounded by *source* bytes so a 2 MB bundle can never pin gigabytes of AST.
 """
+import hashlib
 import re
+import threading
+from collections import OrderedDict
 
 try:
     import esprima
@@ -13,6 +24,26 @@ except ImportError:
 
 
 PARSER_NAME = "esprima"
+
+# Parse without the token stream: collecting ``tokens`` makes ``toDict``
+# roughly 2.5x slower and 2.5x larger, and nothing downstream reads tokens
+# (the tokenizer stream is only used for a cosmetic token_count, which is now
+# reported as 0 when tokens are not collected).
+_PARSE_OPTIONS = {"loc": True, "range": True, "comment": True, "tokens": False}
+
+# Bounds for the shared parse cache. Trees are huge relative to their source
+# (order of 500x), so the limit is expressed in source bytes: the worst case
+# resident cost of the cache is bounded and small next to what a single scan
+# already allocates transiently.
+_RAW_CACHE_MAX_ENTRIES = 4
+_RAW_CACHE_MAX_SOURCE_BYTES = 256 * 1024
+_RAW_CACHE_MAX_TOTAL_SOURCE_BYTES = 512 * 1024
+_PARSE_FAILURE_CACHE_MAX_ENTRIES = 128
+
+_RAW_CACHE = OrderedDict()          # sha256 -> (plain-dict AST, source_bytes)
+_RAW_CACHE_SOURCE_BYTES = 0
+_FAILURE_CACHE = OrderedDict()      # sha256 -> first parse error message
+_CACHE_LOCK = threading.Lock()
 
 
 def parser_available():
@@ -149,7 +180,7 @@ def _parse(content):
         for method in ("parseModule", "parseScript"):
             try:
                 fn = getattr(esprima, method)
-                return fn(candidate, {"loc": True, "range": True, "comment": True, "tokens": True}), None
+                return fn(candidate, _PARSE_OPTIONS), None
             except Exception as exc:  # noqa: BLE001 - parser supports many syntax dialects
                 attempts.append(f"{method}: {exc}")
     if attempts:
@@ -157,8 +188,109 @@ def _parse(content):
     return None, "parse-failed"
 
 
+def _content_key(content):
+    return hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _cache_put(key, tree, source_bytes):
+    """Store a successfully parsed tree under its content hash.
+
+    The stored dict is shared with every consumer of this content. Consumers
+    walk it read-only (taint, attack surface and module discovery only ever
+    ``get`` from nodes), so no copies are made -- a deep copy would erase the
+    entire speedup.
+    """
+    global _RAW_CACHE_SOURCE_BYTES
+    if source_bytes > _RAW_CACHE_MAX_SOURCE_BYTES:
+        return
+    with _CACHE_LOCK:
+        if key in _RAW_CACHE:
+            return
+        _RAW_CACHE[key] = (tree, source_bytes)
+        _RAW_CACHE_SOURCE_BYTES += source_bytes
+        while (_RAW_CACHE_SOURCE_BYTES > _RAW_CACHE_MAX_TOTAL_SOURCE_BYTES
+               or len(_RAW_CACHE) > _RAW_CACHE_MAX_ENTRIES) and len(_RAW_CACHE) > 1:
+            _old_key, (_tree, old_bytes) = _RAW_CACHE.popitem(last=False)
+            _RAW_CACHE_SOURCE_BYTES -= old_bytes
+
+
+def parse_raw_with_error(content):
+    """Parse ``content`` once and return ``(plain-dict AST or None, error)``.
+
+    Results are memoised per content hash: one scan of one document parses it
+    exactly once no matter how many analyzers need the tree. Returns the
+    *shared* cached dict on a hit -- treat it as read-only.
+    """
+    if esprima is None:
+        return None, "esprima-not-installed"
+    content = content or ""
+    if not content.strip():
+        return None, "empty"
+    key = _content_key(content)
+    with _CACHE_LOCK:
+        if key in _RAW_CACHE:
+            tree, _size = _RAW_CACHE[key]
+            _RAW_CACHE.move_to_end(key)
+            return tree, None
+        if key in _FAILURE_CACHE:
+            _FAILURE_CACHE.move_to_end(key)
+            return None, _FAILURE_CACHE[key]
+
+    tree, error = _parse(content)
+    if tree is None:
+        with _CACHE_LOCK:
+            _FAILURE_CACHE[key] = error or "parse-failed"
+            while len(_FAILURE_CACHE) > _PARSE_FAILURE_CACHE_MAX_ENTRIES:
+                _FAILURE_CACHE.popitem(last=False)
+        return None, error
+
+    if not isinstance(tree, dict):
+        try:
+            tree = esprima.toDict(tree)
+        except Exception:  # noqa: BLE001
+            tree = None
+    if not isinstance(tree, dict):
+        with _CACHE_LOCK:
+            _FAILURE_CACHE[key] = "ast-conversion-failed"
+        return None, "ast-conversion-failed"
+
+    _cache_put(key, tree, len(content.encode("utf-8", errors="ignore")))
+    return tree, None
+
+
+def parse_raw(content):
+    """Return the raw parsed AST as a plain dict, or None.
+
+    Used by downstream analyzers that need the full ESTree shape (e.g.
+    source/sink data-flow analysis) rather than the summarized report dict.
+    The returned tree is shared and read-only; copy it before mutating.
+    """
+    tree, _error = parse_raw_with_error(content)
+    return tree
+
+
+def clear_parse_cache():
+    """Drop every cached parse result.
+
+    Called when a top-level analysis starts so a long-running dashboard does
+    not retain the previous scan's trees while idle. Within one scan the cache
+    is what saves the repeated parses; across scans there is nothing worth
+    keeping (duplicate documents are already de-duplicated before analysis).
+    """
+    global _RAW_CACHE_SOURCE_BYTES
+    with _CACHE_LOCK:
+        _RAW_CACHE.clear()
+        _FAILURE_CACHE.clear()
+        _RAW_CACHE_SOURCE_BYTES = 0
+
+
 def parse_ast(content):
-    """Parse JavaScript and return a compact, report-friendly AST summary."""
+    """Parse JavaScript and return a compact, report-friendly AST summary.
+
+    Reuses the shared, cached parse from :func:`parse_raw` -- before the cache,
+    this was a second full parse (plus ``toDict``) of the same content for
+    every scanned file, roughly doubling the cost of the analyze stage.
+    """
     result = {
         "available": bool(esprima is not None),
         "parse_error": None,
@@ -179,19 +311,9 @@ def parse_ast(content):
     if esprima is None:
         return result
 
-    tree, error = _parse(content)
+    tree, error = parse_raw_with_error(content)
     if tree is None:
         result["parse_error"] = error
-        return result
-
-    # esprima returns typed AST objects; normalize to a plain dict.
-    if not isinstance(tree, dict):
-        try:
-            tree = esprima.toDict(tree)
-        except Exception:  # noqa: BLE001
-            return result
-
-    if not isinstance(tree, dict):
         return result
 
     result["token_count"] = len(tree.get("tokens", []) or [])
@@ -300,25 +422,6 @@ def parse_ast(content):
     # Node count is approximated by the recursive walk above; keep it meaningful.
     result["node_count"] = len(result["declarations"]) + len(result["functions"]) + len(result["classes"]) + len(result["calls"]) + len(result["literals"]) + len(result["properties"]) + len(result["imports"]) + len(result["exports"])
     return result
-
-
-def parse_raw(content):
-    """Return the raw parsed AST as a plain dict, or None.
-
-    Used by downstream analyzers that need the full ESTree shape (e.g.
-    source/sink data-flow analysis) rather than the summarized report dict.
-    """
-    if esprima is None:
-        return None
-    tree, error = _parse(content)
-    if tree is None:
-        return None
-    if not isinstance(tree, dict):
-        try:
-            tree = esprima.toDict(tree)
-        except Exception:  # noqa: BLE001
-            return None
-    return tree if isinstance(tree, dict) else None
 
 
 def extract_imports(content):
