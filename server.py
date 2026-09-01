@@ -237,6 +237,36 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.path = "/tool/index.html"
         return super().do_GET()
 
+    def send_error(self, code, message=None, explain=None):
+        """Serve the site's own 404 page instead of Python's default.
+
+        GitHub Pages already serves ``webui/404.html`` for a missing address,
+        so the hosted site recovers a lost visitor with real navigation. The
+        local server fell through to http.server's built-in "Error response"
+        page, which is a dead end with no way back into the dashboard -- the
+        same URL behaved completely differently depending on where the site
+        was served from.
+        """
+        if code == 404:
+            page = os.path.join(WEB_ROOT, "404.html")
+            if os.path.isfile(page):
+                try:
+                    with open(page, "rb") as fh:
+                        body = fh.read()
+                except OSError:
+                    body = None
+                if body is not None:
+                    self.send_response(404, message)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    # HEAD must not carry a body.
+                    if self.command != "HEAD":
+                        self.wfile.write(body)
+                    return
+        return super().send_error(code, message, explain)
+
     def list_directory(self, path):
         """Directories without an index page are 404, not a file listing.
 

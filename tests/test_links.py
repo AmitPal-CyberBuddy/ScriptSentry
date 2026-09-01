@@ -192,6 +192,75 @@ class RelativeDepthTest(unittest.TestCase):
                 )
 
 
+class NotFoundPageTest(unittest.TestCase):
+    """The 404 page must be able to rescue a visitor from *any* address.
+
+    GitHub Pages serves 404.html for every missing path, so its links are
+    resolved against wherever the visitor happened to land. Written as plain
+    relative links ("tool/"), a visitor at /ScriptSentry/tool/typo resolved
+    them to /ScriptSentry/tool/tool/ -- the recovery links on the recovery
+    page were themselves 404s, for every URL below the site root.
+
+    A hardcoded root cannot fix it either: the site is at /ScriptSentry/ on
+    Pages but at / under server.py. So the page resolves its own root at
+    runtime, and these tests pin that contract.
+    """
+
+    PAGE = os.path.join(WEBUI, "404.html")
+
+    def setUp(self):
+        with open(self.PAGE, encoding="utf-8") as fh:
+            self.src = fh.read()
+
+    def test_recovery_links_are_rewritten_at_runtime(self):
+        self.assertIn('id="nav-404"', self.src,
+                      "The recovery nav needs an id for the script to find it.")
+        self.assertIn("window.location.pathname", self.src,
+                      "The 404 page must derive the site root from the current "
+                      "path; a fixed prefix breaks either Pages or local.")
+
+    def test_no_hardcoded_project_prefix(self):
+        """/ScriptSentry/ works on Pages and 404s locally, and vice versa."""
+        self.assertNotIn('href="/ScriptSentry/', self.src)
+        self.assertNotIn('href="/home/', self.src)
+        self.assertNotIn('href="/tool/', self.src)
+
+    def test_links_point_at_real_pages(self):
+        for target in ("home/", "tool/", "changelog/"):
+            self.assertIn(f'href="{target}"', self.src)
+            self.assertTrue(
+                os.path.isfile(os.path.join(WEBUI, target, "index.html")),
+                f"404 page links to {target}, which does not exist.",
+            )
+
+    def test_root_resolution_covers_pages_and_local(self):
+        """Mirror of the page's own logic, checked against real scenarios."""
+        pages = ["home", "tool", "changelog"]
+
+        def root_for(path, host):
+            for p in pages:
+                at = path.find("/" + p + "/")
+                if at != -1:
+                    return path[:at + 1]
+            if host.endswith(".github.io"):
+                first = path.split("/")[1] if len(path.split("/")) > 1 else ""
+                if first and first not in pages:
+                    return "/" + first + "/"
+            return "/"
+
+        gh = "amitpal-cyberbuddy.github.io"
+        for path, host, want in [
+            ("/ScriptSentry/typo", gh, "/ScriptSentry/"),
+            ("/ScriptSentry/tool/typo", gh, "/ScriptSentry/"),
+            ("/ScriptSentry/home/old.html", gh, "/ScriptSentry/"),
+            ("/typo", "127.0.0.1", "/"),
+            ("/tool/typo", "127.0.0.1", "/"),
+            ("/changelog/x", "127.0.0.1", "/"),
+        ]:
+            with self.subTest(path=path, host=host):
+                self.assertEqual(want, root_for(path, host))
+
+
 class ExternalLinkTest(unittest.TestCase):
     def test_blank_targets_are_safe(self):
         """target=_blank without rel=noopener exposes window.opener."""
