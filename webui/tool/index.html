@@ -119,6 +119,8 @@
           </div>
         </div>
 
+        <div class="transfer-note" id="transfer-note" role="status" aria-live="polite" hidden></div>
+
         <div class="console-body">
           <div class="pane active" id="pane-code">
             <div class="inline-tabs" role="tablist">
@@ -454,7 +456,8 @@
           <div class="setup-pane" data-setup-pane="easy">
             <p class="modal-note" style="margin:6px 0 10px">
               One file, one command. On first run it fetches the engine from the official GitHub
-              repo, installs what it needs, and starts — no clone required.
+              repo, installs what it needs, and starts — no clone required. It starts the same
+              engine as <code>server.py</code>, so run <b>one</b> of the two, never both.
             </p>
             <div class="setup-actions">
               <button class="btn js-download-launcher" type="button"
@@ -467,7 +470,8 @@
             <ol class="setup-steps">
               <li><b>Download</b> the launcher above (or copy it straight from GitHub).</li>
               <li><b>Run it:</b> <code>python3 scriptsentry.py --port 8000</code> — the first run downloads the engine.</li>
-              <li><b>Open the dashboard it prints</b> — <code>http://127.0.0.1:8000</code>. The engine serves the same UI, already paired.</li>
+              <li><b>Open the dashboard it prints</b> — <code>http://127.0.0.1:8000</code>.</li>
+              <li><b>Paste the pairing token</b> when the dashboard asks for it — the token is printed in the same terminal, right under the dashboard address.</li>
             </ol>
             <div class="code-box">
               <pre id="setup-code-easy-modal"># downloads &amp; starts the engine on first run
@@ -481,8 +485,8 @@ python3 scriptsentry.py --port 8000</pre>
               <li><b>Get the project:</b> clone or download <code>ScriptSentry</code>.</li>
               <li><b>Open a terminal</b> inside the project folder.</li>
               <li><b>Install deps:</b> <code>pip install -r requirements.txt</code></li>
-              <li><b>Start the server:</b> <code>python3 server.py --port 8000</code></li>
-              <li><b>Open <code>http://127.0.0.1:8000</code></b> — the engine serves this same dashboard, already paired.</li>
+              <li><b>Start the server:</b> <code>python3 server.py --port 8000</code> (the full-repo way to start the same engine the launcher downloads).</li>
+              <li><b>Open <code>http://127.0.0.1:8000</code></b> and <b>paste the pairing token</b> printed in the server's terminal when the dashboard asks for it.</li>
             </ol>
             <div class="code-box">
               <pre id="setup-code-clone-modal">git clone https://github.com/AmitPal-CyberBuddy/ScriptSentry.git

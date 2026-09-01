@@ -472,6 +472,32 @@ def _attach_runtime(results, url, timeout=15, max_files=50, progress_callback=No
     return attach_runtime_evidence(results, runtime, target_url=url)
 
 
+def _fetch_target_script(url, timeout=15):
+    """Download one JS document when the *target itself* is a script.
+
+    Returns the source text, or None when the URL did not yield JavaScript
+    (unreachable, non-200, empty, or an HTML page — a soft 404). Callers fall
+    back to normal page discovery, so a wrapper page served at a ``.js`` URL
+    still works.
+    """
+    try:
+        response = safe_get(url, timeout=timeout, headers=REQUEST_HEADERS)
+        if response is None or response.status_code != 200:
+            return None
+        content = read_response_text(response, max_bytes=int(FILE_RULES.get("max_js_size", 2_000_000)))
+        if not content:
+            return None
+        content = content.strip()
+        if not content:
+            return None
+        # A JS asset should never be an HTML page; treat that as a miss.
+        if "<html" in content.lower() or "<!doctype" in content.lower():
+            return None
+        return content
+    except Exception:
+        return None
+
+
 def analyze_url(
     url,
     max_depth=5,
@@ -578,6 +604,15 @@ def analyze_url(
 
     notify("recon", "Reading page and extracting script references", current=0, total=1)
     _check_cancel(cancel_check)
+
+    # A direct .js/.mjs target IS the deliverable — analyze the document
+    # itself and follow the module/chunk references inside it. The old path
+    # treated every target as an HTML page, so scanning
+    # ``https://example.com/app.js`` reported an empty "no JavaScript found"
+    # result: a broken promise for a URL the input field explicitly suggests.
+    direct_script = urlparse(url).path.lower().endswith((".js", ".mjs"))
+    direct_script_body = _fetch_target_script(url, timeout=timeout) if direct_script else None
+
     # Keep the two compatibility entry points (older callers patch these),
     # while discovery itself reuses its bounded page fetch cache.
     if extract_js is _DISCOVERY_EXTRACT_JS and extract_inline_scripts is _DISCOVERY_EXTRACT_INLINE:
@@ -588,6 +623,15 @@ def analyze_url(
         js_links = extract_js(url)
         inline_scripts = extract_inline_scripts(url)
         page_metadata = {"page_fetch": "compatibility_discovery"}
+    if direct_script_body is not None:
+        js_links = []
+        inline_scripts = [direct_script_body]
+        page_metadata = {
+            "page_fetch": "ok",
+            "page_bytes": len(direct_script_body.encode("utf-8", errors="ignore")),
+            "inline_count": 1,
+            "direct_script": True,
+        }
     _check_cancel(cancel_check)
     state["page_metadata"] = page_metadata
     discovered = list(dict.fromkeys(js_links))
@@ -617,32 +661,45 @@ def analyze_url(
         )
 
     state["script_urls"].extend(discovered[:max_files])
+    if direct_script_body is not None:
+        state["script_urls"].append(url)
     state["script_edges"].extend(
         {"from": url, "to": link, "kind": "html_script", "depth": 0}
         for link in discovered[:max_files]
     )
-    notify("discover",
-           f"Discovered {len(discovered)} external scripts and {len(inline_scripts)} inline script(s)",
-           current=0, total=len(discovered) or 1)
-    notify("download", f"Downloading {len(discovered[:max_files])} script(s)",
-           current=0, total=len(discovered[:max_files]) or 1)
-    # Route the downloader's raw per-file counters through ``notify`` so they
-    # keep the weighted, monotonic percent (and the stage strip) consistent.
-    # The downloader used to call the job callback directly with only
-    # ``current``/``total``; the job then derived percent = current/total, so
-    # the bar jumped to 100% on the last download and snapped back afterwards.
-    downloads = download_js(
-        discovered[:max_files],
-        progress_callback=lambda **kw: notify(
-            "download",
-            kw.get("message") or f"Downloading scripts {kw.get('current', 0)}/{kw.get('total', 1)}",
-            current=kw.get("current"),
-            total=kw.get("total"),
-        ),
-        output_dir=scan_js_dir,
-        timeout=timeout,
-        cancel_check=cancel_check,
-    )
+    if direct_script_body is not None:
+        notify("discover", "Following the target script's module and chunk references",
+               current=0, total=1)
+    else:
+        notify("discover",
+               f"Discovered {len(discovered)} external scripts and {len(inline_scripts)} inline script(s)",
+               current=0, total=len(discovered) or 1)
+    if not discovered:
+        # Nothing to fetch beyond the target itself (a direct .js target, or
+        # an all-inline page): skip the download/normalize stages entirely
+        # instead of announcing "Downloading 0 script(s)".
+        downloads = []
+    else:
+        notify("download", f"Downloading {len(discovered[:max_files])} script(s)",
+               current=0, total=len(discovered[:max_files]) or 1)
+        # Route the downloader's raw per-file counters through ``notify`` so
+        # they keep the weighted, monotonic percent (and the stage strip)
+        # consistent. The downloader used to call the job callback directly
+        # with only ``current``/``total``; the job then derived
+        # percent = current/total, so the bar jumped to 100% on the last
+        # download and snapped back afterwards.
+        downloads = download_js(
+            discovered[:max_files],
+            progress_callback=lambda **kw: notify(
+                "download",
+                kw.get("message") or f"Downloading scripts {kw.get('current', 0)}/{kw.get('total', 1)}",
+                current=kw.get("current"),
+                total=kw.get("total"),
+            ),
+            output_dir=scan_js_dir,
+            timeout=timeout,
+            cancel_check=cancel_check,
+        )
     _check_cancel(cancel_check)
     beautified = []
     if downloads:
@@ -675,7 +732,12 @@ def analyze_url(
     # Seed the first round with inline scripts plus every beautified entry.
     initial_tasks = []
     for index, body in enumerate(inline_scripts):
-        initial_tasks.append((f"inline-{index + 1}.js", url, body, "inline_scan", 1))
+        # A direct .js target keeps its real (URL-derived) name; genuine
+        # inline page scripts get generic names.
+        name = f"inline-{index + 1}.js"
+        if direct_script and index == 0 and body is direct_script_body:
+            name = get_safe_filename(url)
+        initial_tasks.append((name, url, body, "inline_scan", 1))
     for path in beautified:
         current_url = safe_name_to_url.get(os.path.basename(path)) or url
         initial_tasks.append((path, current_url, None, "scan", 1))

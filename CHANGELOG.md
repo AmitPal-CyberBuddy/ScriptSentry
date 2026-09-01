@@ -54,6 +54,41 @@ release yet.
   is no longer collected (nothing consumed it; collecting it made conversion
   ~2.5x slower).
 
+### The hosted page now hands your scan over — and honest setup steps
+- **No more re-entering the scan on the local dashboard.** The hosted page
+  (GitHub Pages) can never call `http://127.0.0.1:8000` — browsers block the
+  mixed-content request. Instead of sending you there empty-handed, the
+  pending analysis now travels **inside the hand-off link** (`#scan=`
+  fragment, which browsers never send to any server): target URL, profile,
+  depth, file cap, workers, pasted code, and even uploaded files (up to a
+  2 MB link budget; larger uploads are named and re-picked on the local
+  page). The engine's dashboard fills the console in and starts the scan
+  automatically once it is paired.
+- **The setup guide no longer claims the local dashboard is "already
+  paired".** It is not: the dashboard asks for the pairing token once, and
+  every setup path now says exactly where that token comes from (printed in
+  the engine's terminal, right under the dashboard address). The guide also
+  states plainly that `scriptsentry.py` and `server.py` start the *same*
+  engine — run one, not both.
+- **The 📋 Copy button copies commands only.** The `#` comment lines shown
+  next to the commands ("# downloads & starts the engine on first run") no
+  longer end up in your terminal.
+- **Hover tooltips no longer clip their first words.** The viewport nudge for
+  the floating `?` tips ran only for click/keyboard opens, so hovering the
+  left-column fields (Profile, Max files) could cut the tip off-screen; hover
+  and focus now nudge it back into view too.
+- **Direct `.js`/`.mjs` targets actually scan.** The URL field suggests
+  `https://example.com/app.js`, but the engine treated every target as an
+  HTML page — a direct script returned an empty "no JavaScript found"
+  report. A direct script target is now downloaded and analyzed itself
+  (bounded to the 2 MB per-file limit), its `import()`/chunk references are
+  followed recursively, and provenance keeps the real URL. A `.js` URL that
+  actually serves HTML (soft 404 wrapper) falls back to normal page
+  discovery, and an unreachable target fails with an actionable error.
+- Suite grown to **267 tests**: hand-off contracts (fragment-only transfer,
+  comment-free copy, token wording) and direct-target scans against a live
+  loopback site.
+
 ### End-to-end review hardening — risk chips, taint precision & transport
 - **Per-file risk chips now match the overall score.** A file's chip comes from
   the same evidence-weighted 0–100 model as the report score

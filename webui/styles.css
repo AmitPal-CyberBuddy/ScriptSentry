@@ -964,6 +964,30 @@ select {
   animation-duration: 1.6s;
 }
 
+/* A scan carried over from the hosted page (via the #scan= hand-off link):
+   confirms that the request was received and is starting automatically. */
+.transfer-note {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.1);
+  color: #6ee7b7;
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.transfer-note.is-warn {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.1);
+  color: #fcd34d;
+}
+
+.transfer-note[hidden] {
+  display: none;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
