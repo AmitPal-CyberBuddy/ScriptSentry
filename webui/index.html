@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ScriptSentry — Privacy-First JavaScript Security Analyzer</title>
+  <meta name="description" content="ScriptSentry is a free, privacy-first JavaScript security analyzer. Paste code, upload files or scan a URL and explore secrets, DOM XSS flows, attack surface, obfuscation and third-party behavior — 100% locally, on your own machine." />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#060a13" />
+  <meta name="referrer" content="no-referrer" />
+
+  <!-- The site root is the address people share and search engines index, so
+       point them at the real overview rather than letting this be a hop with
+       no content of its own. -->
+  <link rel="canonical" href="home/" />
+  <meta http-equiv="refresh" content="0; url=home/" />
+
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #060a13;
+      color: #eaf6ff;
+      font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+      text-align: center;
+      padding: 24px;
+    }
+    main { max-width: 30rem; }
+    h1 { font-size: 1.4rem; margin: 0 0 10px; letter-spacing: -0.01em; }
+    p { color: #93a4bf; font-size: 0.95rem; line-height: 1.6; margin: 0 0 22px; }
+    .links { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+    a {
+      display: inline-block;
+      padding: 11px 18px;
+      border-radius: 12px;
+      border: 1px solid rgba(99, 179, 255, 0.28);
+      background: rgba(10, 17, 34, 0.6);
+      color: #eaf6ff;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+    a.primary { border-color: rgba(34, 211, 238, 0.55); }
+    a:hover, a:focus-visible { border-color: #22d3ee; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ScriptSentry</h1>
+    <!-- Shown only if the redirect does not fire (JS and meta-refresh both
+         disabled); without these links that visitor would see a blank page. -->
+    <p>Taking you to the overview…</p>
+    <div class="links">
+      <a class="primary" href="home/">Overview</a>
+      <a href="tool/">Open the analyzer</a>
+      <a href="changelog/">What's new</a>
+    </div>
+  </main>
+  <script>
+    // Faster and cleaner than waiting on the meta refresh: replace() keeps
+    // the root out of history so Back does not bounce through it.
+    window.location.replace("home/");
+  </script>
+</body>
+</html>

@@ -41,6 +41,35 @@
     return String(window.SCRIPTSENTRY_API_TOKEN || sessionStorage.getItem("scriptsentry_engine_token") || "").trim();
   }
 
+  /* Hosted (GitHub Pages) vs local engine page.
+   *
+   * This distinction is the whole reason the setup dialog exists, and getting
+   * it wrong is what made pairing look broken: a page served over HTTPS from
+   * github.io CANNOT talk to `http://127.0.0.1:8000` at all.  Browsers block
+   * the request as *mixed content* before it ever reaches the engine, so the
+   * pairing token is never even presented — no token, however correct, can
+   * make that fetch succeed.  The honest answer is to send the user to the
+   * dashboard the engine itself serves, where the token is already applied.
+   */
+  function isLocalPage() {
+    return /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|::1)$/.test(window.location.hostname || "");
+  }
+
+  // True when this page is HTTPS but the configured engine is plain HTTP —
+  // the exact combination browsers refuse to connect.
+  function isMixedContentBlocked() {
+    if (window.location.protocol !== "https:") return false;
+    const base = apiBase();
+    if (!base) return false; // same-origin: nothing to block
+    return /^http:\/\//i.test(base);
+  }
+
+  // Where the user should actually be to run a scan.
+  function localDashboardUrl() {
+    const base = apiBase() || "http://127.0.0.1:8000";
+    return base.replace(/\/+$/, "") + "/";
+  }
+
   function authHeaders() {
     const token = apiToken();
     return token ? { "X-ScriptSentry-Token": token } : {};
@@ -73,7 +102,7 @@
 
   function setEngineStatus(state, text) {
     const stateClass = ENGINE_STATE_CLASS[state] || "is-online";
-    const label = text || "Local engine offline — run server.py";
+    const label = text || "Local engine offline — view the setup guide";
     [
       ["#engine-dot", "#engine-status-text"],
       ["#engine-dot-modal", "#engine-status-text-modal"],
@@ -93,6 +122,14 @@
   }
 
   async function checkBackend() {
+    // Don't pretend to "check" something the browser will never let us reach.
+    if (isMixedContentBlocked()) {
+      backendConnected = false;
+      backendChecked = true;
+      setEngineStatus("offline", "Open the engine's own dashboard — this hosted page can't reach it");
+      showHostedHandoff();
+      return false;
+    }
     setEngineStatus("checking", "Checking local engine…");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2500);
@@ -115,7 +152,7 @@
     } catch {
       backendConnected = false;
       backendChecked = true;
-      setEngineStatus("offline", "Local engine offline — run server.py");
+      setEngineStatus("offline", "Local engine offline — view the setup guide");
       return false;
     } finally {
       clearTimeout(timer);
@@ -136,6 +173,8 @@
   function scheduleEnginePoll() {
     stopEnginePoll();
     if (backendConnected) return;
+    // Polling a blocked origin only spams the console with mixed-content errors.
+    if (isMixedContentBlocked()) return;
     enginePollTimer = setInterval(async () => {
       if (document.hidden || backendConnected) return;
       await checkBackend();
@@ -150,11 +189,55 @@
     return ok;
   }
 
+  /* Replace the "paste a token here" promise with the truth when this page
+   * physically cannot reach the engine.  Pairing controls are hidden (they
+   * cannot work) and the engine's own dashboard link takes their place. */
+  function showHostedHandoff() {
+    const aside = $(".modal-col-aside");
+    if (!aside || aside.dataset.handoff === "1") return;
+    aside.dataset.handoff = "1";
+
+    const url = localDashboardUrl();
+    const title = $(".aside-title");
+    if (title) title.textContent = "Open your local dashboard";
+
+    // The pairing field/blurb can't do anything from here — remove the offer.
+    aside.querySelectorAll(".field-label, .token-field, .js-pairing-copy").forEach((el) => {
+      el.hidden = true;
+    });
+
+    const note = document.createElement("div");
+    note.className = "handoff-note";
+    note.innerHTML =
+      `<p class="modal-note" style="margin:0 0 10px">` +
+      `Your browser blocks this <b>https://</b> page from calling the engine at ` +
+      `<code>${escapeHtml(url)}</code> (<b>mixed content</b>). That's a browser rule, ` +
+      `not a token problem — pasting the pairing token here can't fix it.</p>` +
+      `<p class="modal-note" style="margin:0 0 12px">The engine serves the ` +
+      `<b>same dashboard</b> itself, already paired. Use that:</p>` +
+      `<a class="btn" id="open-local-dashboard" href="${escapeHtml(url)}" target="_blank" rel="noopener">` +
+      `🚀 Open ${escapeHtml(url)}</a>`;
+
+    const status = $("#engine-status-aside");
+    if (status) aside.insertBefore(note, status);
+    else aside.appendChild(note);
+
+    // "Retry Connection" would just re-fail; point it at the dashboard too.
+    const retry = $("#retry-backend");
+    if (retry) retry.hidden = true;
+  }
+
   function openPrivacyModal() {
     const modal = $("#privacy-modal");
     if (!modal) return;
     modal.hidden = false;
     document.body.classList.add("modal-open");
+    if (isMixedContentBlocked()) {
+      showHostedHandoff();
+      const link = $("#open-local-dashboard");
+      if (link) setTimeout(() => link.focus({ preventScroll: true }), 40);
+      return;
+    }
     // Focus the least destructive control that is always useful here.
     const target = apiToken() ? $("#retry-backend") : $("#engine-token");
     if (target && typeof target.focus === "function") {
@@ -321,6 +404,40 @@
   }
 
   // Thin progress bar under the sticky header.
+  /* The sticky header sits over the page content, so once the page scrolls it
+   * needs a solid background and a shadow to stay legible against whatever
+   * passes underneath. The translucent blur alone is not enough over bright
+   * cards. A class toggle (not an inline style) keeps it in the stylesheet. */
+  function initStickyHeader() {
+    const header = $("#site-header");
+    if (!header) return;
+    let queued = false;
+    const apply = () => {
+      queued = false;
+      header.classList.toggle("is-stuck", window.scrollY > 8);
+    };
+    window.addEventListener("scroll", () => {
+      if (queued) return;
+      queued = true;
+      window.requestAnimationFrame(apply);
+    }, { passive: true });
+    apply();
+  }
+
+  // The footer "view the setup guide" link should open the dialog that
+  // actually contains the guide, not just scroll near it.
+  function initSetupLinks() {
+    $$(".js-open-setup").forEach((link) => {
+      link.addEventListener("click", (event) => {
+        // Only hijack it on pages that have the dialog; otherwise let the
+        // href do its normal cross-page navigation.
+        if (!$("#privacy-modal")) return;
+        event.preventDefault();
+        openPrivacyModal();
+      });
+    });
+  }
+
   function initScrollProgress() {
     const bar = $("#scroll-progress");
     if (!bar) return;
@@ -412,6 +529,8 @@
     });
 
     initReveal();
+    initStickyHeader();
+    initSetupLinks();
     initScrollProgress();
     initNavSpy();
     initMobileNav();
@@ -1152,10 +1271,15 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     const notes = [];
     const parser = (payload.meta || {}).ast_parser || {};
     if (parser.available === false) {
+      // Say what it *costs*, not just that something is missing: in fallback
+      // mode confidence is capped and some flows are never found, so results
+      // here are a floor rather than a complete picture.
       notes.push(
-        `<b>Reduced-depth analysis:</b> the optional JavaScript parser (<code>${escapeHtml(parser.name || "esprima")}</code>) `
-        + "is not installed, so this scan used the line-based fallback. Install it for full AST taint analysis: "
-        + `<code>${escapeHtml(parser.install_hint || "pip install esprima")}</code>.`,
+        `<b>Reduced-depth analysis — results are incomplete.</b> The JavaScript parser `
+        + `(<code>${escapeHtml(parser.name || "esprima")}</code>) is not installed, so this scan used `
+        + "line-based matching instead of full AST taint tracking. Source-to-sink flows are capped at "
+        + "<b>medium</b> confidence and some are missed entirely. Treat this as a lower bound, then install "
+        + `it and re-scan: <code>${escapeHtml(parser.install_hint || "pip install esprima")}</code>.`,
       );
     }
     const warnings = new Set();
@@ -1529,6 +1653,14 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     potential: "Needs review",
   };
   const OBSERVATION_STATUSES = new Set(["informational", "false_positive"]);
+
+  // The status the *engine* reported, before any local triage override.
+  // Normalised so "potential" (legacy) maps onto the current vocabulary.
+  function getStatusRaw(f) {
+    const raw = String((f && f.status) || "").trim().toLowerCase();
+    if (!raw) return "";
+    return raw === "potential" ? "needs_review" : raw;
+  }
 
   function isObservation(f) {
     if (f.observation) return true;

@@ -1,0 +1,85 @@
+name: 🎯 Wrong finding (false positive / false negative)
+description: ScriptSentry flagged safe code, or missed something real.
+title: "[finding] "
+labels: ["accuracy"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Real production bundles are the best test suite there is — a false
+        positive that can be reproduced is a bug that can be fixed.
+
+        ⚠️ **Please paste a minimal snippet, not your real source.** Redact
+        anything sensitive: real tokens, keys, internal hostnames or customer
+        data. A few lines that reproduce the behaviour is ideal.
+
+        🔐 If you have found a vulnerability *in ScriptSentry itself*, do not
+        file it here — use
+        [private reporting](https://github.com/AmitPal-CyberBuddy/ScriptSentry/security/advisories/new).
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What went wrong?
+      options:
+        - False positive — it flagged code that is actually safe
+        - False negative — it missed a real issue
+        - Wrong severity, confidence or status
+    validations:
+      required: true
+
+  - type: textarea
+    id: snippet
+    attributes:
+      label: Snippet that reproduces it
+      description: The smallest piece of JavaScript that triggers the behaviour. Redacted.
+      render: javascript
+      placeholder: |
+        var q = location.hash.substring(1);
+        document.getElementById("out").innerHTML = q;
+    validations:
+      required: true
+
+  - type: textarea
+    id: reported
+    attributes:
+      label: What ScriptSentry reported
+      description: >-
+        The finding type, severity and confidence — or "nothing" for a false
+        negative. Copy the row from the dashboard or the exported report.
+      placeholder: 'DOM injection · HIGH · confidence: medium'
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+      description: And briefly, why — e.g. "the value is sanitized on the line above".
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Engine version
+      description: >-
+        Printed when the engine starts, and shown in the dashboard footer.
+      placeholder: "2.2.0-dev"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: parser
+    attributes:
+      label: Was the AST parser available?
+      description: >-
+        The engine prints this at startup. Without `esprima` it falls back to
+        line-based matching, which caps confidence and misses some flows — so
+        this changes the answer a lot.
+      options:
+        - "AST parser: esprima (full analysis)"
+        - "AST parser: UNAVAILABLE (regex fallback)"
+        - Not sure
+    validations:
+      required: true

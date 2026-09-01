@@ -178,11 +178,24 @@ def install_dependencies(engine_dir: Path) -> None:
                 f"     {sys.executable} -m pip install -r {req}\n",
                 flush=True,
             )
-            print(
-                "   Note: without 'requests' and 'beautifulsoup4', URL scanning is unavailable; "
-                "pasted/uploaded code analysis still works.",
-                flush=True,
-            )
+            # Be specific about what each missing package actually costs.
+            # A generic "some packages failed" line led people to run scans
+            # that silently used the weaker analyzer and then wonder why
+            # findings looked thin.
+            if "esprima" in failed:
+                print(
+                    "   ⚠  'esprima' is missing — this is the AST parser. Without it every scan "
+                    "falls back to line-based matching: source-to-sink flows are reported at "
+                    "'medium' confidence instead of 'high', and some are missed entirely. "
+                    "Installing it is the single biggest accuracy win.",
+                    flush=True,
+                )
+            if {"requests", "beautifulsoup4"} & set(failed):
+                print(
+                    "   Note: without 'requests' and 'beautifulsoup4', URL scanning is unavailable; "
+                    "pasted/uploaded code analysis still works.",
+                    flush=True,
+                )
 
 
 def run_server(engine_dir: Path, server_args) -> None:

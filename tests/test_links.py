@@ -42,19 +42,37 @@ for src in PAGES_SRC.values():
 def resolve(page, target):
     """Map a relative href target to a file under webui/, if it is one.
 
-    Directory-style targets ("home/", "tool/") resolve to the index.html
-    they contain; fragment-only links resolve to the page itself.
+    Every href is resolved *relative to the page that contains it*, exactly
+    as a browser does.  Getting this wrong is what let a whole broken
+    navigation ship: the pages live one directory deep (`home/`, `tool/`,
+    `changelog/`), so a link written as `tool/` inside `home/index.html`
+    resolves to `home/tool/` and 404s.  Treating directory targets as
+    root-relative made those links look fine to the test suite while every
+    one of them was dead in a browser.
+
+    Directory-style targets ("../tool/") resolve to the index.html they
+    contain; fragment-only links resolve to the page itself.
     """
     if not target:
         return page
+    if target.startswith("/"):
+        # Root-relative: independent of the containing page.
+        resolved = target.lstrip("/")
+        if target.endswith("/") or not resolved:
+            resolved += "index.html"
+        return os.path.normpath(resolved)
     if target.endswith("/"):
-        return target + "index.html"
-    if target.startswith(("../", "assets/")):
-        return os.path.normpath(os.path.join(os.path.dirname(page), target))
-    return target
+        target += "index.html"
+    return os.path.normpath(os.path.join(os.path.dirname(page), target))
 
 
 def links(src):
+    """Real <a> elements only.
+
+    Prose that *quotes* markup inside <code> (the changelog documents an old
+    `<a href="raw.githubusercontent.com/…">` bug) is escaped in the source, so
+    matching on the literal `<a ` tag never sees it.
+    """
     return [(m.group(1), m.group(2)) for m in
             re.finditer(r"<a\b[^>]*href=\"([^\"]*)\"[^>]*>(.*?)</a>", src, re.S)]
 
@@ -129,6 +147,169 @@ class LinkTargetTest(unittest.TestCase):
                 if not os.path.isfile(os.path.join(WEBUI, path)):
                     missing.append(f"{page}: {src_attr}")
         self.assertEqual([], missing, "Missing asset files.")
+
+
+class RelativeDepthTest(unittest.TestCase):
+    """The pages live one directory deep, so sibling links need `../`.
+
+    Regression guard for a whole broken navigation: every page linked to its
+    siblings as `tool/` / `changelog/`, which a browser resolves against the
+    *containing* directory (`/home/tool/`, `/tool/changelog/`) and 404s. The
+    suite missed it because its resolver treated those targets as
+    root-relative. These checks assert on the raw href, independently of the
+    resolver, so the two cannot be wrong in the same direction again.
+    """
+
+    SIBLINGS = ("home/", "tool/", "changelog/")
+
+    def test_sibling_page_links_are_parent_relative(self):
+        bad = []
+        for page, src in PAGES_SRC.items():
+            for href, _ in links(src):
+                if href.startswith(("#", "mailto:", "http", "../", "/")):
+                    continue
+                target = href.split("#")[0]
+                if target in self.SIBLINGS:
+                    bad.append(f"{page}: href=\"{href}\" resolves to "
+                               f"{os.path.dirname(page)}/{target} and 404s")
+        self.assertEqual(
+            [], bad,
+            "Sibling page links must be written as ../tool/ etc., because "
+            "each page sits inside its own directory.",
+        )
+
+    def test_every_page_can_reach_every_other_page(self):
+        """Navigation must actually connect the three pages."""
+        for page, src in PAGES_SRC.items():
+            hrefs = {h.split("#")[0] for h, _ in links(src)}
+            here = os.path.dirname(page) + "/"
+            for sibling in self.SIBLINGS:
+                if sibling == here:
+                    continue
+                self.assertIn(
+                    "../" + sibling, hrefs,
+                    f"{page} has no working link to {sibling}",
+                )
+
+
+class SiteRootTest(unittest.TestCase):
+    """The site root must be a real page, not a 404.
+
+    GitHub Pages serves webui/ at https://<user>.github.io/ScriptSentry/, and
+    there was no index.html there -- so the project's own headline URL, the
+    one that gets shared and indexed, returned the 404 page. The three real
+    pages live one directory deep (home/, tool/, changelog/), which is why
+    nothing at the root was noticed.
+
+    server.py routes "/" to the console itself, so this file only affects the
+    hosted site.
+    """
+
+    ROOT = os.path.join(WEBUI, "index.html")
+
+    def test_root_index_exists(self):
+        self.assertTrue(
+            os.path.isfile(self.ROOT),
+            "webui/index.html is missing: the Pages site root would 404.",
+        )
+
+    def test_root_redirects_to_a_real_page(self):
+        with open(self.ROOT, encoding="utf-8") as fh:
+            src = fh.read()
+        # Both paths matter: JS for speed, meta refresh for no-JS visitors.
+        self.assertIn('http-equiv="refresh"', src)
+        self.assertIn("location.replace", src)
+        for target in ("home/", "tool/", "changelog/"):
+            self.assertTrue(
+                os.path.isfile(os.path.join(WEBUI, target, "index.html")),
+                f"root page links to {target}, which does not exist.",
+            )
+
+    def test_root_links_are_relative_to_the_root(self):
+        """The root sits above the page directories, so no ../ and no /prefix."""
+        with open(self.ROOT, encoding="utf-8") as fh:
+            src = fh.read()
+        for href in re.findall(r'href="([^"]+)"', src):
+            if href.startswith(("http", "#")):
+                continue
+            self.assertFalse(
+                href.startswith("../"),
+                f"{href}: the site root has no parent to climb to.",
+            )
+            self.assertFalse(
+                href.startswith("/"),
+                f"{href}: an absolute path breaks under the /ScriptSentry/ "
+                "project prefix.",
+            )
+
+
+class NotFoundPageTest(unittest.TestCase):
+    """The 404 page must be able to rescue a visitor from *any* address.
+
+    GitHub Pages serves 404.html for every missing path, so its links are
+    resolved against wherever the visitor happened to land. Written as plain
+    relative links ("tool/"), a visitor at /ScriptSentry/tool/typo resolved
+    them to /ScriptSentry/tool/tool/ -- the recovery links on the recovery
+    page were themselves 404s, for every URL below the site root.
+
+    A hardcoded root cannot fix it either: the site is at /ScriptSentry/ on
+    Pages but at / under server.py. So the page resolves its own root at
+    runtime, and these tests pin that contract.
+    """
+
+    PAGE = os.path.join(WEBUI, "404.html")
+
+    def setUp(self):
+        with open(self.PAGE, encoding="utf-8") as fh:
+            self.src = fh.read()
+
+    def test_recovery_links_are_rewritten_at_runtime(self):
+        self.assertIn('id="nav-404"', self.src,
+                      "The recovery nav needs an id for the script to find it.")
+        self.assertIn("window.location.pathname", self.src,
+                      "The 404 page must derive the site root from the current "
+                      "path; a fixed prefix breaks either Pages or local.")
+
+    def test_no_hardcoded_project_prefix(self):
+        """/ScriptSentry/ works on Pages and 404s locally, and vice versa."""
+        self.assertNotIn('href="/ScriptSentry/', self.src)
+        self.assertNotIn('href="/home/', self.src)
+        self.assertNotIn('href="/tool/', self.src)
+
+    def test_links_point_at_real_pages(self):
+        for target in ("home/", "tool/", "changelog/"):
+            self.assertIn(f'href="{target}"', self.src)
+            self.assertTrue(
+                os.path.isfile(os.path.join(WEBUI, target, "index.html")),
+                f"404 page links to {target}, which does not exist.",
+            )
+
+    def test_root_resolution_covers_pages_and_local(self):
+        """Mirror of the page's own logic, checked against real scenarios."""
+        pages = ["home", "tool", "changelog"]
+
+        def root_for(path, host):
+            for p in pages:
+                at = path.find("/" + p + "/")
+                if at != -1:
+                    return path[:at + 1]
+            if host.endswith(".github.io"):
+                first = path.split("/")[1] if len(path.split("/")) > 1 else ""
+                if first and first not in pages:
+                    return "/" + first + "/"
+            return "/"
+
+        gh = "amitpal-cyberbuddy.github.io"
+        for path, host, want in [
+            ("/ScriptSentry/typo", gh, "/ScriptSentry/"),
+            ("/ScriptSentry/tool/typo", gh, "/ScriptSentry/"),
+            ("/ScriptSentry/home/old.html", gh, "/ScriptSentry/"),
+            ("/typo", "127.0.0.1", "/"),
+            ("/tool/typo", "127.0.0.1", "/"),
+            ("/changelog/x", "127.0.0.1", "/"),
+        ]:
+            with self.subTest(path=path, host=host):
+                self.assertEqual(want, root_for(path, host))
 
 
 class ExternalLinkTest(unittest.TestCase):

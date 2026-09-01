@@ -1,0 +1,13 @@
+# A blank issue is almost always a worse bug report than a guided one, and
+# security reports must never land in the public tracker at all.
+blank_issues_enabled: false
+contact_links:
+  - name: 🔐 Report a security vulnerability (private)
+    url: https://github.com/AmitPal-CyberBuddy/ScriptSentry/security/advisories/new
+    about: >-
+      Found a way to break ScriptSentry's local-only boundary, bypass the
+      pairing token, or execute code from analyzed input? Report it privately
+      here instead of opening a public issue.
+  - name: 💼 Connect on LinkedIn
+    url: https://www.linkedin.com/in/amitpal-wb/
+    about: For anything that is not a bug report or a feature request.

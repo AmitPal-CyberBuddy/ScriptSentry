@@ -243,10 +243,13 @@ the technical notes behind the design decisions live in [`AUDIT.md`](AUDIT.md).
 ## Getting help
 
 - 🐛 **Found a bug — or a finding that's wrong?** Open an
-  [issue](https://github.com/AmitPal-CyberBuddy/ScriptSentry/issues) or
-  [email me](mailto:amitpal.secure@gmail.com?subject=ScriptSentry%20feedback).
-  For a wrong finding, the most useful thing to send is the snippet plus what
-  the tool reported.
+  [issue](https://github.com/AmitPal-CyberBuddy/ScriptSentry/issues/new/choose)
+  (a free GitHub account is required). For a wrong finding, the most useful
+  thing to send is the snippet plus what the tool reported.
+- 🔐 **Found a vulnerability *in ScriptSentry itself*?** Please don't open a
+  public issue. Use
+  [private vulnerability reporting](https://github.com/AmitPal-CyberBuddy/ScriptSentry/security/advisories/new)
+  so it can be fixed before it is disclosed. See [`SECURITY.md`](SECURITY.md).
 - 💼 **Connect on [LinkedIn](https://www.linkedin.com/in/amitpal-wb/)**.
 - 🐙 **Browse the source** on
   [GitHub](https://github.com/AmitPal-CyberBuddy/ScriptSentry).

@@ -51,11 +51,55 @@
     <p>The site was reorganised and this address is no longer in use.
        Everything is still here — just under cleaner URLs without
        “.html” in them.</p>
-    <nav>
+    <nav id="nav-404">
       <a href="home/">Overview</a>
       <a href="tool/">Open the analyzer</a>
       <a href="changelog/">What's new</a>
     </nav>
   </main>
+
+  <script>
+    /* Rewrite the recovery links to absolute paths from the real site root.
+     *
+     * This one page cannot use plain relative links. GitHub Pages serves
+     * 404.html for *any* missing address, so a visitor hitting
+     * /ScriptSentry/tool/typo would resolve "tool/" against /ScriptSentry/tool/
+     * and land on /ScriptSentry/tool/tool/ -- another 404. The links that
+     * exist to rescue a lost visitor were themselves broken for every URL
+     * below the site root.
+     *
+     * A hardcoded root cannot work either: the site lives at /ScriptSentry/
+     * on Pages but at / when server.py serves it locally. So detect it.
+     */
+    (function () {
+      var PAGES = ["home", "tool", "changelog"];
+      var path = window.location.pathname;
+      var root = "/";
+
+      // Find the deepest known page directory in the current path and treat
+      // everything before it as the site root.
+      for (var i = 0; i < PAGES.length; i++) {
+        var marker = "/" + PAGES[i] + "/";
+        var at = path.indexOf(marker);
+        if (at !== -1) { root = path.slice(0, at + 1); break; }
+      }
+
+      // Not under a known page (e.g. /ScriptSentry/typo). On a project page
+      // the first path segment is the repository name; on a user/apex site
+      // or locally there is no prefix.
+      if (root === "/" && window.location.hostname.endsWith(".github.io")) {
+        var first = path.split("/")[1];
+        if (first && PAGES.indexOf(first) === -1) root = "/" + first + "/";
+      }
+
+      var links = document.querySelectorAll("#nav-404 a");
+      for (var j = 0; j < links.length; j++) {
+        var target = links[j].getAttribute("href");
+        if (target && target.indexOf("/") !== 0 && target.indexOf("://") === -1) {
+          links[j].setAttribute("href", root + target);
+        }
+      }
+    })();
+  </script>
 </body>
 </html>
