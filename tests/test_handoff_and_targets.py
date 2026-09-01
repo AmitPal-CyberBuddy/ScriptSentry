@@ -146,6 +146,15 @@ class HostedHandoffContractTest(unittest.TestCase):
         # browsers do not send to the server.
         self.assertIn("${base}#scan=", APP_JS)
 
+    def test_oversize_transfer_never_fills_inputs_with_undefined(self):
+        # A request that exceeded the link budget arrives without bodies
+        # (tooLarge). The handler must stop before the mode branches, or the
+        # console would end up scanning the literal string "undefined".
+        self.assertRegex(
+            APP_JS,
+            r"maybeRunPendingTransfer[\s\S]{0,400}if \(req\.tooLarge\)",
+        )
+
     def test_copy_buttons_strip_shell_comments(self):
         self.assertIn("filter((line) => !/^\\s*#/.test(line))", APP_JS)
         # Apply the same rule to the actual sample block shipped in the modal.

@@ -830,6 +830,20 @@
     const req = pendingScanTransfer;
     pendingScanTransfer = null;
     try {
+      // An oversized request arrived without its bodies (the link budget was
+      // exceeded). Pre-selecting the right tab is all we can honestly do —
+      // filling the inputs with "undefined" would scan the wrong thing.
+      if (req.tooLarge) {
+        selectInputPane(req.mode === "url" ? "url" : req.mode === "files" ? "files" : "paste");
+        const names = Array.isArray(req.names) && req.names.length
+          ? ` Re-pick: ${req.names.join(", ")}.` : "";
+        showTransferNote(
+          "The hosted page could not fit this request inside the hand-off link (too large). "
+          + "Please enter it again here." + names,
+          true,
+        );
+        return;
+      }
       if (req.mode === "url") {
         selectInputPane("url");
         $("#url-input").value = req.url;
@@ -851,15 +865,6 @@
         await analyzeCode();
       } else if (req.mode === "files") {
         selectInputPane("files");
-        if (req.tooLarge) {
-          const names = (req.names || []).join(", ");
-          showTransferNote(
-            "The hosted page could not carry these files inside the link (too large). "
-            + (names ? `Please pick them again here: ${names}.` : "Please pick them again here."),
-            true,
-          );
-          return;
-        }
         pendingFiles = req.files.map((f) => ({
           name: f.filename,
           size: new Blob([f.code]).size,

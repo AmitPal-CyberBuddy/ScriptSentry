@@ -18,9 +18,13 @@ This is the **free, privacy-first** setup:
    `Local engine offline — run server.py`. Clicking it opens the setup guide.
 3. When they press Analyze / Scan / Export, a **privacy modal** opens with a short setup guide.
 4. They run `python3 server.py --port 8000` locally.
-5. The hosted page connects to `http://127.0.0.1:8000` and the tool runs from the hosted UI.
-6. Copy the pairing token printed by `server.py` into the UI's pairing field. It is kept only in
-   this tab's session storage and is sent in an auth header, never in a URL or report.
+5. An `https://` Pages page cannot call `http://127.0.0.1` (browsers block the mixed-content
+   request), so the modal hands off to the engine's own dashboard at `http://127.0.0.1:8000` —
+   the pending scan travels inside the link (`#scan=` fragment, never sent to any server) and
+   the local console fills the form in and starts the scan.
+6. Paste the pairing token printed by `server.py` when the local dashboard asks for it — once.
+   It is kept only in this tab's session storage and is sent in an auth header, never in a URL
+   or report.
 
 ### Wiring
 - `server.py` serves `/` -> `tool/index.html` so a locally started engine opens
