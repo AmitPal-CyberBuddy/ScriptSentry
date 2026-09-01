@@ -1,0 +1,70 @@
+name: 🐞 Bug report
+description: The tool crashed, would not start, or the interface misbehaved.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a *wrong finding*, please use the "Wrong finding" template instead —
+        it asks for the things needed to fix detection accuracy.
+
+        🔐 For a vulnerability in ScriptSentry itself, use
+        [private reporting](https://github.com/AmitPal-CyberBuddy/ScriptSentry/security/advisories/new),
+        not a public issue.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Include the exact error or console output if there is one. Redact any paths or hostnames you would rather not share.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `python3 scriptsentry.py --port 8000`
+        2. Open http://127.0.0.1:8000
+        3. Paste ... and click Analyze
+        4. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected to happen
+    validations:
+      required: true
+
+  - type: dropdown
+    id: how
+    attributes:
+      label: How are you running it?
+      options:
+        - "scriptsentry.py launcher (one file)"
+        - "Cloned the repo, python3 server.py"
+        - "The hosted GitHub Pages site"
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: OS, Python version and browser
+      placeholder: "Ubuntu 24.04 · Python 3.12 · Firefox 130"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Engine version
+      description: Printed when the engine starts.
+      placeholder: "2.2.0-dev"
+    validations:
+      required: false
