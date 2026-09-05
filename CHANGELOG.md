@@ -11,6 +11,26 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### The interface, recomposed
+
+- **The landing page is an editorial document now, not a stack of cards.**
+  The hero is an asymmetric split — the statement on the left, a static
+  "live signal" instrument card on the right that speaks the report's own
+  language (verdict, severity bars, finding lines). The ten capabilities
+  are a numbered index with hairline dividers instead of ten identical
+  cards; the workflow is one full-width band with oversized numerals; the
+  trust argument is set as type; the setup guide separates the one
+  recommended path from the alternatives.
+- **The analyzer page leads with the product.** The old hero billboard is
+  a slim command strip, so the console sits above the fold; the results
+  header is a proper band with the export cluster attached to it.
+- **A calmer, flatter visual system underneath everything**: darker flat
+  background, surfaces separated by hairlines instead of glows, tighter
+  radii, one ambient light instead of three colored blobs, monospace
+  micro-labels, and color reserved for data (severity, status, charts).
+  All 434 tests — including the responsive-contract suite (grid hygiene,
+  cascade order, touch targets, breakpoints) — pass unchanged.
+
 ### Maintainability: the engine behind the tool
 
 - **The 714-line `server.py` monolith is now a thin bootstrap over an `api/`
