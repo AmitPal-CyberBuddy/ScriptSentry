@@ -1131,7 +1131,17 @@ class TaintAnalyzer:
         statements = [(text[:m.start()].count("\n") + 1, m.group(0).strip())
                       for m in re.finditer(r"[^;\n]+", text) if m.group(0).strip()]
 
+        # A real statement (line- or semicolon-delimited) is never enormous.
+        # What exceeds this bound is data, not code -- a multi-hundred-KB
+        # embedded string (inline base64 source maps, bundled assets) -- and
+        # the per-position expression regexes below cost O(n^2) on such a
+        # non-delimited run: minutes per file. Skipping the monster keeps the
+        # fallback linear with no analytical loss.
+        MAX_STATEMENT_CHARS = 4000
+
         for line_no, statement in statements:
+            if len(statement) > MAX_STATEMENT_CHARS:
+                continue
             # `search` (not `match`) so assignments nested inside an expression
             # are still tracked -- a minified bundle puts several of them on one
             # line.  The lookbehind/lookahead keep member assignments

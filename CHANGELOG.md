@@ -41,6 +41,31 @@ release yet.
   ("Analysis is still running…") in the status pill instead of opening the
   pairing/setup dialog.
 
+### Source maps: analyze the original code behind the bundle
+
+- **Original sources are now analyzed, not just detected.** When a bundle
+  ships `//# sourceMappingURL=...` with embedded `sourcesContent` (inline
+  data URIs or a fetchable `.map`), the engine analyzes those pre-build
+  sources and attributes findings to their real file names
+  (`./src/auth/config.ts`), marked `via: source_map` in findings, exports
+  and the dashboard. Bounded by design: at most 12 sources per bundle
+  (`SCRIPTSENTRY_SOURCES`... `SCRIPTSENTRY_SOURCEMAP_SOURCES`), 400 KB per
+  source, a 3 MB total budget, content-hash dedup against the bundle, and a
+  kill switch (`SCRIPTSENTRY_SOURCEMAP_ANALYSIS=0`). A per-file chip and an
+  engine note show how many originals were analyzed and how many findings
+  they produced; maps without embedded contents are reported honestly.
+- **Two quadratic regexes fixed — minutes became seconds.** A production
+  bundle carrying a large single-line base64 blob (exactly what an inline
+  source map is) used to stall `extract_crypto_material` for *minutes*:
+  `\w+(...)*{`-style patterns made every position of the run scan to
+  end-of-line (O(n²)). The function-definition and service-trace patterns
+  are now bounded (`\w{1,64}`, ≤200-char argument lists), and the taint
+  fallback skips "statements" larger than 4 KB (a multi-hundred-KB
+  non-delimited run is data, not code). A 521 KB inline-map bundle now
+  analyzes in ~2 s instead of 240 s+, and the no-parser test suite dropped
+  from timing out to ~10 s. This was very likely the dominant cost behind
+  long silent analyze stages on production targets.
+
 ### Development infrastructure
 
 - **CI is here.** A GitHub Actions workflow now runs the whole test suite on

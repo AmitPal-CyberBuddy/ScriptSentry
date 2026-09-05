@@ -1158,6 +1158,11 @@ def generate_sarif_report(results, ai_summary=None, metadata=None):
                 "observation": bool(f.get("observation", False)),
             },
         }
+        # Findings recovered from a bundle's source map point at the ORIGINAL
+        # source file; say so explicitly so SARIF consumers can tell them
+        # apart from findings that were found in the shipped bundle itself.
+        if f.get("via"):
+            result["properties"]["via"] = str(f["via"])
         results_out.append(result)
     return json.dumps({
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",

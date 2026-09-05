@@ -961,6 +961,20 @@
     return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
   }
 
+  // Source-map chip text: distinguish "we found a reference" from "we
+  // actually analyzed the original sources embedded in the map" — the latter
+  // is where the accuracy upgrade lives.
+  function sourceMapChipText(sm) {
+    const count = sm.sources?.length || 0;
+    if (sm.analyzed_sources > 0) {
+      return `${count} source(s) · ${sm.analyzed_sources} analyzed · ${sm.sources_findings || 0} finding(s) from originals`;
+    }
+    if (sm.available) {
+      return `${count} source(s) · ${sm.sources_content_count ? "contents found" : "no embedded contents"} · ${sm.analysis_note || ""}`;
+    }
+    return `${count} source(s) · reference unresolved`;
+  }
+
   /* The scan runs as a pipeline (Recon -> Discover -> Download -> Normalize ->
    * Analyze -> Correlate -> Verify -> Report). Showing the stages tells you
    * what the engine is doing; a bare percentage never did. */
@@ -1859,6 +1873,16 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
         + `it and re-scan: <code>${escapeHtml(parser.install_hint || "pip install esprima")}</code>.`,
       );
     }
+    const mappedFiles = (payload.files || []).filter((f) => Number(f.source_map?.analyzed_sources || 0) > 0);
+    if (mappedFiles.length) {
+      const totalSources = mappedFiles.reduce((n, f) => n + Number(f.source_map.analyzed_sources || 0), 0);
+      const mapFindings = mappedFiles.reduce((n, f) => n + Number(f.source_map.sources_findings || 0), 0);
+      notes.push(
+        `<b>🔗 Source maps analyzed.</b> ${totalSources} original source file(s) across ${mappedFiles.length} bundle(s) `
+        + `were recovered from source maps and analyzed; ${mapFindings} finding(s) are attributed to their `
+        + "original pre-build file names (marked with 🔗 in the Findings view).",
+      );
+    }
     const warnings = new Set();
     (payload.files || []).forEach((f) => (f.analysis_warnings || []).forEach((w) => warnings.add(w)));
     warnings.forEach((w) => notes.push(escapeHtml(w)));
@@ -2343,9 +2367,11 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
           const quality = f.analysis_quality ? `<span class="quality-chip quality-${f.analysis_quality}">${escapeHtml(f.analysis_quality)} quality</span>` : "";
           const limits = (f.limitations || []).length
             ? `<br><span style="color:#fbbf24;font-size:11px">⚠ Analysis limit: ${escapeHtml(f.limitations[0])}</span>` : "";
+          const viaMap = f.via === "source_map"
+            ? ` <span title="Found by analyzing the original source code embedded in the bundle's source map" style="color:#60a5fa;font-size:11px">🔗 source map</span>` : "";
           return `<li style="animation-delay:${i * 0.03}s">
             <span class="risk-dot" style="color:${color}"></span>
-            <span><b>${escapeHtml(f.type || f.id || "finding")}</b> · ${escapeHtml(f.severity || "")} · conf ${escapeHtml(CONF_LABEL[f.confidence] || f.confidence || "?")} · ${escapeHtml(f.file || "")}${f.line ? ` · L${f.line}` : ""}<br>
+            <span><b>${escapeHtml(f.type || f.id || "finding")}</b> · ${escapeHtml(f.severity || "")} · conf ${escapeHtml(CONF_LABEL[f.confidence] || f.confidence || "?")} · ${escapeHtml(f.file || "")}${f.line ? ` · L${f.line}` : ""}${viaMap}<br>
             <span style="color:#8ea2c1">${escapeHtml(f.source ? `${f.source} → ` : "")}${escapeHtml(f.sink || (Array.isArray(f.evidence) ? f.evidence.join(" ") : f.evidence) || "")}</span>
             ${quality}${limits}
             <button class="status-chip status-${st}" data-key="${encodeURIComponent(findingKey(f))}" title="Click to cycle triage status">${escapeHtml(STATUS_LABEL[st] || st)}</button></span>
@@ -2790,7 +2816,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       ["Transport", file.transport, "#38bdf8"],
       ["Methods", file.methods, "#fb7185"],
       ["Risk Signals", (file.signals || []).map((s) => s.title), "#ff4d6d"],
-      ["Source Map", file.source_map && file.source_map.present ? [`${file.source_map.sources?.length || 0} source(s) · ${file.source_map.available ? "metadata loaded" : "reference unresolved"}`] : [], "#60a5fa"],
+      ["Source Map", file.source_map && file.source_map.present ? [sourceMapChipText(file.source_map)] : [], "#60a5fa"],
       ["Analyzer Warnings", file.analysis_warnings || [], "#fbbf24"],
     ]
       .filter(([, items]) => items && items.length)

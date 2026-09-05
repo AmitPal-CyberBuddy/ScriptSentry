@@ -297,7 +297,12 @@ def extract_crypto_material(content, filename="inline.js"):
     # =========================================
     funcs = []
 
-    for match in re.finditer(r'\w+\(.*?\)\s*{', content):
+    # The argument list is bounded: an unbounded lazy wildcard here made
+    # every position of a long single-line run (minified bundles routinely
+    # carry multi-hundred-KB inline base64 source maps / data URIs) scan to
+    # end-of-line looking for ')' -- O(n^2), minutes per file. Function
+    # definitions with >200-char argument lists do not exist in practice.
+    for match in re.finditer(r'\w{1,64}\([^)\n]{0,200}\)\s*{', content):
         snip = content[match.start():match.start()+400]
 
         if any(k in snip.lower() for k in ["encrypt", "decrypt"]):
@@ -353,8 +358,11 @@ def extract_crypto_material(content, filename="inline.js"):
     # =========================================
     # 🔥 SERVICE TRACE
     # =========================================
+    # \w{1,64}, not \w+: the greedy form backtracks once per character of a
+    # failed run, so a long single-line base64 blob (inline source maps, data
+    # URIs) costs O(n^2) -- minutes per bundle. Real service names are short.
     crypto_calls = re.findall(
-        r'(\w+)\.(encryptData|decryptedData|decryptData)',
+        r'(\w{1,64})\.(encryptData|decryptedData|decryptData)',
         content
     )
 

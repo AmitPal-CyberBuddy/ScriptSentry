@@ -19,7 +19,7 @@ from core.crypto import extract_crypto_material
 from core.discovery import extract_inline_scripts, extract_js, extract_page_assets
 from core.downloader import download_js, get_safe_filename
 from core.url_policy import read_response_text, safe_get, validate_public_url
-from core.source_maps import inspect_source_map
+from core.source_maps import load_source_map
 from core.runtime_evidence import attach_runtime_evidence, capture_runtime_evidence, runtime_evidence_enabled
 from core.pipeline import ProgressModel, stage_plan
 from core.js_parser import clear_parse_cache
@@ -45,6 +45,115 @@ def _check_cancel(cancel_check):
         raise ScanCancelled("Scan cancelled by user")
 
 
+# Source-map expansion: how much of a map's embedded original code we are
+# willing to analyze per document. Original sources are usually small, but a
+# hostile/oversized map must not triple the scan cost silently. All knobs are
+# environment-tunable and the whole feature has a kill switch.
+SOURCEMAP_MAX_SOURCES = 12       # per bundle
+SOURCEMAP_MAX_SOURCE_CHARS = 400_000   # per source file
+SOURCEMAP_TOTAL_CHAR_BUDGET = 3_000_000
+SOURCEMAP_MAX_MERGED_FINDINGS = 40     # per bundle
+
+
+def _sourcemap_analysis_enabled():
+    return os.environ.get("SCRIPTSENTRY_SOURCEMAP_ANALYSIS", "1").strip().lower() not in ("0", "false", "no")
+
+
+def _sourcemap_source_cap():
+    try:
+        return max(0, min(int(os.environ.get("SCRIPTSENTRY_SOURCEMAP_SOURCES", SOURCEMAP_MAX_SOURCES)), 50))
+    except (TypeError, ValueError):
+        return SOURCEMAP_MAX_SOURCES
+
+
+def _expand_source_map_sources(data, map_metadata, contents, source_url, cancel_check=None,
+                               progress_heartbeat=None):
+    """Analyze a bundle's embedded original sources and merge the evidence.
+
+    Original source analysis upgrades exactly what minification destroys:
+    findings keep the real file names (``src/auth/config.ts``), and taint /
+    secret evidence comes from code that was never mangled. Source findings
+    are appended to the bundle's unified finding list, tagged ``via`` so the
+    UI and exports can show where each one really lives; per-source records
+    land in ``data["source_map"]["sources_analyzed"]``.
+
+    Bounded by design: at most ``SOURCEMAP_MAX_SOURCES`` sources, each under
+    ``SOURCEMAP_MAX_SOURCE_CHARS``, within a total character budget, with
+    content-hash dedup against the bundle itself.
+    """
+    if not contents:
+        return
+    if not map_metadata.get("sources_content_count"):
+        map_metadata["analysis_note"] = "Map lists sources but embeds no contents (sourcesContent empty)."
+        return
+    if not _sourcemap_analysis_enabled():
+        map_metadata["analysis_note"] = "Source-map analysis disabled (SCRIPTSENTRY_SOURCEMAP_ANALYSIS=0)."
+        return
+
+    parent_hash = data.get("content_sha256", "")
+    seen_hashes = {parent_hash} if parent_hash else set()
+    budget = SOURCEMAP_TOTAL_CHAR_BUDGET
+    cap = _sourcemap_source_cap()
+    origin = str(source_url or data.get("url") or "")
+    origin_label = f"{origin} (via source map)" if origin else "via source map"
+
+    analyzed = []
+    skip_reasons = []
+    merged_findings = 0
+
+    for display_name, source_text in contents:
+        if len(analyzed) >= cap or merged_findings >= SOURCEMAP_MAX_MERGED_FINDINGS:
+            skip_reasons.append("source_cap_reached")
+            break
+        if progress_heartbeat is not None:
+            progress_heartbeat(f"source map: {os.path.basename(display_name)}")
+        _check_cancel(cancel_check)
+        if len(source_text) > SOURCEMAP_MAX_SOURCE_CHARS:
+            skip_reasons.append(f"oversized_source:{display_name}")
+            continue
+        digest = hashlib.sha256(source_text.encode("utf-8", errors="ignore")).hexdigest()
+        if digest in seen_hashes:
+            skip_reasons.append(f"duplicate_source:{display_name}")
+            continue
+        if budget - len(source_text) < 0:
+            skip_reasons.append("analysis_budget_exhausted")
+            break
+        budget -= len(source_text)
+        seen_hashes.add(digest)
+
+        source_data = scan_file(display_name, content=source_text, cancel_check=cancel_check)
+        source_data.pop("source_map", None)
+        severity_counts = {}
+        for finding in source_data.get("findings", []):
+            severity = str(finding.get("severity") or "MEDIUM").upper()
+            severity_counts[severity] = severity_counts.get(severity, 0) + 1
+        analyzed.append({
+            "name": display_name,
+            "bytes": len(source_text),
+            "findings": len(source_data.get("findings", []) or []),
+            "credible_secrets": len(source_data.get("credible_secrets", []) or []),
+            "severities": severity_counts,
+            "score": source_data.get("score", 0),
+        })
+
+        for finding in source_data.get("findings", []) or []:
+            if merged_findings >= SOURCEMAP_MAX_MERGED_FINDINGS:
+                break
+            record = dict(finding)
+            record["file"] = display_name
+            record["origin"] = origin_label
+            record["via"] = "source_map"
+            data["findings"].append(record)
+            merged_findings += 1
+
+    data["findings"] = data["findings"][:80 + SOURCEMAP_MAX_MERGED_FINDINGS]
+    map_metadata["sources_analyzed"] = analyzed
+    map_metadata["analyzed_sources"] = len(analyzed)
+    map_metadata["sources_findings"] = sum(entry["findings"] for entry in analyzed)
+    if skip_reasons:
+        map_metadata["analysis_skipped"] = skip_reasons[:20]
+
+
 def _scan_document(path, content, source_url="", cancel_check=None, progress_heartbeat=None):
     """Run all analyzers for one document and retain provenance.
 
@@ -55,15 +164,22 @@ def _scan_document(path, content, source_url="", cancel_check=None, progress_hea
     content = content or ""
     data = scan_file(path, content=content, cancel_check=cancel_check,
                      progress_heartbeat=progress_heartbeat)
+    data["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+    data["url"] = str(source_url or "")
     if data.get("source_map", {}).get("present"):
         try:
-            data["source_map"] = inspect_source_map(content, source_url, timeout=10)
+            map_metadata, map_contents = load_source_map(content, base_url=source_url, timeout=10)
+            data["source_map"] = map_metadata
+            if map_contents:
+                _expand_source_map_sources(
+                    data, map_metadata, map_contents, source_url,
+                    cancel_check=cancel_check, progress_heartbeat=progress_heartbeat)
+        except ScanCancelled:
+            raise
         except Exception as exc:
             data.setdefault("analysis_warnings", []).append(f"source_map: {exc}")
     crypto = extract_crypto_material(content, filename=os.path.basename(path))
     data.update(crypto)
-    data["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
-    data["url"] = str(source_url or "")
     data.setdefault("analysis_warnings", [])
     return data
 

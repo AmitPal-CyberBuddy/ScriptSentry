@@ -27,6 +27,11 @@ opinions.
 
 *The biggest accuracy levers for minified production bundles, in order.*
 
+- [x] **Source-map ingestion**: when a bundle references `.map`, analyze the
+  *original* sources — real names in reports, unmangled taint flows,
+  `via: source_map` attribution in findings/exports/UI. (Two quadratic
+  regexes surfaced by this work — crypto extractor + taint fallback on
+  large single-line base64 blobs — were fixed on the way: minutes → ~2s.)
 - [ ] **Modern parser**: add tree-sitter (+ JavaScript/TS grammars) as the
   primary AST source, keeping esprima as a fallback. Esprima predates
   optional chaining, nullish coalescing and class fields, so modern bundles
