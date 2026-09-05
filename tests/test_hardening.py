@@ -1,6 +1,7 @@
 import json
 import os
 import socket
+from unittest import mock
 import threading
 import time
 import unittest
@@ -16,6 +17,15 @@ from core.url_policy import (
 
 
 class URLPolicyTest(unittest.TestCase):
+    def setUp(self):
+        # These tests verify the SSRF guard itself. CI (and loopback pipeline
+        # tests) may set SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS=1 process-wide;
+        # the guard tests must pin the override OFF regardless of that.
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS", None)
+
     def test_rejects_private_and_credential_urls(self):
         for url in (
             "http://127.0.0.1:8000/",
@@ -143,6 +153,15 @@ class JobLifecycleTest(unittest.TestCase):
 
 
 class APISecuritySmokeTest(unittest.TestCase):
+    def setUp(self):
+        # The smoke test below asserts a loopback URL is REJECTED at the API
+        # boundary; pin the SSRF override off so the check runs even when the
+        # process-wide env (CI, loopback pipeline tests) relaxes it.
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS", None)
+
     @classmethod
     def setUpClass(cls):
         import server

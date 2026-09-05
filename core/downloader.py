@@ -7,6 +7,11 @@ from urllib.parse import urlparse, unquote
 from config import FILE_RULES, JS_DIR, REQUEST_HEADERS
 from core.url_policy import read_response_text, safe_get
 
+# Crawl politeness lives in core.url_policy.safe_get -- the single choke
+# point for every fetch (pages, scripts, source maps) -- so the download
+# stage inherits it without a second limiter here.
+from core.url_policy import crawl_delay_seconds  # noqa: F401  (public re-export)
+
 
 def get_safe_filename(url):
     """Return a collision-free, URL-unique filename for a script asset."""

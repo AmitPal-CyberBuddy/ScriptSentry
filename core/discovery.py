@@ -6,7 +6,7 @@ page's ``fetch('/api/...')`` strings from turning the analyzer into a generic
 web crawler.
 """
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 try:
     from bs4 import BeautifulSoup
@@ -93,6 +93,67 @@ def extract_page_assets(url, timeout=15, cancel_check=None):
         "page_bytes": len(html.encode("utf-8", errors="ignore")),
         "inline_count": len(inline),
     }
+
+
+# ---------------------------------------------------------------------------
+# Sitemap / robots.txt discovery: entry pages a site *declares*, which often
+# lead to lazy chunks the landing page never references. Strictly bounded --
+# a sitemap is a hint list, not a crawl order.
+# ---------------------------------------------------------------------------
+
+MAX_SITEMAP_PAGES = 10
+MAX_SITEMAP_URLS = 200
+_SITEMAP_LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.I)
+
+
+def sitemap_pages(base_url, timeout=15, cancel_check=None):
+    """Page URLs declared by robots.txt / sitemap.xml for ``base_url``.
+
+    Returns ``(pages, metadata)``: at most ``MAX_SITEMAP_PAGES`` same-origin
+    page URLs (never .js assets -- those are followed as scripts anyway), and
+    a small metadata dict for the report ("sitemap: 3 page(s) via
+    robots.txt"). Failures are normal (404, blocked): they yield no pages.
+    """
+    parsed = urlparse(base_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    metadata = {"sitemap_found": False, "sitemap_source": "", "sitemap_pages": 0}
+    urls = []
+
+    robots = fetch_url(urljoin(origin, "/robots.txt"), timeout=timeout, cancel_check=cancel_check)
+    sitemap_urls = []
+    for line in robots.splitlines():
+        line = line.strip()
+        if line.lower().startswith("sitemap:"):
+            sitemap_urls.append(line.split(":", 1)[1].strip())
+            metadata["sitemap_found"] = True
+            metadata["sitemap_source"] = "robots.txt"
+
+    sitemap_urls.append(urljoin(origin, "/sitemap.xml"))
+    for sitemap_url in sitemap_urls[:3]:
+        body = fetch_url(sitemap_url, timeout=timeout, cancel_check=cancel_check)
+        if not body or "<loc>" not in body.lower():
+            continue
+        metadata["sitemap_found"] = True
+        if not metadata["sitemap_source"]:
+            metadata["sitemap_source"] = "sitemap.xml"
+        for match in _SITEMAP_LOC_RE.findall(body)[:MAX_SITEMAP_URLS]:
+            loc = match.strip()
+            if not loc:
+                continue
+            candidate = urlparse(urljoin(sitemap_url, loc))
+            if candidate.netloc != parsed.netloc:
+                continue
+            if candidate.path.lower().endswith((".js", ".mjs", ".css", ".xml",
+                                                ".png", ".jpg", ".jpeg", ".gif",
+                                                ".svg", ".webp", ".ico", ".pdf",
+                                                ".woff", ".woff2", ".ttf")):
+                continue
+            if loc not in urls:
+                urls.append(loc)
+
+    pages = urls[:MAX_SITEMAP_PAGES]
+    metadata["sitemap_pages"] = len(pages)
+    return pages, metadata
 
 
 def extract_inline_scripts(url, limit=80):

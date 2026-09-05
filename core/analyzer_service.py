@@ -19,6 +19,7 @@ from config import BEAUTIFY_DIR, FILE_RULES, JS_DIR, SCAN_MAX_WORKERS
 from core.beautifier import beautify
 from core.crypto import extract_crypto_material
 from core.discovery import extract_inline_scripts, extract_js, extract_page_assets
+from core.discovery import sitemap_pages
 from core.downloader import download_js, get_safe_filename
 from core.url_policy import read_response_text, safe_get, validate_public_url
 from core.source_maps import load_source_map
@@ -826,6 +827,26 @@ def analyze_url(
     # while discovery itself reuses its bounded page fetch cache.
     if extract_js is _DISCOVERY_EXTRACT_JS and extract_inline_scripts is _DISCOVERY_EXTRACT_INLINE:
         js_links, inline_scripts, page_metadata = extract_page_assets(url, timeout=timeout, cancel_check=cancel_check)
+        # Deeper discovery: pages the site declares in robots.txt/sitemap.xml
+        # often lead to lazy chunks the landing page never references.
+        # Strictly bounded (SCRIPTSENTRY_SITEMAP_DISCOVERY=0 disables).
+        if os.environ.get("SCRIPTSENTRY_SITEMAP_DISCOVERY", "1").strip().lower() not in ("0", "false", "no", "off"):
+            extra_pages, sitemap_meta = sitemap_pages(url, timeout=timeout, cancel_check=cancel_check)
+            page_metadata["sitemap"] = sitemap_meta
+            for page_url in extra_pages:
+                _check_cancel(cancel_check)
+                page_scripts, page_inline, _page_meta = extract_page_assets(
+                    page_url, timeout=timeout, cancel_check=cancel_check)
+                for script in page_scripts:
+                    if script not in js_links:
+                        js_links.append(script)
+                state["script_edges"].extend(
+                    {"from": page_url, "to": script, "kind": "sitemap_page", "depth": 0}
+                    for script in page_scripts[:10])
+                # A sitemap page's inline scripts are analyzed like the entry
+                # page's, but bounded so a huge sitemap cannot explode work.
+                if len(inline_scripts) < 12:
+                    inline_scripts.extend(page_inline[: 12 - len(inline_scripts)])
     else:
         # Backward-compatible seam for embedders/tests that provide their own
         # page discovery implementation.

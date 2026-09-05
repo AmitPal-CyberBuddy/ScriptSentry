@@ -82,11 +82,12 @@ opinions.
   completed dashboard scan with stable per-finding fingerprints and the
   dashboard answers "3 new, 2 resolved since your last scan" (plus a
   history panel that re-renders past reports).
-- [ ] Deeper discovery: sitemap.xml/robots.txt, SPA hash-route hints, and an
-  API-surface map (optional OpenAPI-shaped export) built from the endpoint
-  inventory the engine already extracts.
-- [ ] Crawl politeness: optional per-host rate limiting for the download
-  stage (good citizenship for scanning sites you own).
+- [x] Deeper discovery: robots.txt/`Sitemap:`/sitemap.xml pages feed recon
+  (bounded to 10 same-origin pages, kill switch
+  `SCRIPTSENTRY_SITEMAP_DISCOVERY=0`); the endpoint inventory now exports
+  as an OpenAPI 3.1 document (`🧭 API map` / `--format openapi`).
+- [x] Crawl politeness: `SCRIPTSENTRY_CRAWL_DELAY_MS` enforces a per-host
+  minimum interval at the single fetch choke point (`safe_get`).
 - [ ] Local LLM flexibility: accept any OpenAI-compatible endpoint (LM
   Studio, llama.cpp) alongside Ollama.
 - [ ] Packaging: `pyproject.toml` (pipx-installable) + a Dockerfile with

@@ -94,6 +94,33 @@ release yet.
   been empty since it shipped. Fixed, with a regression test; findings now
   carry their validation verdict per candidate.
 
+### Deeper discovery & a politer crawler
+
+- **Sitemap/robots.txt discovery.** Recon now reads `robots.txt` for
+  `Sitemap:` lines and `/sitemap.xml`, and follows up to 10 declared
+  same-origin *pages* (never assets or cross-origin URLs) through the same
+  script extraction as the landing page — lazy chunks that only a sitemap
+  page loads are analyzed too, and the report notes where they came from.
+  `SCRIPTSENTRY_SITEMAP_DISCOVERY=0` disables it.
+- **OpenAPI-shaped API-surface export.** The endpoint inventory the engine
+  already extracts now exports as an OpenAPI 3.1 document (`🧭 API map`
+  button in the dashboard, `--format openapi` on the CLI, written as
+  `api-surface.openapi.json` with `--format all`): real paths, methods,
+  query parameters and header/auth hints, with websockets/SSE/GraphQL under
+  `x-` extensions. It is explicitly an *observation* export — descriptions
+  say the operations were seen in shipped JavaScript, not documented.
+- **Crawl politeness.** `SCRIPTSENTRY_CRAWL_DELAY_MS=<ms>` serializes every
+  network request per host (pages, scripts, source maps — one choke point
+  in `safe_get`), for scanning sites you own without bursting. Default off.
+
+### Test-suite guard fix
+
+- The SSRF guard tests (`tests/test_hardening.py`) now pin
+  `SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS` off for themselves, so the whole
+  suite passes whether or not the process-wide override (which CI sets for
+  the loopback pipeline tests) is present — a latent conflict the sitemap
+  tests flushed out before CI ever ran these commits.
+
 ### Scan history: "3 new, 2 resolved since your last scan"
 
 - **Local scan history with cross-scan diffing.** Every completed dashboard

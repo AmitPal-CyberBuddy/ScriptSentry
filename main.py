@@ -31,6 +31,13 @@ def _save(path, content):
         handle.write(content)
 
 
+def save_openapi(results, metadata=None):
+    from core.reporter import generate_openapi_report
+    path = os.path.join(OUTPUT_DIR, "api-surface.openapi.json")
+    _save(path, generate_openapi_report(results, metadata=metadata))
+    print(f"  OpenAPI surface: {path}")
+
+
 def save_json(results, ai_summary=None, metadata=None):
     payload = {
         "metadata": metadata or {},
@@ -89,6 +96,8 @@ def run(urls, max_depth=5, timeout=15, profile=DEFAULT_PROFILE, output_formats=N
         _save(os.path.join(OUTPUT_DIR, "report.txt"), generate_report(results, ai_summary=ai_summary, metadata=metadata))
     if "all" in formats or "json" in formats:
         save_json(results, ai_summary=ai_summary, metadata=metadata)
+    if "all" in formats or "openapi" in formats:
+        save_openapi(results, metadata=metadata)
     if "all" in formats or "html" in formats:
         _save(os.path.join(OUTPUT_DIR, "report.html"), generate_html_report(results, ai_summary=ai_summary, metadata=metadata))
     if "all" in formats or "csv" in formats:

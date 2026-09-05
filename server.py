@@ -44,6 +44,7 @@ from core.runtime_evidence import playwright_available, runtime_evidence_enabled
 from core.url_policy import validate_public_url
 from core.version import ENGINE_NAME, RELEASE_STATUS, __version__ as ENGINE_VERSION, is_dev_build
 from core.reporter import (
+    generate_openapi_report,
     build_dashboard_payload,
     generate_csv_report,
     generate_html_report,
@@ -387,8 +388,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     k, v = part.split("=", 1)
                     query[k] = v
         report_format = query.get("format", "html").lower()
-        if report_format not in {"html", "txt", "csv", "sarif"}:
-            self._send_error_json("format must be html, txt, csv, or sarif", 400)
+        if report_format not in {"html", "txt", "csv", "sarif", "openapi"}:
+            self._send_error_json("format must be html, txt, csv, sarif, or openapi", 400)
             return
         try:
             job_id = str(body.get("job_id", "")).strip()
@@ -447,6 +448,19 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/sarif+json; charset=utf-8")
             self.send_header("Content-Disposition", "attachment; filename=scriptsentry-report.sarif")
+            self.send_header("Content-Length", str(len(data)))
+            self._send_cors_headers()
+            self.send_header("Access-Control-Allow-Private-Network", "true")
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+        if report_format == "openapi":
+            text = generate_openapi_report(results, metadata=metadata)
+            data = text.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Disposition", 'attachment; filename="scriptsentry-api-surface.openapi.json"')
             self.send_header("Content-Length", str(len(data)))
             self._send_cors_headers()
             self.send_header("Access-Control-Allow-Private-Network", "true")

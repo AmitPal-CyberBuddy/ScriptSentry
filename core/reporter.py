@@ -1,5 +1,8 @@
 import html
+import json
 import os
+from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from core.js_parser import parser_status
 from core.analysis_model import deduplicate_findings, split_findings
@@ -1545,3 +1548,111 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         "history": history_info,
     }
     return payload
+
+
+def generate_openapi_report(results, metadata=None):
+    """Render the discovered API surface as an OpenAPI 3.1 document.
+
+    This is an *inventory*, not a schema: every path/operation was observed
+    in shipped JavaScript (fetch/xhr/axios/websocket/graphql patterns), so
+    descriptions say so and request/response schemas are intentionally
+    absent. The value is a starting point for security review and contract
+    tooling, exported from the same deduplicated attack-surface model the
+    dashboard uses.
+    """
+    model = build_report_model(results, metadata=metadata)
+    surface = model.get("attack_surface") or {}
+    metadata = metadata or {}
+    source = str(metadata.get("source") or "")
+
+    servers = {}
+    paths = {}
+    MAX_PATHS = 300
+
+    def _split_target(raw_url):
+        raw_url = str(raw_url or "").strip()
+        if not raw_url:
+            return "", ""
+        if raw_url.startswith(("http://", "https://", "ws://", "wss://")):
+            parsed = urlparse(raw_url)
+            scheme = {"ws": "http", "wss": "https"}.get(parsed.scheme, parsed.scheme)
+            server = f"{scheme}://{parsed.netloc}" if parsed.netloc else ""
+            path = parsed.path or "/"
+            return server, path
+        path = raw_url.split("?", 1)[0]
+        return "", path if path.startswith("/") else f"/{path}"
+
+    def _operation(endpoint, method):
+        origin = str(endpoint.get("origin") or endpoint.get("script") or "")
+        operation = {
+            "tags": ["discovered"],
+            "summary": f"Discovered {method.upper()} target",
+            "description": (
+                "Observed in shipped JavaScript by static analysis"
+                + (f" ({origin})" if origin else "")
+                + "; not a documented contract."
+            ),
+            "x-internal": bool(endpoint.get("internal")),
+        }
+        params = []
+        for name in (endpoint.get("params") or [])[:20]:
+            params.append({"name": str(name), "in": "query", "required": False,
+                           "schema": {"type": "string"}})
+        if params:
+            operation["parameters"] = params
+        if endpoint.get("body_fields"):
+            operation["x-body-fields"] = list(endpoint["body_fields"])[:20]
+        if endpoint.get("headers"):
+            operation["x-header-hints"] = sorted({str(h) for h in endpoint["headers"]})[:15]
+        if endpoint.get("auth"):
+            operation["x-auth-hints"] = [str(endpoint["auth"])]
+        return operation
+
+    for endpoint in surface.get("endpoints") or []:
+        if len(paths) >= MAX_PATHS:
+            break
+        if not isinstance(endpoint, dict):
+            continue
+        server, path = _split_target(endpoint.get("url"))
+        if not path or path.endswith((".js", ".mjs", ".css", ".png", ".jpg", ".svg", ".woff2")):
+            continue
+        if server:
+            servers.setdefault(server, True)
+        method = str(endpoint.get("method") or "get").lower()
+        if method not in ("get", "post", "put", "patch", "delete", "head", "options"):
+            method = "get"
+        entry = paths.setdefault(path, {})
+        if method not in entry:
+            entry[method] = _operation(endpoint, method)
+
+    document = {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "Discovered API surface" + (f" — {source}" if source else ""),
+            "summary": "Endpoints observed in shipped JavaScript by ScriptSentry static analysis.",
+            "description": (
+                "Generated from the analyzer's endpoint inventory (fetch/XHR/axios/"
+                "beacon patterns, WebSocket and SSE endpoints, GraphQL operations). "
+                "Paths are *observations*, not a documented contract; request and "
+                "response schemas are intentionally omitted."
+            ),
+            "version": ENGINE_VERSION,
+        },
+        "paths": dict(sorted(paths.items())),
+        "x-generated": {
+            "generator": f"ScriptSentry {ENGINE_VERSION}",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "endpoint_count": len(paths),
+        },
+    }
+    if servers:
+        document["servers"] = [{"url": server} for server in sorted(servers)[:20]]
+    if surface.get("websockets"):
+        document["x-websockets"] = [w.get("url") for w in surface["websockets"] if isinstance(w, dict)][:40]
+    if surface.get("sse"):
+        document["x-server-sent-events"] = [s.get("url") for s in surface["sse"] if isinstance(s, dict)][:40]
+    if surface.get("graphql"):
+        document["x-graphql"] = surface["graphql"]
+    if surface.get("auth_hints"):
+        document["x-auth-schemes"] = list({str(h.get("type") or h) for h in surface["auth_hints"] if isinstance(h, dict) or True})[:20]
+    return json.dumps(document, indent=2, ensure_ascii=False, default=str)

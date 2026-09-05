@@ -11,6 +11,7 @@ import ipaddress
 import os
 import socket
 import threading
+import time
 from typing import Iterable, Optional
 from urllib.parse import urljoin, urlparse
 
@@ -168,6 +169,47 @@ def _validate_and_pin(url: str):
     return True, "", tuple(addresses)
 
 
+# ---------------------------------------------------------------------------
+# Crawl politeness: an optional per-host minimum interval between requests.
+# Off by default (SCRIPTSENTRY_CRAWL_DELAY_MS=0). safe_get is the single
+# choke point for every network fetch (pages, scripts, source maps), so the
+# delay applies to the whole crawl, not just the download stage.
+# ---------------------------------------------------------------------------
+
+_DELAY_LOCK = threading.Lock()
+_LAST_REQUEST = {}
+
+
+def crawl_delay_seconds():
+    try:
+        return max(0.0, float(os.environ.get("SCRIPTSENTRY_CRAWL_DELAY_MS", "0")) / 1000.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def politeness_wait(url):
+    """Sleep so this thread's request honors the per-host delay (if any)."""
+    delay = crawl_delay_seconds()
+    if delay <= 0:
+        return
+    try:
+        host = urlparse(str(url)).netloc
+    except Exception:
+        return
+    if not host:
+        return
+    with _DELAY_LOCK:
+        now = time.monotonic()
+        previous = _LAST_REQUEST.get(host, 0.0)
+        wait = previous + delay - now
+        if wait > 0:
+            _LAST_REQUEST[host] = now + wait
+        else:
+            _LAST_REQUEST[host] = now
+    if wait > 0:
+        time.sleep(min(wait, 30.0))
+
+
 def safe_get(url: str, *, timeout=15, headers=None, max_redirects=MAX_REDIRECTS, cancel_check=None, **kwargs):
     """GET a public URL without following an unsafe redirect.
 
@@ -186,6 +228,7 @@ def safe_get(url: str, *, timeout=15, headers=None, max_redirects=MAX_REDIRECTS,
     """
     if requests is None:
         return None
+    politeness_wait(url)
     current = str(url)
     session = requests.Session()
     stop_watch = threading.Event()
