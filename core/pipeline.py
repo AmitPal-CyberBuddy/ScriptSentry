@@ -209,7 +209,7 @@ class ProgressModel:
         # Everything already finished keeps its banked progress.
         for key, frac in self._stage_fraction.items():
             if key != self.stage and key in self._weights:
-                done = max(done, 0.0)
+                done = max(done, frac * self._weights[key])
         fraction = max(0.0, min(1.0, done / self._total_weight))
         self._fraction = max(self._fraction, fraction)
 

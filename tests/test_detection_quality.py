@@ -10,6 +10,7 @@ These cover the accuracy work that is easy to regress silently:
   must still catch the canonical source-to-sink patterns.
 """
 
+import contextlib
 import os
 import sys
 import tempfile
@@ -50,10 +51,8 @@ def scan(code):
     try:
         return scan_file(path)
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(path)
-        except OSError:
-            pass
 
 
 def _flow_ids(code):

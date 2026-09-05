@@ -65,3 +65,13 @@ version = { attr = "core.version.__version__" }
     "webui/index.html",
     "webui/404.html",
 ]
+
+[tool.coverage.run]
+source = ["ai", "analyzers", "api", "core", "config", "main", "server"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]

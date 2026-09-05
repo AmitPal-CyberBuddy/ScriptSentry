@@ -7,10 +7,13 @@
 # stdlib-server code needs broad excepts.
 target-version = "py310"
 line-length = 120
-extend-exclude = ["webui", "output"]
+extend-exclude = ["webui", "output", "build"]
 
 [lint]
-select = ["E4", "E7", "E9", "F"]
+# Correctness floor plus the two structural families: bugbear (B) for
+# bug-shaped patterns and flake8-simplify (SIM) for needlessly convoluted
+# control flow. Keep the list pinned; do not rely on ruff defaults.
+select = ["E4", "E7", "E9", "F", "B", "SIM"]
 
 [lint.per-file-ignores]
 # Tests legitimately keep imports at module scope for patching/inspection.

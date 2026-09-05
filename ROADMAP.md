@@ -97,9 +97,9 @@ opinions.
 
 ## Phase 5 — Code health (continuous)
 
-- [ ] Split `server.py` into the planned `api/` package (the docstring
+- [x] Split `server.py` into the planned `api/` package (the docstring
   already sketches it).
-- [ ] Modularize `webui/app.js` (3k+ lines) behind a simple build or ES
+- [x] Modularize `webui/app.js` (3k+ lines) behind a simple build or ES
   modules.
-- [ ] Widen the ruff selection (bugbear, simplicity) and add coverage
+- [x] Widen the ruff selection (bugbear, simplicity) and add coverage
   reporting once Phase 1's gate has bedded in.

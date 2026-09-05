@@ -18,6 +18,7 @@ Design notes:
 * The full raw results of a scan are stored (capped) so a past scan can be
   re-rendered in the dashboard with the same code path as a live one.
 """
+import contextlib
 import hashlib
 import json
 import os
@@ -86,10 +87,8 @@ def _connect():
     path = db_path()
     if conn is not None and getattr(_LOCAL, "conn_path", None) != path:
         # The state dir moved (tests, env change): drop the old handle.
-        try:
+        with contextlib.suppress(Exception):
             conn.close()
-        except Exception:
-            pass
         conn = None
     if conn is not None:
         return conn
@@ -272,7 +271,7 @@ def list_scans(limit=50, target=None):
             for row in cur.fetchall():
                 entry = dict(zip(
                     ("scan_id", "created_at", "target", "mode", "duration_ms",
-                     "files_total", "bytes_total", "findings_total"), row[:8]))
+                     "files_total", "bytes_total", "findings_total"), row[:8], strict=False))
                 try:
                     entry["diff"] = json.loads(row[8] or "null")
                 except Exception:
@@ -301,7 +300,7 @@ def get_scan(scan_id, include_report=False):
                 return None
             entry = dict(zip(
                 ("scan_id", "created_at", "target", "mode", "duration_ms",
-                 "files_total", "bytes_total", "findings_total"), row[:8]))
+                 "files_total", "bytes_total", "findings_total"), row[:8], strict=False))
             try:
                 entry["diff"] = json.loads(row[8] or "null")
             except Exception:

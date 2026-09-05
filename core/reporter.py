@@ -312,7 +312,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
                     "origin": f.get("origin") or norm["origin"],
                 })
         asrf = norm.get("attack_surface", {}) or {}
-        for key in all_attack_surface.keys():
+        for key in all_attack_surface:
             all_attack_surface[key].extend(asrf.get(key, []) or [])
 
     # Runtime evidence is global (not tied to one downloaded file). It enters
@@ -1104,7 +1104,7 @@ def generate_sarif_report(results, ai_summary=None, metadata=None):
     findings = _all_unified_findings(model)
     rules_map = {}
     results_out = []
-    for i, f in enumerate(findings, 1):
+    for f in findings:
         rule_id = str(f.get("id") or f.get("type") or "unknown")
         if rule_id not in rules_map:
             rules_map[rule_id] = {
@@ -1385,7 +1385,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         diag["script_intel"] = intel_match or {}
         files.append(diag)
         overall += diag["score"]
-        for key, label, color, icon in category_meta:
+        for key, *_ in category_meta:
             totals[key] = totals.get(key, 0) + diag["counts"].get(key, 0)
         flow_count += len(diag["crypto_flows"])
         for finding in diag["findings"]:
@@ -1472,7 +1472,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
     priorities = top_priorities(all_findings, script_inventory, limit=6)
 
     radar_values = []
-    for key, label, color, icon in category_meta:
+    for key, *_ in category_meta:
         radar_values.append(min(100, (totals.get(key, 0) * 18)))
     radar_categories = [label for _, label, _, _ in category_meta]
     donut_labels = [label for key, label, _, _ in category_meta if totals.get(key, 0)]

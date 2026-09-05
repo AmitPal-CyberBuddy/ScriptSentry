@@ -271,7 +271,7 @@ class _Converter:
 
 def _build_variable_declaration(node, conv, depth):
     kind_text = "var"
-    for field_name, child in conv._fields(node):
+    for _, child in conv._fields(node):
         if child.type in ("var", "let", "const", "declaration"):
             kind_text = _text(child) or kind_text
             break
@@ -745,7 +745,7 @@ def _build_catch(node, conv, depth):
 def _build_import(node, conv, depth):
     source_literal = None
     specifiers = []
-    for field_name, child in conv._fields(node):
+    for _, child in conv._fields(node):
         if child.type == "string":
             source_literal = conv.convert(child, depth + 1)
         elif child.type == "import_specifier":

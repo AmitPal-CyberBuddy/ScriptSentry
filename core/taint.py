@@ -652,7 +652,7 @@ class TaintAnalyzer:
             for arg in args:
                 candidate = self._taint_of_expr(arg)
                 if candidate:
-                    taint = candidate if taint is None else (taint.copy() if not taint else taint)
+                    taint = candidate if taint is None else (taint or taint.copy())
                     if candidate is not taint:
                         taint.merge(candidate)
             if not taint or not taint.sources:
@@ -1194,7 +1194,7 @@ class TaintAnalyzer:
         # fallback linear with no analytical loss.
         MAX_STATEMENT_CHARS = 4000
 
-        for line_no, statement in statements:
+        for _, statement in statements:
             if len(statement) > MAX_STATEMENT_CHARS:
                 continue
             # `search` (not `match`) so assignments nested inside an expression

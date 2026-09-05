@@ -55,8 +55,12 @@ class ReleaseMetadataTest(unittest.TestCase):
 
     def test_no_hardcoded_old_version_in_server(self):
         server_src = (ROOT / "server.py").read_text(encoding="utf-8")
+        handler_src = (ROOT / "api" / "handlers.py").read_text(encoding="utf-8")
         self.assertNotIn('"version": "2.1"', server_src)
-        self.assertIn("ENGINE_VERSION", server_src)
+        self.assertNotIn('"version": "2.1"', handler_src)
+        # The handler's Server header is built from the real version, which
+        # lives in core.version (imported under its engine alias).
+        self.assertIn("_engine_version", handler_src)
 
 
 if __name__ == "__main__":

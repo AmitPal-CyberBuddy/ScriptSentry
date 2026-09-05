@@ -1,4 +1,5 @@
 """High-level analysis orchestration used by the CLI and the Web dashboard."""
+import contextlib
 import hashlib
 import os
 import re
@@ -240,10 +241,9 @@ def _analyze_document_worker(path, content, source_url="", heartbeat_queue=None,
         name = os.path.basename(path) if path else "inline script"
 
         def heartbeat(detail, _phase=phase, _name=name, _q=heartbeat_queue):
-            try:
+            # A dead heartbeat queue must never take the scan down with it.
+            with contextlib.suppress(Exception):
                 _q.put((_phase, _name, str(detail)))
-            except Exception:
-                pass
 
     data = _scan_document_cpu(path, content, source_url=source_url,
                               cancel_check=None, progress_heartbeat=heartbeat)
@@ -424,11 +424,8 @@ def _is_followable_ref(ref):
     ref = str(ref or "").strip().split("?")[0].split("#")[0]
     if not ref:
         return False
-    if re.search(r"\.(?:js|mjs)$", ref):
-        return True
-    if "chunk-" in ref or "/static/js/" in ref or "assets/" in ref:
-        return True
-    return False
+    return bool(re.search(r"\.(?:js|mjs)$", ref)
+                or "chunk-" in ref or "/static/js/" in ref or "assets/" in ref)
 
 
 def extract_script_refs(content):
@@ -592,10 +589,9 @@ def _walk_imports(
 
 def _notify(callback, **kwargs):
     if callback:
-        try:
+        # Listener faults are never the scan's business.
+        with contextlib.suppress(Exception):
             callback(**kwargs)
-        except Exception:
-            pass
 
 
 def _attach_runtime(results, url, timeout=15, max_files=50, progress_callback=None, cancel_check=None, progress=None):
@@ -1188,10 +1184,8 @@ def analyze_url(
             pool.shutdown(wait=False, cancel_futures=True)
             if force:
                 for proc in list(getattr(pool, "_processes", {}).values() or []):
-                    try:
+                    with contextlib.suppress(Exception):
                         proc.terminate()
-                    except Exception:
-                        pass
         except Exception:
             pass
         pool = None
@@ -1227,8 +1221,7 @@ def analyze_url(
                 except ScanCancelled:
                     raise
                 except Exception:
-                    if isinstance(future.exception(), BrokenProcessPool) or isinstance(
-                            future.exception(), PicklingError):
+                    if isinstance(future.exception(), (BrokenProcessPool, PicklingError)):
                         # Pool is unusable -- analyze this document in-process
                         # and let the outer loop fall back to threads.
                         _shutdown_pool(force=True)
@@ -1378,15 +1371,11 @@ def _finish_scan(
     runtime_results["__scan_summary__"] = runtime_summary
     workspace_obj = state.get("workspace_obj")
     if workspace_obj is not None:
-        try:
+        with contextlib.suppress(Exception):
             workspace_obj.cleanup()
-        except Exception:
-            pass
     else:
         workspace = state.get("workspace")
         if workspace:
-            try:
+            with contextlib.suppress(Exception):
                 shutil.rmtree(workspace, ignore_errors=True)
-            except Exception:
-                pass
     return runtime_results

@@ -337,9 +337,9 @@ def build_script_intel(results, runtime_evidence=None, page_url=""):
         for edge in script_edges:
             if not isinstance(edge, dict):
                 continue
-            if canonical(edge.get("to")) == target or _basename(edge.get("to")) == _basename(name):
-                if edge.get("from"):
-                    loaders.append(str(edge["from"]))
+            if (canonical(edge.get("to")) == target or _basename(edge.get("to")) == _basename(name)) \
+                    and edge.get("from"):
+                loaders.append(str(edge["from"]))
         # Entry scripts are loaded by the scanned page; a runtime-only script
         # may be loaded by a page/frame when CDP initiator data is unavailable.
         if not loaders and page_url and (target or name):

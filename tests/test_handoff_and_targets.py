@@ -18,6 +18,7 @@ The engine side had its own broken promise: scanning a direct
 an empty "no JavaScript found" report. A direct script target must be
 analyzed itself, with its module/chunk references followed.
 """
+from pathlib import Path
 import os
 import re
 import shutil
@@ -37,10 +38,10 @@ TOOL_HTML_PATH = os.path.join(WEBUI, "tool", "index.html")
 HOME_HTML_PATH = os.path.join(WEBUI, "home", "index.html")
 STYLES_PATH = os.path.join(WEBUI, "styles.css")
 
-APP_JS = open(APP_JS_PATH, encoding="utf-8").read()
-TOOL_HTML = open(TOOL_HTML_PATH, encoding="utf-8").read()
-HOME_HTML = open(HOME_HTML_PATH, encoding="utf-8").read()
-STYLES = open(STYLES_PATH, encoding="utf-8").read()
+APP_JS = Path(APP_JS_PATH).read_text(encoding="utf-8")
+TOOL_HTML = Path(TOOL_HTML_PATH).read_text(encoding="utf-8")
+HOME_HTML = Path(HOME_HTML_PATH).read_text(encoding="utf-8")
+STYLES = Path(STYLES_PATH).read_text(encoding="utf-8")
 
 
 def _read(path):

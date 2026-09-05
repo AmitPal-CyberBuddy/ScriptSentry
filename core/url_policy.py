@@ -7,6 +7,7 @@ URLs.  This module keeps the crawler's network boundary in one place.
 """
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import os
 import socket
@@ -236,10 +237,8 @@ def safe_get(url: str, *, timeout=15, headers=None, max_redirects=MAX_REDIRECTS,
     def _watch():
         while not stop_watch.wait(0.1):
             if cancel_check and cancel_check():
-                try:
+                with contextlib.suppress(Exception):
                     session.close()
-                except Exception:
-                    pass
                 return
 
     watcher = None
@@ -322,7 +321,5 @@ def read_response_text(response, *, max_bytes=MAX_PAGE_BYTES) -> Optional[str]:
         except Exception:
             return None
     finally:
-        try:
+        with contextlib.suppress(Exception):
             response.close()
-        except Exception:
-            pass

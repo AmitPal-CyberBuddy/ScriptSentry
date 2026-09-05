@@ -68,9 +68,7 @@ def _is_script_ref(ref: str) -> bool:
     # server endpoints, so require an explicit "./" or "../" prefix here.
     if ref.startswith(("./", "../")) and "." not in os.path.basename(no_query):
         return True
-    if any(hint in ref for hint in _BUNDLER_HINTS):
-        return True
-    return False
+    return any(hint in ref for hint in _BUNDLER_HINTS)
 
 
 def _ast_module_refs(content: str) -> List[str]:

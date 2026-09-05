@@ -1,3 +1,4 @@
+import contextlib
 import importlib
 import math
 import re
@@ -236,10 +237,8 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
 
     def _beat(detail):
         if progress_heartbeat is not None and len(content) >= HEARTBEAT_MIN_CHARS:
-            try:
+            with contextlib.suppress(Exception):
                 progress_heartbeat(detail)
-            except Exception:
-                pass
 
     source_map = source_map_reference(content)
     if source_map:
@@ -387,10 +386,7 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
     ]
     for pattern in api_patterns:
         for match in re.findall(pattern, content):
-            if isinstance(match, tuple):
-                data = match[0] if match else ''
-            else:
-                data = match
+            data = (match[0] if match else '') if isinstance(match, tuple) else match
             if data and data not in results["api_calls"]:
                 results["api_calls"].append(data)
 
@@ -404,10 +400,7 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
     ]
     for pattern in storage_patterns:
         for match in re.findall(pattern, content, re.I):
-            if isinstance(match, tuple):
-                text = '.'.join(part for part in match if part)
-            else:
-                text = match
+            text = '.'.join(part for part in match if part) if isinstance(match, tuple) else match
             if text not in results["storage"]:
                 results["storage"].append(text)
     # "Sensitive" used to mean "mentions document.cookie anywhere" (or, via the
@@ -577,10 +570,10 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
     # per alias hint), ~40 full-content copies per scanned document.
     lowered = content.lower()
     for marker, entity in dep_entity.items():
-        if entity["kind"].lower() in ("framework", "library", "crypto") and marker in lowered:
-            if marker not in seen_deps:
-                seen_deps.add(marker)
-                dependency_scan.append({**entity, "source": marker, "evidence": "bundle marker"})
+        if (entity["kind"].lower() in ("framework", "library", "crypto") and marker in lowered
+                and marker not in seen_deps):
+            seen_deps.add(marker)
+            dependency_scan.append({**entity, "source": marker, "evidence": "bundle marker"})
     # Bundle aliases / framework conventions that don't carry the package name in code.
     alias_hints = {
         "react": ("React", ["dangerouslysetinnerhtml", "react.createelement"], "framework"),
@@ -799,7 +792,5 @@ def scan_content(content, filename="inline.js", cancel_check=None):
             handle.write(content)
         return scan_file(tmp_path, cancel_check=cancel_check)
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass

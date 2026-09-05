@@ -35,6 +35,7 @@ requires_ast_parser = unittest.skipUnless(
     "needs a JS AST parser (tree-sitter or esprima)",
 )
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP_JS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webui", "app.js")
 SERVER_PY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py")
 TOOL_HTML = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webui", "tool", "index.html")
@@ -336,10 +337,15 @@ class DashboardPollContractTest(unittest.TestCase):
         self.assertIn("still running", self.app.lower())
 
     def test_server_does_not_log_every_status_poll(self):
-        with open(SERVER_PY, encoding="utf-8") as fh:
-            server = fh.read()
-        self.assertIn("_quiet_access_log", server,
+        # The handler plumbing lives in the api/ package since the server was
+        # split; the quiet-heartbeat contract lives with it.
+        handler_path = os.path.join(ROOT, "api", "http.py")
+        with open(handler_path, encoding="utf-8") as fh:
+            handler_src = fh.read()
+        self.assertIn("_quiet_access_log", handler_src,
                       "successful /api/status & /api/health polls must not flood the log")
+        self.assertIn('"/api/status"', handler_src)
+        self.assertIn('"/api/health"', handler_src)
 
 
 if __name__ == "__main__":

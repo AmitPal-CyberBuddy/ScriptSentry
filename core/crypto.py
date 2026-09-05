@@ -65,11 +65,8 @@ def is_valid_key(value):
         return False
 
     # Require either special crypto-like characters or high entropy
-    if not any(ch in val for ch in ['~', '<', '>', '$', '%', '&', '+', ';', '_', '/', '=', '?', '@', '#']):
-        if not re.fullmatch(r'[A-Za-z0-9+/]{16,}={0,2}', val) and len(set(val)) < 10:
-            return False
-
-    return True
+    return not (not any(ch in val for ch in ['~', '<', '>', '$', '%', '&', '+', ';', '_', '/', '=', '?', '@', '#'])
+                and not re.fullmatch(r'[A-Za-z0-9+/]{16,}={0,2}', val) and len(set(val)) < 10)
 
 
 def looks_like_url_or_path(value):
@@ -83,9 +80,7 @@ def looks_like_url_or_path(value):
         return True
     if re.search(r'\.(?:js|mjs|css|png|jpg|jpeg|gif|svg|ico|json|html|map)\b', text):
         return True
-    if re.match(r'^(?:api|v[0-9]+|auth|login|logout|graphql|assets|static|js|css)/', text):
-        return True
-    return False
+    return bool(re.match(r'^(?:api|v[0-9]+|auth|login|logout|graphql|assets|static|js|css)/', text))
 
 
 def is_valid_iv(value):
@@ -104,10 +99,7 @@ def is_valid_iv(value):
     if re.fullmatch(r'[a-z]{3,}', lower) and len(set(val)) < 6 and len(val) < 20:
         return False
 
-    if len(set(val)) < 5:
-        return False
-
-    return True
+    return len(set(val)) >= 5
 
 
 # =========================================
@@ -184,9 +176,8 @@ def extract_crypto_material(content, filename="inline.js"):
         if sorted_locations:
             index = bisect.bisect_left(sorted_locations, pos - 399)
             near_crypto = index < len(sorted_locations) and sorted_locations[index] <= pos + 399
-        if near_crypto or has_encryption_key_marker:
-            if is_valid_key(val):
-                findings["keys"].append({"value": val, "context": "crypto", "source": filename})
+        if (near_crypto or has_encryption_key_marker) and is_valid_key(val):
+            findings["keys"].append({"value": val, "context": "crypto", "source": filename})
 
     # =========================================
     # 🧪 IV DETECTION (EXPANDED ✅)
@@ -296,9 +287,8 @@ def extract_crypto_material(content, filename="inline.js"):
 
     for ctx in findings["crypto_contexts"]:
         for line in ctx.split("\n"):
-            if any(k in line.lower() for k in ["encrypt", "decrypt", "aes"]):
-                if len(line.strip()) < 200:
-                    snippets.append(line.strip())
+            if any(k in line.lower() for k in ["encrypt", "decrypt", "aes"]) and len(line.strip()) < 200:
+                snippets.append(line.strip())
 
     findings["logic_snippets"] = list(set(snippets))[:20]
 

@@ -1,5 +1,7 @@
 # Python
 __pycache__/
+build/
+dist/
 *.py[cod]
 *.egg-info/
 .venv/
@@ -15,3 +17,4 @@ reports/
 # Editor
 .vscode/
 .idea/
+.coverage

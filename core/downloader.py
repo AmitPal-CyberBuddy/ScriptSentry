@@ -85,14 +85,13 @@ def download_js(js_links, progress_callback=None, output_dir=None, timeout=15, c
             for url in js_links
         }
         done = 0
-        for future in as_completed(futures):
+        for done, future in enumerate(as_completed(futures), start=1):
             try:
                 path = future.result()
             except Exception:
                 path = None
             if path:
                 results.append(path)
-            done += 1
             if progress_callback:
                 progress_callback(
                     phase="download",

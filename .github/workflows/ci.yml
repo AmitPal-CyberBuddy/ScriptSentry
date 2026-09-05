@@ -88,6 +88,8 @@ jobs:
         run: |
           node --check webui/app.js
           node --check webui/config.js
+      - name: Check webui/app.js is built from webui/src/app/
+        run: python3 tools/build_webui.py --check
 
   lint:
     name: lint (ruff)

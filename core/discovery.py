@@ -53,9 +53,11 @@ def _extract_assets(html, url):
             as_value = str(link.get("as") or "").lower()
             if not href:
                 continue
-            if "modulepreload" in rel or ("preload" in rel and as_value == "script") or "prefetch" in rel:
-                if href.split("?", 1)[0].lower().endswith((".js", ".mjs")) or "modulepreload" in rel or as_value == "script":
-                    js_files.add(urljoin(url, href))
+            is_preload = "modulepreload" in rel or ("preload" in rel and as_value == "script") or "prefetch" in rel
+            if is_preload and (
+                    href.split("?", 1)[0].lower().endswith((".js", ".mjs"))
+                    or "modulepreload" in rel or as_value == "script"):
+                js_files.add(urljoin(url, href))
 
         # Inline module imports are entry points too.
         for body in inline_scripts:

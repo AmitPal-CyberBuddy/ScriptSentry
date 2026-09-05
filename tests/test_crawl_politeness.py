@@ -4,6 +4,7 @@
 single choke point for every network fetch -- serialize requests per host.
 Off by default; the delay must never apply to a different host.
 """
+import contextlib
 import time
 import unittest
 from unittest import mock
@@ -48,12 +49,10 @@ class CrawlDelayTest(unittest.TestCase):
     def test_safe_get_waits(self):
         from core import url_policy
         waited = []
-        with mock.patch.object(url_policy, "politeness_wait", side_effect=waited.append):
-            with mock.patch.object(url_policy.requests, "Session", side_effect=AssertionError("no network")):
-                try:
-                    url_policy.safe_get("https://example.test/x.js")
-                except AssertionError:
-                    pass
+        with mock.patch.object(url_policy, "politeness_wait", side_effect=waited.append), \
+                mock.patch.object(url_policy.requests, "Session", side_effect=AssertionError("no network")), \
+                contextlib.suppress(AssertionError):
+            url_policy.safe_get("https://example.test/x.js")
         self.assertEqual(waited, ["https://example.test/x.js"],
                          "safe_get must honor the politeness window before connecting")
 

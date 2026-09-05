@@ -444,13 +444,7 @@ def parse_ast(content):
                 "name": _node_key(node.get("id")) or "(anonymous)",
                 "line": _line(node),
             })
-        elif node_type == "CallExpression":
-            result["calls"].append({
-                "callee": _callee_name(node.get("callee")),
-                "args": len(node.get("arguments", []) or []),
-                "line": _line(node),
-            })
-        elif node_type == "NewExpression":
+        elif node_type == "CallExpression" or node_type == "NewExpression":
             result["calls"].append({
                 "callee": _callee_name(node.get("callee")),
                 "args": len(node.get("arguments", []) or []),
