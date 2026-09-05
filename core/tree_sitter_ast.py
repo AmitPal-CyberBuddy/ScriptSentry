@@ -148,13 +148,9 @@ def _text(node):
 def _loc(node):
     sr, sc = node.start_point
     er, ec = node.end_point
-    # Byte offsets ride along under "_br"; parse_to_dict translates them to
-    # character offsets ("range") once, because consumers slice the original
-    # *string* with them (esprima ranges were character-based too).
     return {
         "start": {"line": sr + 1, "column": sc},
         "end": {"line": er + 1, "column": ec},
-        "_br": [node.start_byte, node.end_byte],
     }
 
 
@@ -174,9 +170,22 @@ def _byte_to_char_table(text):
 
 
 class _Converter:
-    def __init__(self):
+    def __init__(self, byte_map=None):
         self.comments = []
         self.error_count = 0
+        # byte_map translates UTF-8 byte offsets to str indices; None when
+        # the source is pure ASCII and the offsets are already identical.
+        self._byte_map = byte_map
+
+    def range_of(self, node):
+        """Estree-style ``range`` in character offsets for the source str."""
+        start = node.start_byte
+        end = node.end_byte
+        byte_map = self._byte_map
+        if byte_map is not None:
+            start = byte_map[start]
+            end = byte_map[end]
+        return [start, end]
 
     # -- helpers -----------------------------------------------------------
     @staticmethod
@@ -227,10 +236,12 @@ class _Converter:
                 "type": "Block" if text.startswith("/*") else "Line",
                 "value": text.strip("/").strip("*").strip()[:200],
                 "loc": _loc(node),
+                "range": self.range_of(node),
             })
             return None
         if node.type in ("regex", "regex_pattern"):
-            return {"type": "Literal", "value": _text(node), "raw": _text(node), "regex": {"pattern": _text(node)}, "loc": _loc(node)}
+            return {"type": "Literal", "value": _text(node), "raw": _text(node), "regex": {"pattern": _text(node)},
+                    "loc": _loc(node), "range": self.range_of(node)}
         if node.named_child_count == 1 and node.type not in ("program",):
             inner = self.convert(node.named_children[0], depth + 1)
             return inner
@@ -241,6 +252,7 @@ class _Converter:
             "type": node.type,
             "children": [child for child in children if child is not None],
             "loc": _loc(node),
+            "range": self.range_of(node),
         }
 
     # -- shared builders ---------------------------------------------------
@@ -268,7 +280,7 @@ def _build_variable_declaration(node, conv, depth):
         "kind": kind_text,
         "declarations": [c for c in (conv.convert(child, depth + 1) for child in node.named_children
                                      if child.type == "variable_declarator") if c],
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -277,7 +289,7 @@ def _build_variable_declarator(node, conv, depth):
         "type": "VariableDeclarator",
         "id": conv.convert(conv._field(node, "name"), depth + 1),
         "init": conv.convert(conv._field(node, "value"), depth + 1),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -285,7 +297,7 @@ def _build_expression_statement(node, conv, depth):
     return {
         "type": "ExpressionStatement",
         "expression": conv.convert(node.named_children[0] if node.named_children else None, depth + 1),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -293,25 +305,25 @@ def _build_return(node, conv, depth):
     return {
         "type": "ReturnStatement",
         "argument": conv.convert(node.named_children[0] if node.named_children else None, depth + 1),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
 def _build_identifier(node, conv, depth):
-    return {"type": "Identifier", "name": _text(node), "loc": _loc(node)}
+    return {"type": "Identifier", "name": _text(node), "loc": _loc(node), "range": conv.range_of(node)}
 
 
 def _build_this(node, conv, depth):
-    return {"type": "ThisExpression", "loc": _loc(node)}
+    return {"type": "ThisExpression", "loc": _loc(node), "range": conv.range_of(node)}
 
 
 def _build_meta_property(node, conv, depth):
     name = "target" if "new.target" in _text(node) else "meta"
     return {
         "type": "MetaProperty",
-        "meta": {"type": "Identifier", "name": "import" if name == "meta" else "new", "loc": _loc(node)},
-        "property": {"type": "Identifier", "name": name, "loc": _loc(node)},
-        "loc": _loc(node),
+        "meta": {"type": "Identifier", "name": "import" if name == "meta" else "new", "loc": _loc(node), "range": conv.range_of(node)},
+        "property": {"type": "Identifier", "name": name, "loc": _loc(node), "range": conv.range_of(node)},
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -319,7 +331,7 @@ def _build_string(node, conv, depth):
     raw = _text(node)
     quote = raw[0] if raw[:1] in ("'", '"') else None
     value = raw[1:-1] if quote and raw.endswith(quote) else raw
-    return {"type": "Literal", "value": value, "raw": raw, "loc": _loc(node)}
+    return {"type": "Literal", "value": value, "raw": raw, "loc": _loc(node), "range": conv.range_of(node)}
 
 
 def _build_number(node, conv, depth):
@@ -331,13 +343,13 @@ def _build_number(node, conv, depth):
             value = float(raw)
         except ValueError:
             value = raw
-    return {"type": "Literal", "value": value, "raw": raw, "loc": _loc(node)}
+    return {"type": "Literal", "value": value, "raw": raw, "loc": _loc(node), "range": conv.range_of(node)}
 
 
 def _build_bool_or_null(node, conv, depth):
     raw = _text(node)
     value = {"true": True, "false": False, "null": None, "undefined": None}.get(raw)
-    return {"type": "Literal", "value": value, "raw": raw, "loc": _loc(node)}
+    return {"type": "Literal", "value": value, "raw": raw, "loc": _loc(node), "range": conv.range_of(node)}
 
 
 def _build_template_string(node, conv, depth):
@@ -352,7 +364,7 @@ def _build_template_string(node, conv, depth):
             "type": "TemplateElement",
             "value": {"raw": text, "cooked": text},
             "tail": tail,
-            "loc": _loc(node),
+            "loc": _loc(node), "range": conv.range_of(node),
         })
         buffer.clear()
 
@@ -372,7 +384,7 @@ def _build_template_string(node, conv, depth):
         "quasis": quasis,
         "expressions": expressions,
         "raw": raw_text[:500],
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -392,7 +404,7 @@ def _build_member(node, conv, depth):
         "property": property_node,
         "computed": computed,
         "optional": optional,
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -403,7 +415,7 @@ def _build_subscript(node, conv, depth):
         "property": conv.convert(conv._field(node, "index"), depth + 1),
         "computed": True,
         "optional": False,
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -420,7 +432,7 @@ def _build_call(node, conv, depth):
             "source": arguments[0] if arguments else None,
             "arguments": arguments,
             "optional": optional,
-            "loc": _loc(node),
+            "loc": _loc(node), "range": conv.range_of(node),
         }
     callee = conv.convert(callee_node, depth + 1)
     if callee is None:
@@ -430,7 +442,7 @@ def _build_call(node, conv, depth):
         "callee": callee,
         "arguments": arguments,
         "optional": optional,
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -439,7 +451,7 @@ def _build_new(node, conv, depth):
         "type": "NewExpression",
         "callee": conv.convert(conv._field(node, "constructor"), depth + 1),
         "arguments": conv._list(node, "arguments", depth),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -453,7 +465,7 @@ def _build_binary(node, conv, depth):
         "operator": conv._operator(node) or "+",
         "left": left,
         "right": right,
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -466,7 +478,7 @@ def _build_unary(node, conv, depth):
         "operator": conv._operator(node) or "typeof",
         "argument": argument,
         "prefix": True,
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -480,7 +492,7 @@ def _build_update(node, conv, depth):
         "operator": operator,
         "argument": argument,
         "prefix": _text(node).startswith(operator),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -494,7 +506,7 @@ def _build_assignment(node, conv, depth):
         "operator": conv._operator(node) or "=",
         "left": left,
         "right": right,
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -504,7 +516,7 @@ def _build_conditional(node, conv, depth):
         "test": conv.convert(conv._field(node, "condition"), depth + 1),
         "consequent": conv.convert(conv._field(node, "consequence"), depth + 1),
         "alternate": conv.convert(conv._field(node, "alternative"), depth + 1),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -512,7 +524,7 @@ def _build_sequence(node, conv, depth):
     return {
         "type": "SequenceExpression",
         "expressions": [c for c in (conv.convert(child, depth + 1) for child in node.named_children) if c],
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -525,7 +537,7 @@ def _build_arrow(node, conv, depth):
         "body": body,
         "expression": bool(body) and body.get("type") != "BlockStatement",
         "async": "async" in _text(node)[:40],
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -538,7 +550,7 @@ def _build_function(node, conv, depth, estree_type="FunctionExpression"):
         "body": conv.convert(conv._field(node, "body"), depth + 1),
         "async": _text(node).lstrip().startswith("async"),
         "generator": "function*" in _text(node)[:40],
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -559,8 +571,8 @@ def _build_class(node, conv, depth, estree_type="ClassExpression"):
         "type": estree_type,
         "id": conv.convert(conv._field(node, "name"), depth + 1),
         "superClass": conv.convert(heritage, depth + 1),
-        "body": {"type": "ClassBody", "body": members, "loc": _loc(node)},
-        "loc": _loc(node),
+        "body": {"type": "ClassBody", "body": members, "loc": _loc(node), "range": conv.range_of(node)},
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -568,7 +580,7 @@ def _build_object(node, conv, depth):
     return {
         "type": "ObjectExpression",
         "properties": [c for c in (conv.convert(child, depth + 1) for child in node.named_children) if c],
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -581,12 +593,12 @@ def _build_pair(node, conv, depth):
         "computed": False,
         "shorthand": False,
         "method": False,
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
 def _build_shorthand_pair(node, conv, depth):
-    identifier = {"type": "Identifier", "name": _text(node), "loc": _loc(node)}
+    identifier = {"type": "Identifier", "name": _text(node), "loc": _loc(node), "range": conv.range_of(node)}
     return {
         "type": "Property",
         "key": identifier,
@@ -595,7 +607,7 @@ def _build_shorthand_pair(node, conv, depth):
         "computed": False,
         "shorthand": True,
         "method": False,
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -603,7 +615,7 @@ def _build_array(node, conv, depth):
     return {
         "type": "ArrayExpression",
         "elements": [c for c in (conv.convert(child, depth + 1) for child in node.named_children) if c],
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -611,7 +623,7 @@ def _build_spread(node, conv, depth):
     return {
         "type": "SpreadElement",
         "argument": conv.convert(node.named_children[0] if node.named_children else None, depth + 1),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -619,7 +631,7 @@ def _build_rest(node, conv, depth):
     return {
         "type": "RestElement",
         "argument": conv.convert(node.named_children[0] if node.named_children else None, depth + 1),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -628,7 +640,7 @@ def _build_assignment_pattern(node, conv, depth):
         "type": "AssignmentPattern",
         "left": conv.convert(conv._field(node, "left"), depth + 1),
         "right": conv.convert(conv._field(node, "right"), depth + 1),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -636,7 +648,7 @@ def _build_object_pattern(node, conv, depth):
     return {
         "type": "ObjectPattern",
         "properties": [c for c in (conv.convert(child, depth + 1) for child in node.named_children) if c],
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -644,7 +656,7 @@ def _build_array_pattern(node, conv, depth):
     return {
         "type": "ArrayPattern",
         "elements": [c for c in (conv.convert(child, depth + 1) for child in node.named_children) if c],
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -652,7 +664,7 @@ def _build_statement_block(node, conv, depth):
     return {
         "type": "BlockStatement",
         "body": [c for c in (conv.convert(child, depth + 1) for child in node.named_children) if c],
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -662,7 +674,7 @@ def _build_if(node, conv, depth):
         "test": conv.convert(conv._field(node, "condition"), depth + 1),
         "consequent": conv.convert(conv._field(node, "consequence"), depth + 1),
         "alternate": conv.convert(conv._field(node, "alternative"), depth + 1),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -673,7 +685,7 @@ def _build_for(node, conv, depth):
         "test": conv.convert(conv._field(node, "condition"), depth + 1),
         "update": conv.convert(conv._field(node, "update"), depth + 1),
         "body": conv.convert(conv._field(node, "body"), depth + 1),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -691,7 +703,7 @@ def _build_for_in_or_of(node, conv, depth, of=False):
         "left": left,
         "right": conv.convert(conv._field(node, "right"), depth + 1),
         "body": conv.convert(conv._field(node, "body"), depth + 1),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -700,7 +712,7 @@ def _build_while(node, conv, depth):
         "type": "WhileStatement",
         "test": conv.convert(conv._field(node, "condition"), depth + 1),
         "body": conv.convert(conv._field(node, "body"), depth + 1),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -715,7 +727,7 @@ def _build_try(node, conv, depth):
         "block": conv.convert(conv._field(node, "body"), depth + 1),
         "handler": handler,
         "finalizer": finalizer,
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -727,7 +739,7 @@ def _build_catch(node, conv, depth):
             param = conv.convert(child, depth + 1)
         elif child.type == "statement_block":
             body = conv.convert(child, depth + 1)
-    return {"type": "CatchClause", "param": param, "body": body, "loc": _loc(node)}
+    return {"type": "CatchClause", "param": param, "body": body, "loc": _loc(node), "range": conv.range_of(node)}
 
 
 def _build_import(node, conv, depth):
@@ -741,20 +753,20 @@ def _build_import(node, conv, depth):
             imported = conv.convert(names[0], depth + 1) if names else None
             local = conv.convert(names[1], depth + 1) if len(names) > 1 else imported
             specifiers.append({"type": "ImportSpecifier", "imported": imported, "local": local,
-                               "loc": _loc(child)})
+                               "loc": _loc(child), "range": conv.range_of(child)})
         elif child.type == "import_default_specifier":
             specifiers.append({"type": "ImportDefaultSpecifier",
                                "local": conv.convert(child.named_children[0] if child.named_children else child, depth + 1),
-                               "loc": _loc(child)})
+                               "loc": _loc(child), "range": conv.range_of(child)})
         elif child.type == "import_namespace_specifier":
             specifiers.append({"type": "ImportNamespaceSpecifier",
                                "local": conv.convert(child.named_children[0] if child.named_children else child, depth + 1),
-                               "loc": _loc(child)})
+                               "loc": _loc(child), "range": conv.range_of(child)})
     return {
         "type": "ImportDeclaration",
         "specifiers": specifiers,
         "source": source_literal,
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -769,15 +781,15 @@ def _build_export(node, conv, depth):
             local = conv.convert(names[0], depth + 1) if names else None
             exported = conv.convert(names[1], depth + 1) if len(names) > 1 else local
             specifiers.append({"type": "ExportSpecifier", "local": local, "exported": exported,
-                               "loc": _loc(child)})
+                               "loc": _loc(child), "range": conv.range_of(child)})
         elif child.type == "string":
             source_literal = conv.convert(child, depth + 1)
         elif child.type not in ("export",):
             declaration = conv.convert(child, depth + 1)
     if default:
-        return {"type": "ExportDefaultDeclaration", "declaration": declaration, "loc": _loc(node)}
+        return {"type": "ExportDefaultDeclaration", "declaration": declaration, "loc": _loc(node), "range": conv.range_of(node)}
     return {"type": "ExportNamedDeclaration", "declaration": declaration,
-            "specifiers": specifiers, "source": source_literal, "loc": _loc(node)}
+            "specifiers": specifiers, "source": source_literal, "loc": _loc(node), "range": conv.range_of(node)}
 
 
 def _build_method_definition(node, conv, depth):
@@ -794,12 +806,12 @@ def _build_method_definition(node, conv, depth):
             "id": None,
             "params": params,
             "body": body,
-            "loc": _loc(node),
+            "loc": _loc(node), "range": conv.range_of(node),
         },
         "kind": "method",
         "computed": False,
         "static": _text(node).lstrip().startswith("static"),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -820,7 +832,7 @@ def _build_property_definition(node, conv, depth):
         "kind": "init",
         "computed": False,
         "static": _text(node).lstrip().startswith("static"),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -834,20 +846,20 @@ def _build_switch(node, conv, depth):
                         "type": "SwitchCase",
                         "test": conv.convert(conv._field(clause, "value"), depth + 1),
                         "consequent": [c for c in (conv.convert(cc, depth + 1) for cc in clause.named_children[1:]) if c],
-                        "loc": _loc(clause),
+                        "loc": _loc(clause), "range": conv.range_of(clause),
                     })
                 elif clause.type == "switch_default":
                     cases.append({
                         "type": "SwitchCase",
                         "test": None,
                         "consequent": [c for c in (conv.convert(cc, depth + 1) for cc in clause.named_children) if c],
-                        "loc": _loc(clause),
+                        "loc": _loc(clause), "range": conv.range_of(clause),
                     })
     return {
         "type": "SwitchStatement",
         "discriminant": conv.convert(conv._field(node, "value"), depth + 1),
         "cases": cases,
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -855,7 +867,7 @@ def _build_await(node, conv, depth):
     return {
         "type": "AwaitExpression",
         "argument": conv.convert(node.named_children[0] if node.named_children else None, depth + 1),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -864,7 +876,7 @@ def _build_yield(node, conv, depth):
         "type": "YieldExpression",
         "argument": conv.convert(node.named_children[0] if node.named_children else None, depth + 1),
         "delegate": "* " in _text(node)[:10],
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -872,16 +884,16 @@ def _build_throw(node, conv, depth):
     return {
         "type": "ThrowStatement",
         "argument": conv.convert(node.named_children[0] if node.named_children else None, depth + 1),
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
 def _build_labeled(node, conv, depth):
     return {
         "type": "LabeledStatement",
-        "label": {"type": "Identifier", "name": _text(conv._field(node, "label") or node.named_children[0]), "loc": _loc(node)},
+        "label": {"type": "Identifier", "name": _text(conv._field(node, "label") or node.named_children[0]), "loc": _loc(node), "range": conv.range_of(node)},
         "body": conv.convert(node.named_children[-1], depth + 1) if node.named_children else None,
-        "loc": _loc(node),
+        "loc": _loc(node), "range": conv.range_of(node),
     }
 
 
@@ -905,7 +917,7 @@ def _build_required_parameter(node, conv, depth):
             "type": "AssignmentPattern",
             "left": converted,
             "right": conv.convert(default, depth + 1),
-            "loc": _loc(node),
+            "loc": _loc(node), "range": conv.range_of(node),
         }
     return converted
 
@@ -970,15 +982,16 @@ _NODE_BUILDERS = {
     "switch_statement": _build_switch,
     "throw_statement": _build_throw,
     "labeled_statement": _build_labeled,
-    "empty_statement": lambda n, c, d: {"type": "EmptyStatement", "loc": _loc(n)},
-    "debugger_statement": lambda n, c, d: {"type": "DebuggerStatement", "loc": _loc(n)},
-    "break_statement": lambda n, c, d: {"type": "BreakStatement", "label": None, "loc": _loc(n)},
-    "continue_statement": lambda n, c, d: {"type": "ContinueStatement", "label": None, "loc": _loc(n)},
+    "empty_statement": lambda n, c, d: {"type": "EmptyStatement", "loc": _loc(n), "range": c.range_of(n)},
+    "debugger_statement": lambda n, c, d: {"type": "DebuggerStatement", "loc": _loc(n), "range": c.range_of(n)},
+    "break_statement": lambda n, c, d: {"type": "BreakStatement", "label": None, "loc": _loc(n), "range": c.range_of(n)},
+    "continue_statement": lambda n, c, d: {"type": "ContinueStatement", "label": None, "loc": _loc(n), "range": c.range_of(n)},
     "with_statement": lambda n, c, d: {
         "type": "WithStatement",
         "object": c.convert(c._field(n, "object"), d + 1),
         "body": c.convert(c._field(n, "body"), d + 1),
         "loc": _loc(n),
+        "range": c.range_of(n),
     },
     # statements
     "lexical_declaration": _build_variable_declaration,
@@ -1024,7 +1037,7 @@ def parse_to_dict(content):
     if tree is None:
         return None, "tree-sitter-parse-failed"
     root = tree.root_node
-    converter = _Converter()
+    converter = _Converter(_byte_to_char_table(text))
     body = []
     for child in root.named_children:
         if child.type == "comment":
@@ -1039,31 +1052,8 @@ def parse_to_dict(content):
         "sourceType": "module",
         "comments": converter.comments[:500],
         "loc": _loc(root),
+        "range": converter.range_of(root),
     }
-    table = _byte_to_char_table(text)
-
-    def finalize(parent):
-        # Every loc dict carries the node's byte span under "_br" (added by
-        # _loc); hoist it onto the *enclosing* node dict as an estree-style
-        # "range" in character offsets, because consumers slice the original
-        # string with it (esprima ranges were character-based too).
-        if isinstance(parent, list):
-            for item in parent:
-                finalize(item)
-            return
-        if not isinstance(parent, dict):
-            return
-        for value in list(parent.values()):
-            if isinstance(value, dict) and "_br" in value:
-                byte_range = value.pop("_br")
-                if table is None:
-                    parent["range"] = byte_range
-                else:
-                    parent["range"] = [table[byte_range[0]], table[byte_range[1]]]
-            if isinstance(value, (dict, list)):
-                finalize(value)
-
-    finalize(program)
     error = None
     if converter.error_count or root.has_error:
         error = f"tree-sitter: {converter.error_count or 1} unparseable region(s); partial AST used"

@@ -1,5 +1,6 @@
 import re
 import base64
+import bisect
 
 
 # =========================================
@@ -163,18 +164,27 @@ def extract_crypto_material(content, filename="inline.js"):
     # =========================================
     # 🔑 KEY DETECTION (HYBRID ✅)
     # =========================================
-    candidates = re.findall(r'[\'"]([^"\'\\]{12,})[\'"]', content)
-
-    for c in candidates:
-        pos = content.find(c)
-        val = c.strip('"').strip("'")
+    # finditer (not findall + content.find) so each candidate carries its
+    # real position -- content.find returned the FIRST occurrence of a
+    # repeated string, i.e. the wrong location. The proximity test bisects
+    # the sorted crypto_locations instead of scanning all of them per
+    # candidate, and the "EncryptionKey" marker is checked once, not once
+    # per candidate (each of those was a full O(n) content scan; on a
+    # minified bundle this loop alone used to cost ~1.5s).
+    has_encryption_key_marker = "EncryptionKey" in content
+    sorted_locations = sorted(crypto_locations)
+    candidate_re = re.compile(r'[\'"]([^"\'\\]{12,})[\'"]')
+    for match in candidate_re.finditer(content):
+        val = match.group(1).strip('"').strip("'")
         if looks_like_url_or_path(val):
             continue
 
-        if (
-            any(abs(pos - loc) < 400 for loc in crypto_locations)
-            or "EncryptionKey" in content
-        ):
+        pos = match.start()
+        near_crypto = False
+        if sorted_locations:
+            index = bisect.bisect_left(sorted_locations, pos - 399)
+            near_crypto = index < len(sorted_locations) and sorted_locations[index] <= pos + 399
+        if near_crypto or has_encryption_key_marker:
             if is_valid_key(val):
                 findings["keys"].append({"value": val, "context": "crypto", "source": filename})
 

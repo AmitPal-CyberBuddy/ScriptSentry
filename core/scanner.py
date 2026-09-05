@@ -573,8 +573,11 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
             import_sources.add(source)
 
     # Regex fallbacks for common libraries that live in the bundle itself.
+    # content.lower() is hoisted: it was re-lowercased per marker (and again
+    # per alias hint), ~40 full-content copies per scanned document.
+    lowered = content.lower()
     for marker, entity in dep_entity.items():
-        if entity["kind"].lower() in ("framework", "library", "crypto") and marker in content.lower():
+        if entity["kind"].lower() in ("framework", "library", "crypto") and marker in lowered:
             if marker not in seen_deps:
                 seen_deps.add(marker)
                 dependency_scan.append({**entity, "source": marker, "evidence": "bundle marker"})
@@ -590,7 +593,7 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
     for marker, (name, hints, kind) in alias_hints.items():
         if marker in seen_deps:
             continue
-        if any(h in content.lower() for h in hints) or (marker == "jquery" and re.search(r"\$\s*\([^)]*\)\s*\.(html|append|ajax|get|post|on)", content)):
+        if any(h in lowered for h in hints) or (marker == "jquery" and re.search(r"\$\s*\([^)]*\)\s*\.(html|append|ajax|get|post|on)", content)):
             seen_deps.add(marker)
             dependency_scan.append({"name": name, "kind": kind, "source": marker, "evidence": "bundle alias"})
     results["dependency_scan"] = dependency_scan[:40]

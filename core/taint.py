@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass, field
 
 from core.js_parser import parse_raw
+from core.text_index import LineIndex
 
 # The source/sink catalogue lives in core.js_patterns so that the taint engine
 # and the analyzers can never disagree about what counts as a sink.  The names
@@ -998,11 +999,6 @@ class TaintAnalyzer:
         name = self._function_call_name(node)
         if name and name in self.functions:
             self._analyze_function_flow(node, name)
-        # Also allow a simple single-identifier alias to the collected function.
-        if name and "." not in (name or ""):
-            for fn_name, fn in self.functions.items():
-                if fn_name == name:
-                    self._analyze_function_flow(node, fn_name)
 
     def analyze(self):
         tree = parse_raw(self.content)
@@ -1014,21 +1010,60 @@ class TaintAnalyzer:
             return self.findings
         self.ast_used = True
 
-        # Pass 0: index declared functions so call args can be propagated into sinks.
+        # Flatten once, bucket by node type per top-level statement, then run
+        # the same passes in the same order over flat lists. Bucketing mirrors
+        # the type guards inside each handler, so every handler sees exactly
+        # the nodes it would have seen from the recursive walks -- only the
+        # repeated descent is gone. Inter-procedural body re-walks (below)
+        # still use _walk, bounded by the function-flow depth limit.
         statements = tree.get("body", []) or []
+
+        # Per-statement node buckets, each in document order. The bucket
+        # filters mirror the type guards inside the handlers, so every
+        # handler sees exactly the nodes the recursive walks delivered --
+        # only the repeated tree descent is gone.
+        per_stmt = []
         for stmt in statements:
-            self._walk(stmt, self._collect_functions)
+            flat = []
+            self._flatten(stmt, flat)
+            buckets = {"funcs": [], "decls": [], "assigns": [], "sinks": [], "calls": []}
+            for node in flat:
+                ntype = node.get("type")
+                if ntype == "CallExpression" or ntype == "OptionalCallExpression":
+                    buckets["calls"].append(node)
+                    buckets["sinks"].append(node)
+                elif ntype == "AssignmentExpression":
+                    buckets["assigns"].append(node)
+                    buckets["funcs"].append(node)
+                    buckets["sinks"].append(node)
+                elif ntype == "NewExpression":
+                    buckets["sinks"].append(node)
+                elif ntype == "VariableDeclaration":
+                    buckets["decls"].append(node)
+                elif ntype == "FunctionDeclaration" or ntype == "VariableDeclarator":
+                    buckets["funcs"].append(node)
+            per_stmt.append(buckets)
+
+        # Pass 0: index declared functions so call args can be propagated into sinks.
+        for buckets in per_stmt:
+            for node in buckets["funcs"]:
+                self._collect_functions(node)
 
         # Two passes: first assignments so reads later see taint, then sink checks.
-        for stmt in statements:
-            self._walk(stmt, self._handle_variable_declaration)
-        for stmt in statements:
-            self._walk(stmt, self._handle_assignment)
-        for stmt in statements:
-            self._walk(stmt, self._check_call_sink)
-            self._walk(stmt, self._check_assignment_sink)
-        for stmt in statements:
-            self._walk(stmt, self._check_function_flow)
+        for buckets in per_stmt:
+            for node in buckets["decls"]:
+                self._handle_variable_declaration(node)
+        for buckets in per_stmt:
+            for node in buckets["assigns"]:
+                self._handle_assignment(node)
+        for buckets in per_stmt:
+            for node in buckets["sinks"]:
+                self._check_call_sink(node)
+            for node in buckets["sinks"]:
+                self._check_assignment_sink(node)
+        for buckets in per_stmt:
+            for node in buckets["calls"]:
+                self._check_function_flow(node)
 
         # If AST parsed but found no flows, only run the regex fallback when the code
         # actually has a taint source. A bare `eval("...")` is a pattern the scanner's
@@ -1074,6 +1109,25 @@ class TaintAnalyzer:
         for value in node.values():
             if isinstance(value, (list, dict)):
                 self._walk(value, callback)
+
+    @staticmethod
+    def _flatten(node, out):
+        """Append every dict node to ``out`` in _walk's visit order.
+
+        One flattening pass replaces the six per-pass recursive walks in
+        :meth:`analyze` -- each analysis pass then iterates a pre-filtered
+        node list instead of re-descending the whole tree.
+        """
+        if isinstance(node, list):
+            for child in node:
+                TaintAnalyzer._flatten(child, out)
+            return
+        if not isinstance(node, dict):
+            return
+        out.append(node)
+        for value in node.values():
+            if isinstance(value, (list, dict)):
+                TaintAnalyzer._flatten(value, out)
 
     # ---------------- fallback / heuristics ----------------
     def _has_obvious_dangerous_patterns(self):
@@ -1128,7 +1182,8 @@ class TaintAnalyzer:
 
         # Split at statement boundaries but retain line numbers. This works for
         # ordinary source and still gives useful evidence for minified bundles.
-        statements = [(text[:m.start()].count("\n") + 1, m.group(0).strip())
+        lines = LineIndex(text)
+        statements = [(lines.line_at(m.start()), m.group(0).strip())
                       for m in re.finditer(r"[^;\n]+", text) if m.group(0).strip()]
 
         # A real statement (line- or semicolon-delimited) is never enormous.
