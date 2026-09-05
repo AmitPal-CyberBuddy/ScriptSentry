@@ -11,6 +11,36 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### An ETA that knows what the scan costs — and a quieter, politer UI
+
+- **Time remaining is now estimated from the discovered workload.** The old
+  ETA extrapolated the progress bar's speed and nothing else — it froze
+  during quiet stages and could show `eta ~2m left` beside `last update
+  28m ago`. The new estimator (`core/eta.py`) blends two sources: a cost
+  model built from what recon/discover/download actually found (file count,
+  real bytes), the scan profile (timeouts, caps) and the worker count, with
+  throughput constants calibrated on real hardware (tunable via
+  `SCRIPTSENTRY_ETA_ANALYZE_*`); and the observed rate of real progress,
+  which takes over as it proves itself (`eta_confidence`, `eta_basis` in
+  `/api/status` say which half is currently trusted). A 6-script site no
+  longer borrows the file cap as its workload, strict 500-file scans are no
+  longer capped at a 15-minute ceiling, and the estimate stays live —
+  recomputed on every status poll — while the engine is silent, with
+  `elapsed` counting from the real start time instead of freezing with the
+  last engine event.
+- **Status polling adapts to the scan.** The dashboard polls fast (500 ms)
+  while progress visibly moves and backs off — up to 4 s (10 s in a hidden
+  tab) — when the engine reports the same snapshot, snapping back to fast on
+  any change. Successful `/api/status` and `/api/health` polls are no longer
+  printed by the engine, so its terminal stops drowning in
+  `GET /api/status 200` lines during a scan (failures still log).
+- **A running scan locks the conflicting actions.** "Analyze Files" (which
+  used to stay enabled — a second scan could silently clobber the running
+  one) and the four report-export buttons are disabled while a scan runs;
+  exporting for a still-running job now surfaces the engine's real answer
+  ("Analysis is still running…") in the status pill instead of opening the
+  pairing/setup dialog.
+
 ### Honest scan progress — no more "is it stuck?" spinner
 - **The dashboard no longer declares a false timeout.** The browser poll loop
   used to give up after exactly 10 minutes with *"Analysis timed out while
@@ -21,11 +51,18 @@ release yet.
   probably restarted"), and long scans simply keep the live progress panel
   open. Polling backs off while the tab is hidden.
 - **Every silent stretch now explains itself.** The engine reports a
-  heartbeat (`since_update_ms`) with each status poll. When a stage stays
-  quiet — normal for one big bundle being parsed or beautified — the progress
-  panel shows *"No new updates for Xs — large bundles can stay quiet…"*, the
-  spinner switches to amber, and after 90s the hint suggests lowering the
-  file cap or workers instead of leaving an endless spinner.
+  heartbeat (`since_update_ms`) with each status poll, and — for large
+  documents — from *inside* a single-file analysis: heavy passes (secrets,
+  AST, each sub-analyzer, taint, attack surface) now emit *"Analyzing
+  app.min.js — taint flows"*-style events, so a production bundle that
+  occupies one worker for minutes no longer looks like a dead engine (the
+  old dashboard could sit at "last update 28m ago" while a 2 MB bundle was
+  still being worked). When a stage does stay quiet, the progress panel
+  first names that stage's cost (*"Static-analysis passes … stay quiet while
+  one large bundle is processed — normal for production-size JS"*), adds
+  elapsed/ETA context after 2 minutes, and only after 6 minutes of total
+  silence mentions Cancel — pointing at the engine terminal first, without
+  blaming the file-cap/worker settings.
 - **Work is announced before it happens.** Files in flight are reported as
   *"Scanning app.min.js…"* (the old UI could only say "Analyzed …" after the
   fact, so a 30–60s bundle looked frozen), beautifying reports per-file

@@ -1090,11 +1090,26 @@
         const since = Date.now() - (cancelRequestedAt || Date.now());
         hint.textContent = `Waiting for the engine to stop (${formatDuration(since)}). A large bundle may need a few seconds to wind down.`;
         hint.hidden = false;
-      } else if (quiet && quietMs < QUIET_LOUD_MS) {
-        hint.textContent = `No new updates for ${formatDuration(quietMs)} — large bundles can stay quiet for a while during one stage. Elapsed ${formatDuration(job.elapsed_ms)}.`;
+      } else if (quiet && quietMs >= QUIET_STUCK_MS) {
+        // Only after minutes of *total* silence (the engine now emits
+        // in-file heartbeats, so quiet really means quiet) does cancel
+        // become the suggested escape hatch — and even then the advice is to
+        // check the engine's terminal first, since "stuck" and "working on a
+        // very large bundle" look identical from the outside.
+        hint.textContent = `No new updates for ${formatDuration(quietMs)} (elapsed ${formatDuration(job.elapsed_ms)}). `
+          + "If the engine's own terminal shows no activity either, Cancel and re-run with a smaller Max files cap — partial results are not saved.";
+        hint.hidden = false;
+      } else if (quiet && quietMs >= QUIET_STALL_MS) {
+        const stageNote = STAGE_QUIET_NOTES[job.stage || job.phase] || STAGE_QUIET_NOTES.analyze;
+        const etaBit = job.eta_seconds != null
+          ? ` About ${formatDuration(job.eta_seconds * 1000)} of work is estimated.`
+          : "";
+        hint.textContent = `${stageNote} No new updates for ${formatDuration(quietMs)}.${etaBit}`;
         hint.hidden = false;
       } else if (quiet) {
-        hint.textContent = `Still working — no stage change for ${formatDuration(quietMs)}. If this stage never finishes, Cancel and retry with a lower file cap or fewer workers.`;
+        // Explain *why* this stage is quiet before suggesting anything is wrong.
+        const stageNote = STAGE_QUIET_NOTES[job.stage || job.phase] || STAGE_QUIET_NOTES.analyze;
+        hint.textContent = stageNote;
         hint.hidden = false;
       } else if (running && Number(job.elapsed_ms || 0) >= LONG_SCAN_NOTE_MS) {
         hint.textContent = "Large targets can take several minutes. Keep this tab open, or Cancel to stop early — results are only written when the scan finishes.";
@@ -1104,8 +1119,10 @@
       }
     }
 
-    // An ETA measured over a couple of seconds is a guess, not an estimate.
-    // Say so instead of printing a number that looks authoritative.
+    // An ETA is only as good as what the estimator knows. Early on (and in
+    // long quiet stretches) the number comes from the workload model — the
+    // files/bounds discovered by recon/download and the scan settings — and
+    // it is labelled "estimating…" until the observed rate can back it up.
     const confidence = Number(job.eta_confidence || 0);
     let eta = "—";
     if (job.eta_seconds != null) {
@@ -1113,18 +1130,41 @@
     }
     // `total` is the engine's current work estimate, not the file cap.
     const files = job.total ? `${job.files_scanned || 0}/${job.total}` : `${job.files_scanned || 0}`;
+    const scanned = Number(job.bytes_scanned || 0);
+    const bytesTotal = Number(job.total_bytes || 0);
+    const bytesScanned = formatBytes(scanned);
+    const bytesLabel = bytesTotal > scanned && scanned > 0
+      ? `${bytesScanned} of ~${formatBytes(bytesTotal)}`
+      : bytesScanned;
     const lastUpdate = running
       ? (quietMs >= 5000 ? `${formatDuration(quietMs)} ago` : "just now")
       : "—";
     stats.innerHTML = [
       ["stage", canceling ? "canceling" : (job.stage || job.phase || "queued")],
       ["files", files],
-      ["bytes", formatBytes(job.bytes_scanned)],
+      ["bytes", bytesLabel],
       ["pct", `${pct.toFixed(0)}%`],
       ["elapsed", formatDuration(job.elapsed_ms)],
       ["eta", eta],
       ["last update", lastUpdate],
     ].map(([k, v]) => `<b>${escapeHtml(k)}</b>: ${escapeHtml(String(v))}`).join(" · ");
+  }
+
+  // Controls that must be unusable while a scan occupies the engine:
+  // starting a second scan (the old code disabled the paste/URL buttons but
+  // forgot "Analyze Files"), or exporting a report for a job that is still
+  // running — the engine rejects that with 409, and the buttons should say
+  // "wait" before the request is ever made.
+  const SCAN_BUSY_SELECTORS = [
+    "#analyze-code", "#analyze-url", "#analyze-files",
+    "#export-html", "#export-txt", "#export-csv", "#export-sarif",
+  ];
+
+  function setScanBusy(busy) {
+    SCAN_BUSY_SELECTORS.forEach((sel) => {
+      const btn = $(sel);
+      if (btn) btn.disabled = busy;
+    });
   }
 
   function showLoading(text) {
@@ -1143,8 +1183,7 @@
     const cancelBtn = $("#cancel-scan");
     if (cancelBtn) cancelBtn.disabled = false;
     $("#loading-text").textContent = text || "Analyzing…";
-    $("#analyze-code").disabled = true;
-    $("#analyze-url").disabled = true;
+    setScanBusy(true);
     const activity = $("#progress-activity");
     if (activity) {
       activity.hidden = true;
@@ -1177,8 +1216,7 @@
       panel.classList.remove("is-quiet");
       panel.classList.remove("is-canceling");
     }
-    $("#analyze-code").disabled = false;
-    $("#analyze-url").disabled = false;
+    setScanBusy(false);
     const cancelBtn = $("#cancel-scan");
     if (cancelBtn) cancelBtn.disabled = false;
     const fill = $("#progress-fill");
@@ -1366,14 +1404,37 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
    *     panel (see renderProgress), never as an error, because a silent
    *     minute while a large bundle is parsed is normal work. */
   const POLL_INTERVAL_MS = 500;
+  const POLL_MAX_INTERVAL_MS = 4000;         // quiet-scan ceiling (visible tab)
+  const POLL_MAX_HIDDEN_INTERVAL_MS = 10000; // hidden tab backs off further
   const POLL_FAILURE_GRACE_MS = 20000;   // tolerated loss of contact
   const QUIET_HINT_MS = 15000;           // no engine update → explain, don't panic
-  const QUIET_LOUD_MS = 90000;           // stronger wording for long silences
+  const QUIET_STALL_MS = 2 * 60000;      // 2 min quiet → add elapsed/ETA context
+  const QUIET_STUCK_MS = 6 * 60000;      // 6 min quiet → mention Cancel as an option
   const LONG_SCAN_NOTE_MS = 3 * 60000;   // gentle "big scans take a while" note
+
+  /* Why a stage goes quiet, in one line each. Production JS is big: the
+   * analyze stage is CPU-bound and one minified bundle can occupy a worker
+   * for minutes without finishing, and the beautifier/verifier have their
+   * own long, event-free stretches. The hint names the stage's cost *before*
+   * it suggests anything is wrong — "cancel and retry with fewer workers"
+   * after 90 seconds was advice for a problem that in most cases did not
+   * exist, and "fewer workers" would not even speed up a single big file. */
+  const STAGE_QUIET_NOTES = {
+    recon: "Fetching the page (network-bound — slow sites, redirects or bot protection make this slower).",
+    discover: "Resolving module and chunk references found inside the downloaded scripts.",
+    download: "Downloading bundles from the target site (network-bound).",
+    normalize: "Beautifying minified bundles — large production files take longer to reformat.",
+    analyze: "Static-analysis passes (secrets, taint, AST, attack surface) run per script and stay quiet while one large bundle is processed — normal for production-size JS.",
+    correlate: "De-duplicating and ranking findings across scripts.",
+    verify: "A local headless browser is loading the page and recording runtime evidence.",
+    report: "Assembling the report.",
+  };
 
   async function pollJob(jobId) {
     const startedAt = performance.now();
     let lastGoodPoll = startedAt;
+    let pollDelay = POLL_INTERVAL_MS;
+    let lastSignature = "";
     while (true) {
       let status;
       try {
@@ -1405,11 +1466,24 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       if (job.status === "done") return job;
       if (job.status === "error") throw new Error(job.error || "Analysis failed.");
       if (job.status === "canceled") throw new Error("Analysis canceled.");
-      // Back off politely while the tab is hidden; browsers throttle timers
-      // here anyway, and the engine does not need us polling it every 500ms
-      // while nobody is watching.
-      const interval = document.hidden ? POLL_INTERVAL_MS * 4 : POLL_INTERVAL_MS;
-      await new Promise((r) => setTimeout(r, interval));
+      // Adaptive cadence. Progress that is visibly moving is polled fast
+      // (500 ms) so the bar and messages feel live; a stage that reports the
+      // same snapshot (one big bundle being analyzed) backs off gradually to
+      // a few seconds — the engine's answer cannot have changed, and the
+      // client-side ticker keeps the clocks moving between polls. Any change
+      // snaps the cadence straight back to fast.
+      const signature = [
+        job.status, job.stage, job.message, job.percent, job.current,
+        job.total, job.files_scanned, job.bytes_scanned, job.canceling,
+      ].join("\u0001");
+      if (signature !== lastSignature) {
+        lastSignature = signature;
+        pollDelay = POLL_INTERVAL_MS;
+      } else {
+        const ceiling = document.hidden ? POLL_MAX_HIDDEN_INTERVAL_MS : POLL_MAX_INTERVAL_MS;
+        pollDelay = Math.min(Math.round(pollDelay * 1.7) || POLL_INTERVAL_MS, ceiling);
+      }
+      await new Promise((r) => setTimeout(r, pollDelay));
     }
   }
 
@@ -1701,8 +1775,20 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
         body: JSON.stringify(query),
       });
       if (!res.ok) {
-        const err = await res.text().catch(() => "");
-        throw new Error(err || "Report generation failed.");
+        // The engine answers errors as JSON ({ok:false, error}); surface the
+        // real reason ("Analysis is still running…", unknown job, failed
+        // scan) instead of a generic failure.
+        let message = "";
+        try {
+          const body = await res.json();
+          message = (body && body.error) || "";
+        } catch {
+          const text = await res.text().catch(() => "");
+          message = text ? text.slice(0, 240) : "";
+        }
+        const err = new Error(message || "Report generation failed.");
+        err.statusCode = res.status;
+        throw err;
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -1719,9 +1805,15 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
     } catch (err) {
-      showConnectionError(err);
-      setEngineStatus("checking", err.message || "Analysis failed");
-      openPrivacyModal();
+      setEngineStatus("checking", err.message || "Report generation failed.");
+      // Only a connection/pairing problem should open the setup dialog. An
+      // engine *rejection* (still running, failed scan, unknown job) is an
+      // analysis-state issue — it is shown in the status pill, not as a
+      // "pair your engine" wizard.
+      if (isConnectionFailure(err)) {
+        showConnectionError(err);
+        openPrivacyModal();
+      }
     } finally {
       hideLoading();
     }

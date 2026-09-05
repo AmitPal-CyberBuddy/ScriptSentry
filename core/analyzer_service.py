@@ -23,7 +23,7 @@ from core.source_maps import inspect_source_map
 from core.runtime_evidence import attach_runtime_evidence, capture_runtime_evidence, runtime_evidence_enabled
 from core.pipeline import ProgressModel, stage_plan
 from core.js_parser import clear_parse_cache
-from core.scanner import ScanCancelled, scan_file
+from core.scanner import HEARTBEAT_MIN_CHARS, ScanCancelled, scan_file
 
 # Compatibility references keep older integrations that patch the two legacy
 # discovery functions working, while normal scans use one cached page fetch.
@@ -45,7 +45,7 @@ def _check_cancel(cancel_check):
         raise ScanCancelled("Scan cancelled by user")
 
 
-def _scan_document(path, content, source_url="", cancel_check=None):
+def _scan_document(path, content, source_url="", cancel_check=None, progress_heartbeat=None):
     """Run all analyzers for one document and retain provenance.
 
     Provenance is essential for first/third-party classification and for
@@ -53,7 +53,8 @@ def _scan_document(path, content, source_url="", cancel_check=None):
     must never be used as a substitute for the script's actual origin.
     """
     content = content or ""
-    data = scan_file(path, content=content, cancel_check=cancel_check)
+    data = scan_file(path, content=content, cancel_check=cancel_check,
+                     progress_heartbeat=progress_heartbeat)
     if data.get("source_map", {}).get("present"):
         try:
             data["source_map"] = inspect_source_map(content, source_url, timeout=10)
@@ -67,7 +68,8 @@ def _scan_document(path, content, source_url="", cancel_check=None):
     return data
 
 
-def _merge_into(results, path, content, seen_hashes=None, source_url="", cancel_check=None):
+def _merge_into(results, path, content, seen_hashes=None, source_url="", cancel_check=None,
+                progress_heartbeat=None):
     """Run the full scanner plus crypto extractor for a single JS document.
 
     ``seen_hashes`` lets a URL scan skip duplicate content (mirrored bundles,
@@ -86,7 +88,8 @@ def _merge_into(results, path, content, seen_hashes=None, source_url="", cancel_
         if digest in seen_hashes:
             return False
         seen_hashes.add(digest)
-    data = _scan_document(path, content, source_url=source_url, cancel_check=cancel_check)
+    data = _scan_document(path, content, source_url=source_url, cancel_check=cancel_check,
+                          progress_heartbeat=progress_heartbeat)
     results[path] = data
     return True
 
@@ -97,16 +100,25 @@ def analyze_content(code, filename="inline.js", progress_callback=None, cancel_c
     _check_cancel(cancel_check)
     progress = ProgressModel(stage_plan(mode="code"))
 
-    def notify(phase, message, current=None, total=None):
+    def notify(phase, message, current=None, total=None, total_bytes=None):
         progress.set_stage(phase, current=0 if current is None else current,
                            total=0 if total is None else total)
         _notify(progress_callback, phase=phase, stage=progress.stage,
                 stages=progress.stage_states(), current=progress.current,
-                total=progress.total, percent=progress.percent, message=message)
+                total=progress.total, percent=progress.percent,
+                total_bytes=total_bytes, message=message)
 
-    notify("analyze", "Analyzing pasted JavaScript", current=0, total=1)
+    notify("analyze", "Analyzing pasted JavaScript", current=0, total=1,
+           total_bytes=len(code.encode("utf-8", errors="ignore")))
+
+    def _heartbeat(detail):
+        # A very large paste can occupy the engine for a while; keep the
+        # dashboard's heartbeat and message moving during it.
+        notify("analyze", f"Analyzing pasted JavaScript - {detail}")
+
     results = {}
-    _merge_into(results, filename, code, cancel_check=cancel_check)
+    _merge_into(results, filename, code, cancel_check=cancel_check,
+                progress_heartbeat=_heartbeat)
     _check_cancel(cancel_check)
     notify("correlate", "Correlating findings", current=1, total=1)
     progress.complete_stage()
@@ -144,14 +156,18 @@ def analyze_files(files, progress_callback=None, cancel_check=None):
     _check_cancel(cancel_check)
     progress = ProgressModel(stage_plan(mode="files"))
 
-    def notify(phase, message, current=None, total=None):
+    def notify(phase, message, current=None, total=None, total_bytes=None):
         progress.set_stage(phase, current=0 if current is None else current,
                            total=0 if total is None else total)
         _notify(progress_callback, phase=phase, stage=progress.stage,
                 stages=progress.stage_states(), current=progress.current,
-                total=progress.total, percent=progress.percent, message=message)
+                total=progress.total, percent=progress.percent,
+                total_bytes=total_bytes, message=message)
 
-    notify("analyze", "Analyzing uploaded files", current=0, total=total)
+    total_bytes = sum(len((item.get("code") or "").encode("utf-8", errors="ignore"))
+                      for item in files if isinstance(item, dict))
+    notify("analyze", "Analyzing uploaded files", current=0, total=total,
+           total_bytes=total_bytes)
     results = {}
     seen_hashes = set()
     used_names = set()
@@ -169,7 +185,12 @@ def analyze_files(files, progress_callback=None, cancel_check=None):
             unique = f"{stem}-{n}{ext or '.js'}"
             n += 1
         used_names.add(unique)
-        _merge_into(results, unique, code, seen_hashes=seen_hashes, cancel_check=cancel_check)
+        heartbeat = None
+        if len(code) >= HEARTBEAT_MIN_CHARS:
+            def heartbeat(detail, _name=unique):
+                notify("analyze", f"Analyzing {_name} - {detail}")
+        _merge_into(results, unique, code, seen_hashes=seen_hashes, cancel_check=cancel_check,
+                    progress_heartbeat=heartbeat)
         notify("analyze", f"Analyzed {unique} ({index + 1}/{total})",
                current=index + 1, total=total)
     progress.complete_stage()
@@ -554,6 +575,10 @@ def analyze_url(
         "workspace": workspace,
         "workspace_obj": workspace_obj,
         "local_by_url": {},
+        # Workload discovered so far (entry scripts + nested chunks), used by
+        # the ETA model. Grows as discovery finds more; never reported above
+        # the user's file cap.
+        "expected_files": 0,
     }
     lock = threading.Lock()
     seen_hashes = set()
@@ -580,6 +605,7 @@ def analyze_url(
             percent=progress.percent,
             scanned_bytes=scanned_bytes(),
             total_bytes=max(1, total_bytes),
+            expected_files=state.get("expected_files", 0),
             message=message,
         )
 
@@ -661,6 +687,7 @@ def analyze_url(
             progress=progress,
         )
 
+    state["expected_files"] = min(max_files, len(discovered) + len(inline_scripts))
     state["script_urls"].extend(discovered[:max_files])
     if direct_script_body is not None:
         state["script_urls"].append(url)
@@ -753,7 +780,7 @@ def analyze_url(
     for path, _, _, _, _ in initial_tasks:
         known_paths.add(path)
 
-    def merge_document(path, base_url, content):
+    def merge_document(path, base_url, content, phase="analyze"):
         """Thread-safe merge. Returns a skip reason, or None when added."""
         _check_cancel(cancel_check)
         content = content or ""
@@ -767,7 +794,18 @@ def analyze_url(
                 state["skipped_reasons"].add("duplicate_content")
                 return "duplicate_content"
             seen_hashes.add(digest)
-        data = _scan_document(path, content, source_url=base_url, cancel_check=cancel_check)
+        heartbeat = None
+        if len(content) >= HEARTBEAT_MIN_CHARS:
+            # Announce progress *inside* a long single-file analysis. Without
+            # this a 2 MB bundle is silent from "Scanning x..." to "Analyzed
+            # x", which is the single longest quiet stretch of a scan.
+            file_name = os.path.basename(path) if path else "inline script"
+
+            def heartbeat(detail, _phase=phase, _name=file_name):
+                scan_progress(_phase, f"Analyzing {_name} - {detail}")
+
+        data = _scan_document(path, content, source_url=base_url, cancel_check=cancel_check,
+                              progress_heartbeat=heartbeat)
         with lock:
             results[path] = data
             state["path_to_url"][path] = base_url
@@ -804,6 +842,8 @@ def analyze_url(
                 if next_path in known_paths or len(results) + len(new_tasks) >= max_files:
                     continue
                 known_paths.add(next_path)
+                state["expected_files"] = min(max_files, max(
+                    int(state.get("expected_files", 0)), len(known_paths)))
                 state["script_urls"].append(absolute_url)
             new_tasks.append((next_path, absolute_url, None, "recursive_scan", depth + 1))
             state["script_edges"].append({"from": base_url, "to": absolute_url, "kind": "module_reference", "depth": depth + 1})
@@ -829,7 +869,7 @@ def analyze_url(
                 record_skip("read_error")
                 scan_progress(phase, f"Could not read {name} — skipped")
                 return []
-        skipped = merge_document(path, base_url, content)
+        skipped = merge_document(path, base_url, content, phase=phase)
         if skipped:
             scan_progress(phase, f"Skipping {skipped.replace('_', ' ')} {name} ({len(results)}/{max_files})")
             return []

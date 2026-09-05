@@ -67,8 +67,15 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_ROOT, **kwargs)
+        # Set by _send_json(): successful /api/status and /api/health polls
+        # are the dashboard's heartbeat, arriving up to a few times per second
+        # during a scan. Logging each one buried every useful line the server
+        # prints, so they are recorded only when they fail.
+        self._quiet_access_log = False
 
     def log_message(self, fmt, *args):
+        if getattr(self, "_quiet_access_log", False):
+            return
         print(f"[webui] {self.address_string()} {fmt % args}", flush=True)
 
     def end_headers(self):
@@ -81,6 +88,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def _send_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        path = urlparse(self.path).path if self.path else ""
+        self._quiet_access_log = (
+            status == 200 and path in ("/api/status", "/api/health")
+        )
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -503,6 +514,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 job = jobs.create(
                     mode="url", source=url, profile=profile,
                     max_files=max_files, max_depth=max_depth, timeout=timeout,
+                    max_workers=max_workers,
                 )
             except RuntimeError as exc:
                 self._send_error_json(str(exc), 429)
@@ -528,7 +540,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 upload_error = ""
             if uploads:
                 try:
-                    job = jobs.create(mode="code", source=f"{len(uploads)} file(s)", max_files=len(uploads))
+                    job = jobs.create(mode="code", source=f"{len(uploads)} file(s)", max_files=len(uploads),
+                                      max_workers=SCAN_MAX_WORKERS)
                 except RuntimeError as exc:
                     self._send_error_json(str(exc), 429)
                     return
@@ -550,7 +563,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 filename = str(body.get("filename", "inline.js")).strip() or "inline.js"
                 filename = filename.replace("\\x00", "")[:240]
                 try:
-                    job = jobs.create(mode="code", source=filename, max_files=1)
+                    job = jobs.create(mode="code", source=filename, max_files=1,
+                                      max_workers=SCAN_MAX_WORKERS)
                 except RuntimeError as exc:
                     self._send_error_json(str(exc), 429)
                     return

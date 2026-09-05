@@ -26,6 +26,13 @@ class ScanCancelled(Exception):
     """
 
 
+# Below this size a document analyzes in well under a second on any plausible
+# machine; heartbeat events would only add noise to the activity log. Large
+# production bundles are the ones that can occupy a worker for minutes without
+# finishing, and those are exactly the ones that must keep reporting.
+HEARTBEAT_MIN_CHARS = 150_000
+
+
 def _raise_if_cancelled(cancel_check):
     if cancel_check and cancel_check():
         raise ScanCancelled("Scan cancelled by user")
@@ -135,7 +142,7 @@ def _credible_secret(candidate):
     return len(value) >= 10 and _shannon_entropy(value) >= 3.2 and classes >= 2
 
 
-def _run_additional_analyzers(content, results, cancel_check=None):
+def _run_additional_analyzers(content, results, cancel_check=None, progress_heartbeat=None):
     analyzers = [
         ("secret_analyzer", "secret_analysis"),
         ("crypto_analyzer", "crypto_analysis"),
@@ -149,8 +156,10 @@ def _run_additional_analyzers(content, results, cancel_check=None):
         ("flow_analyzer", "data_flow_summary"),
     ]
 
-    for module_name, result_key in analyzers:
+    for index, (module_name, result_key) in enumerate(analyzers, start=1):
         _raise_if_cancelled(cancel_check)
+        if progress_heartbeat is not None:
+            progress_heartbeat(f"analyzer {index}/{len(analyzers)} ({module_name})")
         try:
             module = importlib.import_module(f"analyzers.{module_name}")
             payload = module.analyze(content, previous=results)
@@ -165,7 +174,15 @@ def _run_additional_analyzers(content, results, cancel_check=None):
             results[result_key] = [] if result_key != "obfuscation_analysis" else {}
 
 
-def scan_file(file_path, content=None, cancel_check=None):
+def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=None):
+    """Run every analysis pass over one document.
+
+    ``progress_heartbeat``, when given, is called with a short pass name at
+    each heavy checkpoint *for large documents only* (see
+    ``HEARTBEAT_MIN_CHARS``). A 2 MB minified bundle can hold one worker for
+    minutes; without these in-flight events the dashboard cannot tell
+    "working on a big bundle" from "gone".
+    """
     results = {
         "secrets": [],
         "credible_secrets": [],
@@ -215,6 +232,14 @@ def scan_file(file_path, content=None, cancel_check=None):
 
     _raise_if_cancelled(cancel_check)
     content = content or ""
+
+    def _beat(detail):
+        if progress_heartbeat is not None and len(content) >= HEARTBEAT_MIN_CHARS:
+            try:
+                progress_heartbeat(detail)
+            except Exception:
+                pass
+
     source_map = source_map_reference(content)
     if source_map:
         results["source_map"] = {"present": True, "url": source_map, "sources": [], "available": False}
@@ -247,6 +272,7 @@ def scan_file(file_path, content=None, cancel_check=None):
         r'https://discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_\-]+',
     ]
 
+    _beat("secret patterns")
     raw_secrets = []
     for pattern in secret_patterns:
         # A regex over a 2 MB minified bundle is fast, but a dozen of them in
@@ -298,6 +324,8 @@ def scan_file(file_path, content=None, cancel_check=None):
         if context:
             results["secret_context"].append(context)
 
+    _beat("hardcoded config scan")
+
     # =========================================
     # 🔐 HARD-CODED CONFIG OBJECTS
     # =========================================
@@ -314,6 +342,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     # 🔐 DEOBFUSCATION / DECODED VALUES
     # =========================================
     _raise_if_cancelled(cancel_check)
+    _beat("decoder pass")
     results["decoded_strings"] = decode_candidate_strings(content)
     results["decoded_strings"] += extract_hidden_values(content)
     results["decoded_strings"] = list(dict.fromkeys(results["decoded_strings"]))[:30]
@@ -325,6 +354,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     # plain substring test over config.CRYPTO_KEYWORDS, so "DES" matched
     # "desktop", "Hex" matched "hexagon" and every design token or
     # desktop-theme helper became a crypto finding.
+    _beat("crypto markers")
     for marker in crypto_markers_in(content):
         if marker["name"] not in results["crypto"]:
             results["crypto"].append(marker["name"])
@@ -333,6 +363,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     # =========================================
     # 🌐 ENDPOINT EXTRACTION (EXTENDED)
     # =========================================
+    _beat("endpoint extraction")
     endpoint_patterns = [
         r'/api/[a-zA-Z0-9/_\-]+',
         r'https?://[a-zA-Z0-9\.\-]+/[a-zA-Z0-9/_\-]*',
@@ -473,6 +504,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     # 🧠 AST INTELLIGENCE
     # =========================================
     _raise_if_cancelled(cancel_check)
+    _beat("AST parse")
     try:
         results["ast_analysis"] = analyze_ast(content, filename=results.get("loc_id", "inline.js"))
     except Exception as exc:
@@ -511,6 +543,7 @@ def scan_file(file_path, content=None, cancel_check=None):
         "three": {"name": "Three.js", "kind": "media"},
         "monaco": {"name": "Monaco", "kind": "editor"},
     }
+    _beat("dependency scan")
     seen_deps = set()
     for source in (results.get("ast_analysis", {}).get("dependencies", []) or []):
         source = (source or "").split("/")[0]
@@ -562,7 +595,8 @@ def scan_file(file_path, content=None, cancel_check=None):
     results["dependency_scan"] = dependency_scan[:40]
 
     _raise_if_cancelled(cancel_check)
-    _run_additional_analyzers(content, results, cancel_check=cancel_check)
+    _run_additional_analyzers(content, results, cancel_check=cancel_check,
+                              progress_heartbeat=_beat)
 
     # =========================================
     # 📊 SCORING SYSTEM (EXTENDED)
@@ -680,10 +714,12 @@ def scan_file(file_path, content=None, cancel_check=None):
     # =========================================
     _raise_if_cancelled(cancel_check)
     filename = results.get("loc_id", "inline.js")
+    _beat("taint flows")
     try:
         results["dataflows"] = analyze_taint(content, filename=filename)
     except Exception:
         results["dataflows"] = []
+    _beat("framework rules")
     try:
         results["framework_findings"] = analyze_framework(content, filename=filename)
     except Exception:
@@ -693,6 +729,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     # 🎯 ATTACK SURFACE
     # =========================================
     _raise_if_cancelled(cancel_check)
+    _beat("attack surface")
     try:
         results["attack_surface"] = extract_attack_surface(content, filename=filename)
     except Exception:
@@ -702,6 +739,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     # Correlation is centralised in core.analysis_model so every consumer receives
     # the same evidence-based, de-duplicated view.
     _raise_if_cancelled(cancel_check)
+    _beat("correlating findings")
     results["findings"] = correlate_findings(
         results["dataflows"],
         results["framework_findings"],

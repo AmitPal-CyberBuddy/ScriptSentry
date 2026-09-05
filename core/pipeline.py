@@ -17,6 +17,7 @@ This module gives the rest of the engine:
 The fraction is deliberately monotonic: progress that moves backwards destroys
 trust in the ETA faster than an imprecise ETA does.
 """
+import threading
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -135,6 +136,11 @@ class ProgressModel:
     _stage_fraction: Dict[str, float] = field(default_factory=dict)
     _completed_weight: float = 0.0
     _current_weight: float = 0.0
+    # Progress events arrive from several worker threads at once (file
+    # announcements, completions and now in-file heartbeats), so every
+    # mutation and read of the shared counters is serialized. RLock because
+    # set_stage() delegates to update().
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     def __post_init__(self) -> None:
         self.plan = list(self.plan) or list(STAGES)
@@ -147,9 +153,13 @@ class ProgressModel:
     # -- mutation ---------------------------------------------------------
     def set_stage(self, phase: str, current: int = 0, total: int = 0) -> None:
         """Move to ``phase``, banking the progress of the previous one."""
+        with self._lock:
+            self._set_stage_locked(phase, current, total)
+
+    def _set_stage_locked(self, phase: str, current: int = 0, total: int = 0) -> None:
         key = canonical_stage(phase)
         if key == self.stage:
-            self.update(current=current, total=total)
+            self._update_locked(current=current, total=total)
             return
         # Bank whatever the outgoing stage had reached.
         self._stage_fraction[self.stage] = max(
@@ -167,6 +177,10 @@ class ProgressModel:
         ``total`` is allowed to grow (more bundles discovered); it is never
         allowed to shrink below the work already done.
         """
+        with self._lock:
+            self._update_locked(current, total)
+
+    def _update_locked(self, current: Optional[int] = None, total: Optional[int] = None) -> None:
         if current is not None:
             self.current = max(self.current, int(current or 0))
         if total is not None:
@@ -176,8 +190,9 @@ class ProgressModel:
         self._recompute()
 
     def complete_stage(self, phase: Optional[str] = None) -> None:
-        key = canonical_stage(phase) if phase else self.stage
-        self._stage_fraction[key] = 1.0
+        with self._lock:
+            key = canonical_stage(phase) if phase else self.stage
+            self._stage_fraction[key] = 1.0
 
     # -- reading ----------------------------------------------------------
     def _stage_progress(self) -> float:
@@ -200,14 +215,20 @@ class ProgressModel:
 
     @property
     def fraction(self) -> float:
-        return self._fraction
+        with self._lock:
+            return self._fraction
 
     @property
     def percent(self) -> float:
-        return round(self._fraction * 100.0, 2)
+        with self._lock:
+            return round(self._fraction * 100.0, 2)
 
     def stage_states(self) -> List[Dict[str, object]]:
         """Per-stage snapshot for the UI (pending / active / done)."""
+        with self._lock:
+            return self._stage_states_locked()
+
+    def _stage_states_locked(self) -> List[Dict[str, object]]:
         order = {s.key: i for i, s in enumerate(self.plan)}
         active_index = order.get(self.stage, -1)
         out: List[Dict[str, object]] = []

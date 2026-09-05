@@ -14,11 +14,14 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from core.eta import CostModel
+
 
 class Job:
     """Mutable progress record for one background analysis."""
 
-    def __init__(self, mode="code", source="", profile="", max_files=50, max_depth=5, timeout=15):
+    def __init__(self, mode="code", source="", profile="", max_files=50, max_depth=5, timeout=15,
+                 max_workers=None):
         self.id = uuid.uuid4().hex
         self.mode = mode
         self.source = source
@@ -26,6 +29,7 @@ class Job:
         self.max_files = int(max_files or 50)
         self.max_depth = int(max_depth or 5)
         self.timeout = int(timeout or 15)
+        self.max_workers = max(1, int(max_workers or 6))
         self.status = "queued"
         self.phase = "queued"
         self.message = "Queued"
@@ -35,6 +39,7 @@ class Job:
         self.files_scanned = 0
         self.bytes_scanned = 0
         self.total_bytes = 0
+        self.expected_files = 0
         self.skipped_files = 0
         self.elapsed_ms = 0
         self.eta_seconds = None
@@ -57,9 +62,18 @@ class Job:
         self._lock = threading.Lock()
         self.cancel_event = threading.Event()
         # ETA state: a bounded window of (timestamp, fraction) samples plus an
-        # exponential moving average of the observed progress rate.
+        # exponential moving average of the observed progress rate, blended
+        # with the workload cost model (core.eta) built from what the early
+        # pipeline phases discovered (file count, bytes) and the scan settings
+        # (profile caps, workers).
         self._samples = []
         self._rate_ema = None
+        self._last_advance_ts = None   # last time the fraction actually grew
+        self.eta_basis = ""
+        self.cost_model = CostModel(
+            mode=mode, max_files=self.max_files, max_depth=self.max_depth,
+            timeout=self.timeout, workers=self.max_workers,
+        )
 
     # Progress is now a weighted, monotonic fraction (see core.pipeline), so
     # the ETA only has to estimate how fast that fraction is moving.
@@ -71,60 +85,134 @@ class Job:
     _ETA_MAX_SECONDS = 15 * 60.0
     _ETA_CONFIDENT_AT = 0.35       # fraction of work seen before we trust it
     _ETA_CONFIDENT_SECONDS = 8.0   # ...and how long we must have watched it
+    # How quickly the observed rate goes stale while the engine is quiet.
+    # exp(-quiet/45s) is ~0.75 after 13s and ~0.26 after a minute: past about
+    # a minute of silence the workload model is the better-informed half.
+    _ETA_STALENESS_TAU = 45.0
 
-    def _update_eta_locked(self):
-        """Estimate the time remaining from the observed progress rate.
+    def _update_eta_locked(self, append_sample=True, now=None):
+        """Blend a workload cost model with the observed progress rate.
 
-        The old calculation was ``elapsed * (100 - percent) / percent``. Two
-        things made it useless in practice: ``percent`` used to be
-        "files done / file cap" (a 4-script site reported 4% and therefore an
-        ETA of 24x the elapsed time), and a single unsmoothed sample makes the
-        number swing wildly between polls.
+        The pure rate-based estimate (the old behaviour) needed to *watch*
+        real progress for many seconds before it meant anything, and it froze
+        completely while the engine was quiet -- a 2 MB bundle analyzed by one
+        worker emits no events for minutes, so the dashboard happily showed
+        ``eta ~2m left`` next to ``last update 28m ago``.
 
-        This version measures progress over a sliding window, smooths the rate
-        with an EMA, damps upward jumps, and reports how confident it is.
+        The estimate is now a blend of two sources:
+
+        * **Workload model** (:class:`core.eta.CostModel`) -- expected seconds
+          left, computed from the files recon/discover found, the bytes
+          download pulled, the stage plan, the profile timeouts and the
+          worker count. Available from the first event; its confidence grows
+          as assumptions (average file size) become measurements (real bytes).
+        * **Observed rate** -- the old sliding-window EMA over fraction
+          samples. Trustworthy only after enough progress has been seen
+          (``eta_confidence``), and only while it is fresh: during a quiet
+          stretch it decays (``staleness``) toward the model.
+
+        ``append_sample=False`` is used by :meth:`snapshot` to refresh the
+        estimate on every UI poll *without* polluting the measurement window.
         """
-        now = time.time()
+        live_now = time.time() if now is None else now
         fraction = max(0.0, min(1.0, float(self.percent or 0.0) / 100.0))
 
         if self.started_at is None or fraction <= 0.0:
             self.eta_seconds = None
             self.eta_confidence = 0.0
+            self.eta_basis = ""
             return
 
-        self._samples.append((now, fraction))
-        cutoff = now - self._ETA_WINDOW_SECONDS
-        while len(self._samples) > 2 and self._samples[0][0] < cutoff:
-            self._samples.pop(0)
+        if append_sample:
+            last = self._samples[-1] if self._samples else None
+            # Record a sample only when the fraction actually moved, or when
+            # the window's baseline has aged out. Heartbeat events (message
+            # refreshes with no fraction change) must not dilute the rate.
+            if (last is None
+                    or fraction > last[1] + 1e-6
+                    or live_now - last[0] >= self._ETA_WINDOW_SECONDS):
+                grew = not self._samples or fraction > self._samples[-1][1] + 1e-6
+                self._samples.append((live_now, fraction))
+                if grew:
+                    self._last_advance_ts = live_now
+            cutoff = live_now - self._ETA_WINDOW_SECONDS
+            while len(self._samples) > 2 and self._samples[0][0] < cutoff:
+                self._samples.pop(0)
 
-        t_first, f_first = self._samples[0]
-        t_last, f_last = self._samples[-1]
-        dt = t_last - t_first
-        if dt >= self._ETA_MIN_SAMPLE_SECONDS and f_last > f_first:
-            rate = (f_last - f_first) / dt
+        # --- observed half -------------------------------------------------
+        obs_eta = None
+        obs_conf = 0.0
+        weight_model = 1.0
+        if self._samples:
+            t_first, f_first = self._samples[0]
+            t_last, f_last = self._samples[-1]
+            dt = t_last - t_first
+            if dt >= self._ETA_MIN_SAMPLE_SECONDS and f_last > f_first:
+                rate = (f_last - f_first) / dt
+            else:
+                # Too little (or no) measurable movement inside the window:
+                # fall back to the average rate since the start instead of
+                # dividing by a number close to zero.
+                dt = max(live_now - self.started_at, 0.001)
+                rate = f_last / dt
+            rate = max(rate, 1e-6)
+            self._rate_ema = rate if self._rate_ema is None else (
+                self._rate_ema + self._ETA_ALPHA * (rate - self._rate_ema))
+            obs_eta = max(0.0, 1.0 - fraction) / max(self._rate_ema, 1e-6)
+            # Confidence needs both: enough work observed and enough time
+            # watched. A rate measured over 200 ms is a guess, whatever the
+            # percentage says.
+            obs_conf = min(
+                1.0,
+                fraction / self._ETA_CONFIDENT_AT,
+                (live_now - self.started_at) / self._ETA_CONFIDENT_SECONDS,
+            )
+
+        # --- model half ----------------------------------------------------
+        model = self.cost_model
+        model.observe(
+            stage=self.stage,
+            current=self.current,
+            total=self.total,
+            total_bytes=self.total_bytes,
+            bytes_scanned=self.bytes_scanned,
+            expected_files=self.expected_files,
+            stages=self.stages if isinstance(self.stages, list) else None,
+        )
+        model_eta = model.remaining_seconds()
+        model_conf = model.confidence()
+
+        quiet = max(0.0, live_now - (self._last_advance_ts or self.started_at))
+        staleness = pow(2.718281828, -quiet / self._ETA_STALENESS_TAU)
+
+        if obs_eta is None:
+            eta = model_eta
+            weight_model = 1.0
         else:
-            # Too little (or no) measurable movement inside the window: fall
-            # back to the average rate since the start instead of dividing by
-            # a number close to zero.
-            dt = max(now - self.started_at, 0.001)
-            rate = f_last / dt
+            # The measurement leads when it is confident and fresh; the model
+            # leads early on and during long quiet stretches.
+            weight_model = model_conf * (1.0 - obs_conf * staleness)
+            weight_model = max(0.05, min(0.95, weight_model))
+            eta = (1.0 - weight_model) * obs_eta + weight_model * model_eta
 
-        rate = max(rate, 1e-6)
-        self._rate_ema = rate if self._rate_ema is None else (
-            self._rate_ema + self._ETA_ALPHA * (rate - self._rate_ema))
-        rate = max(self._rate_ema, 1e-6)
-
-        eta = max(0.0, 1.0 - fraction) / rate
+        # A growing workload estimate (nested chunks keep being discovered)
+        # may raise the estimate, but never explosively; how fast the number
+        # may climb scales with how much the model trusts itself.
         if self.eta_seconds is not None and eta > self.eta_seconds:
-            eta = min(eta, self.eta_seconds * self._ETA_RISE_LIMIT + self._ETA_RISE_SLACK)
-        self.eta_seconds = max(0.0, min(eta, self._ETA_MAX_SECONDS))
-        # Confidence needs both: enough work observed and enough time watched.
-        # A rate measured over 200 ms is a guess, whatever the percentage says.
-        self.eta_confidence = round(min(
-            1.0,
-            fraction / self._ETA_CONFIDENT_AT,
-            (now - self.started_at) / self._ETA_CONFIDENT_SECONDS,
-        ), 2)
+            rise_limit = self._ETA_RISE_LIMIT + 1.2 * model_conf
+            slack = self._ETA_RISE_SLACK + 30.0 * model_conf
+            eta = min(eta, self.eta_seconds * rise_limit + slack)
+        # The ceiling scales with the workload: a strict 500-file scan has a
+        # legitimately longer horizon than the old flat 15-minute cap.
+        cap = max(self._ETA_MAX_SECONDS, min(3.0 * model_eta + 60.0, 90 * 60.0))
+        self.eta_seconds = max(0.0, min(eta, cap))
+        self.eta_confidence = round(max(obs_conf * staleness, model_conf * 0.9) * 0.95, 2)
+        if obs_eta is None or weight_model >= 0.7:
+            self.eta_basis = "workload model"
+        elif weight_model >= 0.35:
+            self.eta_basis = "blended"
+        else:
+            self.eta_basis = "observed rate"
 
     def update(self, **kwargs):
         with self._lock:
@@ -151,6 +239,9 @@ class Job:
                         "stage", "stages"):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
+            if kwargs.get("expected_files") is not None:
+                self.expected_files = max(
+                    self.expected_files, int(kwargs["expected_files"] or 0))
 
             if kwargs.get("current") is not None and "files_scanned" not in kwargs:
                 self.files_scanned = max(self.files_scanned, int(kwargs["current"] or 0))
@@ -228,6 +319,7 @@ class Job:
                 self.elapsed_ms = int((self.finished_at - self.started_at) * 1000)
             self.eta_seconds = None
             self.eta_confidence = 0.0
+            self.eta_basis = ""
 
     def cancel(self):
         """Request cooperative cancellation; in-flight work stops at the next check.
@@ -252,6 +344,15 @@ class Job:
     def snapshot(self, include_result=False):
         with self._lock:
             now = time.time()
+            # Keep the clocks honest between engine events: elapsed advances
+            # from the real start time, and the ETA is refreshed against the
+            # current wall clock, so a long quiet stage no longer freezes
+            # either number (the old panel could show "elapsed 4m" next to
+            # "last update 28m ago").
+            if self.status == "running" and self.started_at is not None:
+                self.elapsed_ms = int((now - self.started_at) * 1000)
+                if self.percent and self.percent > 0:
+                    self._update_eta_locked(append_sample=False)
             since_update_ms = None
             if self.last_update_ts is not None:
                 since_update_ms = max(0, int((now - self.last_update_ts) * 1000))
@@ -273,6 +374,9 @@ class Job:
                 "elapsed_ms": self.elapsed_ms,
                 "eta_seconds": round(self.eta_seconds, 1) if self.eta_seconds is not None else None,
                 "eta_confidence": self.eta_confidence,
+                "eta_basis": self.eta_basis,
+                "expected_files": int(max(self.cost_model.files_expected, self.expected_files) or 0),
+                "expected_bytes": int(self.cost_model.bytes_expected or self.cost_model._bytes_estimate()),
                 "stage": self.stage,
                 "stages": self.stages,
                 "since_update_ms": since_update_ms,
@@ -316,7 +420,8 @@ class JobManager:
         while len(self._jobs) >= self._max_jobs and terminal:
             self._jobs.pop(terminal.pop(0).id, None)
 
-    def create(self, mode="code", source="", profile="", max_files=50, max_depth=5, timeout=15):
+    def create(self, mode="code", source="", profile="", max_files=50, max_depth=5, timeout=15,
+               max_workers=None):
         job = Job(
             mode=mode,
             source=source,
@@ -324,6 +429,7 @@ class JobManager:
             max_files=max_files,
             max_depth=max_depth,
             timeout=timeout,
+            max_workers=max_workers,
         )
         with self._lock:
             self._prune_locked()

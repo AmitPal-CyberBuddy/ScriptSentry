@@ -2,9 +2,12 @@
 import json
 import os
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 from core.analyzer_service import analyze_content
+from core.eta import AVG_JS_BYTES, CostModel
 from core.jobs import Job
 from core.pipeline import ProgressModel, canonical_stage, stage_label, stage_plan
 from core.reporter import (
@@ -129,6 +132,159 @@ class EtaTest(unittest.TestCase):
         job.update(percent=50, current=50, total=100)  # no progress for 5s
         after = job.snapshot()["eta_seconds"]
         self.assertLessEqual(after, before * 1.6 + 3.0)
+
+
+class WorkloadEtaTest(unittest.TestCase):
+    """The estimate must come from the *discovered workload*, not just the clock.
+
+    The old estimator extrapolated the observed percent velocity and nothing
+    else: it knew neither how many files recon had found, nor how many bytes
+    download had pulled, nor the worker count -- and it froze entirely while
+    the engine was quiet, showing "eta ~2m left" next to "last update 28m
+    ago".
+    """
+
+    STAGES = [{"key": s, "state": "pending"} for s in
+              ("recon", "discover", "download", "normalize", "analyze",
+               "correlate", "report")]
+
+    def test_model_scales_with_discovered_files_and_bytes(self):
+        small = CostModel(mode="url", max_files=50, timeout=15, workers=6)
+        small.observe(stage="download", current=5, total=5, total_bytes=2_000_000,
+                      stages=self.STAGES)
+        big = CostModel(mode="url", max_files=50, timeout=15, workers=6)
+        big.observe(stage="download", current=40, total=40, total_bytes=60_000_000,
+                    stages=self.STAGES)
+        self.assertGreater(big.remaining_seconds(), small.remaining_seconds(),
+                           "more discovered bytes must mean a longer estimate")
+
+    def test_model_scales_with_workers(self):
+        few = CostModel(mode="url", max_files=20, timeout=15, workers=2)
+        few.observe(stage="download", current=10, total=20, total_bytes=8_000_000,
+                    stages=self.STAGES)
+        many = CostModel(mode="url", max_files=20, timeout=15, workers=16)
+        many.observe(stage="download", current=10, total=20, total_bytes=8_000_000,
+                    stages=self.STAGES)
+        self.assertLess(many.remaining_seconds(), few.remaining_seconds(),
+                        "more workers must shrink the predicted remaining time")
+
+    def test_model_confidence_grows_as_assumptions_become_measurements(self):
+        model = CostModel(mode="url", max_files=50, timeout=15, workers=6)
+        early = model.confidence()
+        model.observe(stage="discover", current=12, total=12)
+        mid = model.confidence()
+        model.observe(stage="download", current=12, total=12,
+                      total_bytes=12 * AVG_JS_BYTES)
+        late = model.confidence()
+        self.assertLess(early, mid)
+        self.assertLess(mid, late)
+
+    def test_job_eta_refuses_the_file_cap_as_workload(self):
+        # A 6-script site scanned with a 500-file cap: the estimate must be
+        # built from the 6 discovered scripts, not from the cap.
+        job = Job(mode="url", max_files=500, timeout=15, max_workers=6)
+        job.start()
+        job.update(phase="analyze", stage="analyze", current=2, total=6,
+                   percent=30.0, expected_files=6, total_bytes=1_500_000,
+                   scanned_bytes=500_000, stages=self.STAGES)
+        capped = Job(mode="url", max_files=500, timeout=15, max_workers=6)
+        capped.start()
+        capped.update(phase="analyze", stage="analyze", current=2, total=500,
+                      percent=30.0, expected_files=500, total_bytes=125_000_000,
+                      scanned_bytes=500_000, stages=self.STAGES)
+        self.assertLess(job.snapshot()["eta_seconds"], capped.snapshot()["eta_seconds"])
+
+    def test_eta_and_elapsed_stay_live_during_a_quiet_stage(self):
+        job = Job(mode="url", max_files=50, timeout=15, max_workers=6)
+        job.start()
+        clock = [1_000_000.0]
+        with mock.patch("core.jobs.time.time", lambda: clock[0]):
+            job.update(phase="analyze", stage="analyze", current=10, total=23,
+                       percent=55.0, expected_files=23,
+                       total_bytes=10_000_000, scanned_bytes=4_000_000,
+                       stages=self.STAGES)
+            eta_then = job.snapshot()["eta_seconds"]
+            elapsed_then = job.snapshot()["elapsed_ms"]
+            # Five minutes of total silence: one huge bundle on one worker.
+            clock[0] += 300.0
+            snap = job.snapshot()
+        self.assertIsNotNone(eta_then)
+        # Elapsed must keep counting from the real start time...
+        self.assertGreaterEqual(snap["elapsed_ms"], elapsed_then + 290_000)
+        # ...and the estimate must hand priority to the workload model rather
+        # than freeze (or keep claiming "2m left" while nothing moves).
+        self.assertGreaterEqual(snap["eta_seconds"], eta_then - 1.0)
+        self.assertLessEqual(snap["eta_seconds"], job._ETA_MAX_SECONDS * 2)
+
+    def test_heartbeat_events_do_not_explode_the_estimate(self):
+        job = Job(max_files=10)
+        job.start()
+        job.update(phase="analyze", stage="analyze", current=2, total=10,
+                   percent=40.0)
+        before = job.snapshot()["eta_seconds"]
+        self.assertIsNotNone(before)
+        for _ in range(8):
+            time.sleep(0.04)
+            # In-file heartbeat: the message changes, the fraction does not.
+            job.update(message="Analyzing app.min.js - analyzer 3/10")
+        after = job.snapshot()["eta_seconds"]
+        self.assertIsNotNone(after)
+        self.assertLessEqual(after, before * 2.0 + 5.0)
+
+    def test_snapshot_exposes_the_estimate_inputs(self):
+        job = Job(mode="url", max_files=50, timeout=15, max_workers=4)
+        job.start()
+        job.update(phase="download", stage="download", current=3, total=12,
+                   percent=12.0, expected_files=12, total_bytes=3_000_000)
+        snap = job.snapshot()
+        self.assertEqual(snap["expected_files"], 12)
+        self.assertEqual(snap["expected_bytes"], 3_000_000)
+        self.assertTrue(snap["eta_basis"])
+
+
+class AnalysisHeartbeatTest(unittest.TestCase):
+    """Long single-file analyses must keep reporting liveness.
+
+    The "28-minute silent analyze stage": a production minified bundle
+    occupies one worker for minutes between the "Scanning x..." and
+    "Analyzed x" events, and the dashboard could not tell that apart from a
+    dead engine. Heavy passes inside scan_file now emit heartbeat events for
+    large documents.
+    """
+
+    BIG_CONTENT = (
+        "function f(a,b){var c=a+b;localStorage.setItem('k',a);"
+        "document.getElementById('x').innerHTML=c;"
+        "fetch('/api/v1/x',{headers:{Authorization:'Bearer abcdef123456789'}});}\n"
+    ) * 1600  # ~200 KB, above HEARTBEAT_MIN_CHARS
+
+    def test_large_documents_emit_pass_level_heartbeats(self):
+        from core.scanner import HEARTBEAT_MIN_CHARS, scan_file
+        self.assertGreaterEqual(len(self.BIG_CONTENT), HEARTBEAT_MIN_CHARS)
+        events = []
+        scan_file("app.min.js", content=self.BIG_CONTENT,
+                  progress_heartbeat=events.append)
+        self.assertTrue(any("analyzer" in e for e in events),
+                        f"expected analyzer-pass heartbeats, got {events[:4]}")
+        self.assertTrue(any("taint" in e for e in events))
+
+    def test_small_documents_stay_quiet(self):
+        events = []
+        analyze_content(self.BIG_CONTENT[:500], filename="tiny.js",
+                        progress_callback=lambda **kw: events.append(kw))
+        messages = [str(c.get("message") or "") for c in events]
+        self.assertFalse(any(m.startswith("Analyzing tiny.js - ") for m in messages),
+                         "small files must not produce pass heartbeats")
+
+    def test_large_pastes_surface_heartbeats_in_progress_events(self):
+        calls = []
+        analyze_content(self.BIG_CONTENT, filename="app.min.js",
+                        progress_callback=lambda **kw: calls.append(kw))
+        messages = [str(c.get("message") or "") for c in calls]
+        self.assertTrue(any(m.startswith("Analyzing pasted JavaScript - ") for m in messages),
+                        "heartbeat details must travel through the progress stream")
+        # ...and the workload (byte size) must be reported for the ETA model.
+        self.assertTrue(any(c.get("total_bytes", 0) > 0 for c in calls))
 
 
 class StageEmissionTest(unittest.TestCase):
