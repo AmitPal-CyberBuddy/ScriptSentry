@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urljoin, urlparse, unquote
+from urllib.parse import urljoin, urlparse
 
 try:
     import requests
@@ -17,7 +17,7 @@ from config import BEAUTIFY_DIR, FILE_RULES, JS_DIR, SCAN_MAX_WORKERS
 from core.beautifier import beautify
 from core.crypto import extract_crypto_material
 from core.discovery import extract_inline_scripts, extract_js, extract_page_assets
-from core.downloader import download_js, download_file, get_safe_filename
+from core.downloader import download_js, get_safe_filename
 from core.url_policy import read_response_text, safe_get, validate_public_url
 from core.source_maps import inspect_source_map
 from core.runtime_evidence import attach_runtime_evidence, capture_runtime_evidence, runtime_evidence_enabled

@@ -687,7 +687,6 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
         crypto_names = list(dict.fromkeys(results.get("crypto", []) + [f.get("signal" if isinstance(f, dict) else "") for f in results.get("crypto_flows", [])]))[:3]
         _signal("client_side_crypto", "MEDIUM", "Client-side cryptographic flow detected", crypto_names or ["crypto library/operation present"])
     if results.get("storage"):
-        storage_text = " ".join(map(str, results["storage"])).lower()
         # storage_text holds API names only ("localStorage.setItem"), so
         # substring tests against it were meaningless -- "session" matched
         # "sessionStorage" and marked every cached UI state as sensitive.

@@ -15,7 +15,6 @@ it adds a script-centric view for triage and prioritization.
 import hashlib
 import json
 import os
-import re
 from urllib.parse import urlparse
 
 
@@ -225,7 +224,6 @@ def script_risk_score(data, page_url="", runtime_evidence=None, party=""):
         score += 5
         factors.append("First-party execution context")
 
-    caps = " ".join(profile["reads"] + profile["writes"])
     if "Dynamic Execution" in profile["writes"]:
         score += 20
         factors.append("Dynamic code execution")
@@ -361,7 +359,7 @@ def build_script_intel(results, runtime_evidence=None, page_url=""):
             page_url=page_url,
             runtime_evidence=runtime_evidence,
             runtime_url=runtime_url,
-            loaded_by=loaders_for(entry_url := (data.get("url") or runtime_url or name), name),
+            loaded_by=loaders_for((data.get("url") or runtime_url or name), name),
             pages_present=page_list,
         )
         seen.add(entry["name"])

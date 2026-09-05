@@ -29,7 +29,6 @@ import hmac
 import json
 import os
 import secrets
-import threading
 from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse

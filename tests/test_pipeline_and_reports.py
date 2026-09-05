@@ -331,13 +331,25 @@ class ReportAccuracyTest(unittest.TestCase):
             self.assertNotIn("', '", line)
 
     def test_sarif_encodes_confidence_and_kind(self):
+        from core.js_parser import parser_available
+        from core.reporter import _sarif_rank
         sarif = json.loads(generate_sarif_report(self._results()))
         results = sarif["runs"][0]["results"]
         self.assertTrue(results)
         by_id = {r["ruleId"]: r for r in results}
         flow = by_id.get("dom_injection")
         self.assertIsNotNone(flow)
-        self.assertEqual(flow["rank"], 75.0)          # high confidence
+        # rank must always mirror the finding's own confidence (which lives
+        # in the result's properties)...
+        self.assertEqual(flow["rank"],
+                         _sarif_rank((flow.get("properties") or {}).get("confidence")))
+        # ...and the AST engine proves this flow at high confidence. In
+        # regex-fallback mode flows are deliberately capped at medium
+        # (documented degradation), so the strict value is asserted only
+        # when the parser is present.
+        if parser_available():
+            self.assertEqual((flow.get("properties") or {}).get("confidence"), "high")
+            self.assertEqual(flow["rank"], 75.0)
         self.assertEqual(flow["kind"], "open")
         self.assertEqual(flow["level"], "error")
         # An observation must not be exported as a failed check.

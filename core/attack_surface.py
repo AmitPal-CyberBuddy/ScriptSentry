@@ -104,7 +104,6 @@ def _body_fields(value_node):
 
 
 def _is_internal(url):
-    low = url.lower()
     parsed = urlparse(url if url.startswith(("http", "/", "ws")) else f"http://x{url}")
     path = parsed.path or str(url)
     return any(h in path.lower() for h in INTERNAL_HINTS) or parsed.hostname in ("localhost", "127.0.0.1", "0.0.0.0")

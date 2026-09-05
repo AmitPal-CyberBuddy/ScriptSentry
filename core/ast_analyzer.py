@@ -5,7 +5,6 @@ complement to the regex scanner: imports/exports, functions/classes, call graph
 signals, object/config structure, and syntax profile.
 """
 import re
-from collections import Counter
 
 from core.js_parser import extract_exports, extract_imports, parse_ast
 

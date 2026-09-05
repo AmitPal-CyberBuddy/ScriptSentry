@@ -1,5 +1,4 @@
 import html
-import itertools
 import os
 
 from core.js_parser import parser_status
@@ -189,8 +188,6 @@ def _normalize_data(file_name, data):
         "framework_findings": data.get("framework_findings", []),
         "findings": data.get("findings", []),
         "finding_statuses": data.get("finding_statuses", {}),
-        "file_size": data.get("file_size", 0),
-        "line_count": data.get("line_count", 0),
     }
 
 
@@ -909,7 +906,7 @@ def generate_html_report(results, ai_summary=None, metadata=None):
         "<div class=\"body\">",
         "<h2>📌 Executive Summary</h2>",
         "<div class=\"card\"><p>" + esc(f"Risk posture is {summary['risk_label'].lower()} with {summary['total_findings']} findings across {summary['total_files']} file(s).") + "</p>",
-        f"<div class=\"bars\">",
+        "<div class=\"bars\">",
     ]
 
     # Category bars
@@ -1099,7 +1096,6 @@ def generate_csv_report(results, ai_summary=None, metadata=None):
 def generate_sarif_report(results, ai_summary=None, metadata=None):
     """Generate a SARIF 2.1.0 export of unified findings."""
     import json
-    import uuid
 
     model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
     findings = _all_unified_findings(model)

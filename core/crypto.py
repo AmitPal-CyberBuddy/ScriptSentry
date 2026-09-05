@@ -1,7 +1,5 @@
 import re
 import base64
-import os
-from urllib.parse import urlparse
 
 
 # =========================================
@@ -272,7 +270,7 @@ def extract_crypto_material(content, filename="inline.js"):
 
             if len(decoded) > 6:
                 findings["base64_decoded"].append(decoded)
-        except:
+        except Exception:
             pass
 
     # =========================================
@@ -420,7 +418,7 @@ def extract_crypto_material(content, filename="inline.js"):
 
             if ":" in val or len(val) > 10:
                 decoded.append(val)
-        except:
+        except Exception:
             pass
 
     findings["decoded_secrets"] = decoded

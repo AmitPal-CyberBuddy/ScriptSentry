@@ -41,6 +41,22 @@ release yet.
   ("Analysis is still running…") in the status pill instead of opening the
   pairing/setup dialog.
 
+### Development infrastructure
+
+- **CI is here.** A GitHub Actions workflow now runs the whole test suite on
+  Python 3.10–3.12 *and* on a second matrix entry with the optional AST
+  parser removed — pinning the documented regex-fallback degradation so the
+  fallback mode can never silently regress. Loopback URL-scan pipeline tests
+  run in CI too, the shipped web UI is syntax-checked with Node, and ruff
+  (`ruff.toml`, pyflakes + pycodestyle errors) guards the Python correctness
+  floor. The suite went from "268 tests, 10 fail without optional deps" to
+  283 tests that pass in **both** modes: tests needing the optional `esprima`
+  parser or `requests` package now skip with an honest reason instead of
+  failing. Falling out of the new lint gate: dead code and unused imports
+  removed across `core/`, two bare `except:` blocks made explicit, and a
+  duplicated `file_size`/`line_count` pair dropped from the report model.
+  See the new `ROADMAP.md` for what comes next.
+
 ### Honest scan progress — no more "is it stuck?" spinner
 - **The dashboard no longer declares a false timeout.** The browser poll loop
   used to give up after exactly 10 minutes with *"Analysis timed out while

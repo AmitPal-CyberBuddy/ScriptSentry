@@ -17,6 +17,20 @@ from unittest import mock
 
 from ai.llm_engine import _ollama_prompt, build_ai_summary
 
+try:
+    import requests as _requests  # noqa: F401
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+
+# The Ollama HTTP calls go through the optional `requests` package. Without
+# it the engine degrades to the deterministic summary (which has its own
+# contract below); the provider-calling tests are skipped, not failed.
+requires_requests = unittest.skipUnless(
+    REQUESTS_AVAILABLE,
+    "needs the optional requests package (pip install requests) for Ollama calls",
+)
+
 
 RESULTS = {
     "app.js": {
@@ -42,6 +56,7 @@ class AiSummaryContractTest(unittest.TestCase):
         self.assertNotIn("llm_text", summary)
         self.assertTrue(summary["executive_summary"])
 
+    @requires_requests
     @mock.patch("ai.llm_engine.requests.post")
     def test_ollama_is_called_locally_and_returns_llm_text(self, post):
         post.return_value.status_code = 200
@@ -56,6 +71,7 @@ class AiSummaryContractTest(unittest.TestCase):
         self.assertEqual(payload["model"], "llama3.1")
         self.assertFalse(payload["stream"])
 
+    @requires_requests
     @mock.patch("ai.llm_engine.requests.post")
     def test_ollama_prompt_contains_findings_not_raw_source(self, post):
         post.return_value.status_code = 200
@@ -73,6 +89,7 @@ class AiSummaryContractTest(unittest.TestCase):
         self.assertIn("URL query string", prompt)
         self.assertNotIn("RAW_MARKER", prompt)
 
+    @requires_requests
     @mock.patch("ai.llm_engine.requests.post", side_effect=OSError("connection refused"))
     def test_ollama_down_falls_back_without_raising(self, post):
         summary = build_ai_summary(RESULTS, provider="ollama")
@@ -80,6 +97,7 @@ class AiSummaryContractTest(unittest.TestCase):
         self.assertIn("connection refused", summary["fallback_reason"])
         self.assertTrue(summary["executive_summary"])
 
+    @requires_requests
     @mock.patch("ai.llm_engine.requests.post")
     def test_ollama_empty_response_falls_back(self, post):
         post.return_value.status_code = 200

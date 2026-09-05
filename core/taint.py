@@ -446,7 +446,7 @@ class TaintAnalyzer:
             callee = node.get("callee", {})
             callee_name = _name(callee)
             if callee_name == "URLSearchParams":
-                return _Taint(["source:URL search params"], False, [f"new URLSearchParams"], "high")
+                return _Taint(["source:URL search params"], False, ["new URLSearchParams"], "high")
             return None
 
         # Call expressions -> detect source getters / sanitizers / sinks
@@ -467,7 +467,7 @@ class TaintAnalyzer:
             # from the jar. document.cookie reads are handled by the
             # member-expression branch via SOURCE_PATTERNS.
             if "cookie" in lower and ("get" in lower or "read" in lower):
-                return _Taint([f"source:document.cookie"], False, [f"read {callee_txt}"], "high")
+                return _Taint(["source:document.cookie"], False, [f"read {callee_txt}"], "high")
             if "referrer" in lower:
                 return _Taint(["source:document.referrer"], False, [f"read {callee_txt}"], "high")
 
@@ -1034,7 +1034,6 @@ class TaintAnalyzer:
         # actually has a taint source. A bare `eval("...")` is a pattern the scanner's
         # `unsafe_runtime` risk signal already covers, not a source-to-sink flow.
         if not self.findings and self._has_obvious_dangerous_patterns() and self._has_source_like_pattern():
-            before = set()
             self._regex_analyze()
             self.ast_used = True  # AST parsed; fallback only supplemented missing flows.
         self._apply_quality_metadata()
@@ -1051,7 +1050,6 @@ class TaintAnalyzer:
         doc_limitations = list(self.limitations)
         if not self.ast_used:
             doc_limitations.insert(0, "AST parser unavailable; flow derived from line-based heuristics.")
-        quality = "heuristic" if not self.ast_used else ("medium" if doc_limitations else "high")
         for finding in self.findings:
             notes = []
             for note in list(finding.get("limitations", []) or []) + doc_limitations:

@@ -391,7 +391,6 @@ def parse_ast(content):
                 "line": _line(node),
             })
         elif node_type == "Literal":
-            lp = {k: v for k, v in node.items() if k in ("value", "regex", "line")}
             result["literals"].append({
                 "value": node.get("value"),
                 "raw": node.get("raw", ""),

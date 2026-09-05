@@ -155,7 +155,6 @@ class ProgressAndSummaryTest(unittest.TestCase):
                 "keys": [],
                 "ivs": [],
                 "configs": [],
-                "dependency_scan": [],
             },
             "__scan_summary__": {
                 "total_discovered": 8,

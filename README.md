@@ -1,5 +1,7 @@
 # 🛡️ ScriptSentry
 
+[![CI](https://github.com/AmitPal-CyberBuddy/ScriptSentry/actions/workflows/ci.yml/badge.svg)](https://github.com/AmitPal-CyberBuddy/ScriptSentry/actions/workflows/ci.yml)
+
 **Watch every line. Detect every risk.**
 
 ScriptSentry is a **privacy-first JavaScript security & script-behavior
