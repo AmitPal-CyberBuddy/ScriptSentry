@@ -51,10 +51,52 @@ class AiSummaryContractTest(unittest.TestCase):
         self.assertIsNone(build_ai_summary(RESULTS, provider="disabled"))
 
     def test_legacy_unknown_provider_is_rule_based_not_an_llm(self):
-        summary = build_ai_summary(RESULTS, provider="openai", api_key="sk-test", model="gpt-4")
+        summary = build_ai_summary(RESULTS, provider="azure", api_key="sk-test", model="gpt-4")
         self.assertEqual(summary["provider"], "rule_based")
         self.assertNotIn("llm_text", summary)
         self.assertTrue(summary["executive_summary"])
+
+    @requires_requests
+    @mock.patch("ai.llm_engine.requests.post")
+    def test_openai_compat_local_server_is_called_with_chat_payload(self, post):
+        post.return_value.status_code = 200
+        post.return_value.raise_for_status.return_value = None
+        post.return_value.json.return_value = {
+            "choices": [{"message": {"content": "Start with the reflected query."}}]
+        }
+        summary = build_ai_summary(
+            RESULTS, provider="openai", model="qwen2.5-coder",
+            openai_base_url="http://localhost:1234/v1", api_key="lm-studio",
+        )
+        self.assertEqual(summary["provider"], "openai")
+        self.assertEqual(summary["llm_text"], "Start with the reflected query.")
+        url = post.call_args.args[0]
+        self.assertEqual(url, "http://localhost:1234/v1/chat/completions")
+        payload = post.call_args.kwargs.get("json") or post.call_args.args[1]
+        self.assertEqual(payload["model"], "qwen2.5-coder")
+        self.assertEqual(payload["messages"][0]["role"], "user")
+        self.assertIn("DOM injection", payload["messages"][0]["content"])
+        self.assertFalse(payload["stream"])
+        headers = post.call_args.kwargs.get("headers") or {}
+        self.assertEqual(headers.get("Authorization"), "Bearer lm-studio")
+
+    @requires_requests
+    @mock.patch("ai.llm_engine.requests.post")
+    def test_openai_compat_falls_back_honestly_when_offline(self, post):
+        post.side_effect = ConnectionError("refused")
+        summary = build_ai_summary(RESULTS, provider="openai")
+        self.assertEqual(summary["provider"], "openai_unavailable")
+        self.assertIn("openai endpoint unreachable", summary["fallback_reason"].lower())
+        self.assertTrue(summary["executive_summary"], "the deterministic fallback must still be present")
+
+    @requires_requests
+    @mock.patch("ai.llm_engine.requests.post")
+    def test_openai_compat_empty_answer_falls_back(self, post):
+        post.return_value.status_code = 200
+        post.return_value.raise_for_status.return_value = None
+        post.return_value.json.return_value = {"choices": [{"message": {"content": "  "}}]}
+        summary = build_ai_summary(RESULTS, provider="openai")
+        self.assertEqual(summary["provider"], "openai_unavailable")
 
     @requires_requests
     @mock.patch("ai.llm_engine.requests.post")
@@ -112,20 +154,25 @@ class AiSummaryContractTest(unittest.TestCase):
 
 
 class AiCliContractTest(unittest.TestCase):
-    def test_cli_rejects_cloud_providers(self):
-        import argparse
+    def test_cli_accepts_local_providers_and_rejects_cloud(self):
         import main as main_module
         parser = main_module.build_parser() if hasattr(main_module, "build_parser") else None
         if parser is None:
             self.skipTest("no build_parser helper")
         args = parser.parse_args(["--ai", "ollama"])
         self.assertEqual(args.ai, "ollama")
-        with self.assertRaises(SystemExit):
-            parser.parse_args(["--ai", "openai"])
+        # Local OpenAI-compatible endpoints are a first-class option now.
+        local = parser.parse_args(
+            ["--ai", "openai", "--openai-base-url", "http://127.0.0.1:8080/v1",
+             "--api-key", "optional", "--model", "qwen2.5-coder"])
+        self.assertEqual(local.ai, "openai")
+        self.assertEqual(local.openai_base_url, "http://127.0.0.1:8080/v1")
+        self.assertEqual(local.api_key, "optional")
+        # Hosted cloud providers stay rejected.
         with self.assertRaises(SystemExit):
             parser.parse_args(["--ai", "azure"])
-        # The meaningless cloud key flag is gone.
-        self.assertIsNone(getattr(args, "api_key", None))
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["--ai", "anthropic"])
 
 
 if __name__ == "__main__":

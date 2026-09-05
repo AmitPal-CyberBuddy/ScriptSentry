@@ -94,6 +94,23 @@ release yet.
   been empty since it shipped. Fixed, with a regression test; findings now
   carry their validation verdict per candidate.
 
+### Any local model, and a shippable package
+
+- **Any OpenAI-compatible local model server.** `--ai openai` speaks the
+  OpenAI chat-completions protocol against **local** servers — LM Studio
+  (`http://localhost:1234/v1` by default), llama.cpp server, vLLM — with
+  `--openai-base-url`, `--api-key` (for servers that want a token) and the
+  same honest fallback (`openai_unavailable`) as the Ollama path when the
+  server is down. Hosted cloud providers remain deliberately unsupported:
+  the privacy contract ("code never leaves your machine") still holds.
+- **Packaging.** `pyproject.toml` makes the engine pip/pipx-installable
+  (`pip install .` → `scriptsentry` and `scriptsentry-server` console
+  commands, version read from `core.version`, dashboard shipped as package
+  data with a `SCRIPTSENTRY_WEBUI_DIR` override and a share-dir fallback);
+  a Dockerfile builds an image with the Playwright Chromium preinstalled
+  for headless/CI runtime evidence; and the dashboard gains a raw **JSON**
+  export button (the shared `generate_json_report` shape the CLI writes).
+
 ### Deeper discovery & a politer crawler
 
 - **Sitemap/robots.txt discovery.** Recon now reads `robots.txt` for

@@ -1171,7 +1171,7 @@
   // "wait" before the request is ever made.
   const SCAN_BUSY_SELECTORS = [
     "#analyze-code", "#analyze-url", "#analyze-files",
-    "#export-html", "#export-txt", "#export-csv", "#export-sarif", "#export-openapi",
+    "#export-html", "#export-txt", "#export-csv", "#export-sarif", "#export-json", "#export-openapi",
   ];
 
   function setScanBusy(busy) {
@@ -3008,6 +3008,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     $("#export-csv").addEventListener("click", () => exportReport("csv"));
     $("#export-sarif").addEventListener("click", () => exportReport("sarif"));
     $("#export-openapi").addEventListener("click", () => exportReport("openapi"));
+    $("#export-json").addEventListener("click", () => exportReport("json"));
     $("#load-sample").addEventListener("click", () => {
       $("#code-input").value = SAMPLE;
       $("#pane-code").scrollIntoView({ behavior: "smooth", block: "center" });

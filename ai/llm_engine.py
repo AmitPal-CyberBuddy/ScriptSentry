@@ -1,12 +1,15 @@
 """Executive summary generation for ScriptSentry reports.
 
-``--ai ollama`` calls a **local** Ollama server, so the privacy contract
-holds: scanned code never leaves the machine.  OpenAI/Azure are
-deliberately *not* supported -- sending analyzed code to a cloud provider
-would contradict the tool's "no code ever leaves your computer" design.
+``--ai ollama`` and ``--ai openai`` call **local** model servers, so the
+privacy contract holds: scanned code never leaves the machine. ``openai``
+here means the OpenAI-compatible *chat completions protocol* spoken by
+local servers (LM Studio, llama.cpp server, vLLM) -- it defaults to
+loopback and is meant for your own hardware; pointing it at a hosted
+cloud gateway would contradict the tool's "no code ever leaves your
+computer" design and is on you, not ScriptSentry.
 
 The deterministic rule-based summary is the always-available fallback:
-an unreachable or missing Ollama server degrades to it with an honest
+an unreachable or missing model server degrades to it with an honest
 ``provider`` label instead of pretending an LLM answered.
 """
 import json  # noqa: F401  (kept for parity with older integrations)
@@ -19,6 +22,10 @@ except ImportError:  # pragma: no cover - paste-only installations
 OLLAMA_DEFAULT_URL = "http://localhost:11434"
 OLLAMA_DEFAULT_MODEL = "llama3.2"
 OLLAMA_TIMEOUT = 60
+#: Default for --ai openai: LM Studio's local server. Any OpenAI-compatible
+#: local endpoint works (llama.cpp server: http://localhost:8080/v1, ...).
+OPENAI_COMPAT_DEFAULT_URL = "http://localhost:1234/v1"
+OPENAI_COMPAT_TIMEOUT = 60
 
 
 def _rule_based_summary(results):
@@ -108,8 +115,30 @@ def _call_ollama(prompt, *, url, model, timeout=OLLAMA_TIMEOUT):
     return text
 
 
+def _call_openai_compat(prompt, *, url, model, api_key=None, timeout=OPENAI_COMPAT_TIMEOUT):
+    """POST one chat completion to an OpenAI-compatible local server."""
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    payload = {
+        "model": model or OLLAMA_DEFAULT_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "stream": False,
+    }
+    response = requests.post(f"{url.rstrip('/')}/chat/completions",
+                             json=payload, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    choices = response.json().get("choices") or []
+    text = str((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
+    if not text:
+        raise ValueError("the model server returned an empty response")
+    return text
+
+
 def build_ai_summary(results, provider="disabled", api_key=None, model=None,
-                     ollama_url=OLLAMA_DEFAULT_URL):
+                     ollama_url=OLLAMA_DEFAULT_URL,
+                     openai_base_url=OPENAI_COMPAT_DEFAULT_URL):
     """Return an executive summary dict, or None when summaries are off.
 
     ``provider``:
@@ -117,6 +146,9 @@ def build_ai_summary(results, provider="disabled", api_key=None, model=None,
       * ``ollama``   -> call the local Ollama server; on any failure fall
                         back to the deterministic summary and label the
                         result ``ollama_unavailable`` so reports stay honest
+      * ``openai``   -> call any OpenAI-compatible local server (LM Studio,
+                        llama.cpp, vLLM) at ``openai_base_url``; same honest
+                        fallback, labelled ``openai_unavailable``
       * anything else -> deterministic summary labelled ``rule_based``
     """
     if provider == "disabled":
@@ -124,26 +156,34 @@ def build_ai_summary(results, provider="disabled", api_key=None, model=None,
 
     summary = _rule_based_summary(results)
 
-    if provider != "ollama":
+    if provider not in ("ollama", "openai"):
         summary["provider"] = "rule_based"
         return summary
 
     if requests is None:
-        summary["provider"] = "ollama_unavailable"
-        summary["fallback_reason"] = "requests is not installed; local Ollama call not attempted."
+        summary["provider"] = f"{provider}_unavailable"
+        summary["fallback_reason"] = "requests is not installed; local model server call not attempted."
         return summary
 
     try:
-        text = _call_ollama(
-            _ollama_prompt(results),
-            url=ollama_url,
-            model=model,
-        )
-        summary["provider"] = "ollama"
+        if provider == "ollama":
+            text = _call_ollama(
+                _ollama_prompt(results),
+                url=ollama_url,
+                model=model,
+            )
+        else:
+            text = _call_openai_compat(
+                _ollama_prompt(results),
+                url=openai_base_url or OPENAI_COMPAT_DEFAULT_URL,
+                model=model,
+                api_key=api_key,
+            )
+        summary["provider"] = provider
         summary["llm_text"] = text
     except Exception as exc:  # network, HTTP status, empty response
-        summary["provider"] = "ollama_unavailable"
+        summary["provider"] = f"{provider}_unavailable"
         summary["fallback_reason"] = (
-            f"Ollama unreachable ({type(exc).__name__}): {str(exc)[:140]}"
+            f"{provider} endpoint unreachable ({type(exc).__name__}): {str(exc)[:140]}"
         )
     return summary

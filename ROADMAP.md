@@ -88,11 +88,12 @@ opinions.
   as an OpenAPI 3.1 document (`🧭 API map` / `--format openapi`).
 - [x] Crawl politeness: `SCRIPTSENTRY_CRAWL_DELAY_MS` enforces a per-host
   minimum interval at the single fetch choke point (`safe_get`).
-- [ ] Local LLM flexibility: accept any OpenAI-compatible endpoint (LM
-  Studio, llama.cpp) alongside Ollama.
-- [ ] Packaging: `pyproject.toml` (pipx-installable) + a Dockerfile with
-  Chromium preinstalled for headless/CI use; expose JSON report export in
-  the web UI (the CLI already supports it).
+- [x] Local LLM flexibility: `--ai openai` calls any OpenAI-compatible
+  local server (LM Studio/llama.cpp/vLLM) via `--openai-base-url` and an
+  optional `--api-key`, with the same honest fallback as Ollama.
+- [x] Packaging: `pyproject.toml` (console scripts, pipx-installable,
+  wheel verified) + a Dockerfile with the Playwright Chromium preinstalled;
+  the web UI exports the raw JSON report alongside HTML/TXT/CSV/SARIF.
 
 ## Phase 5 — Code health (continuous)
 

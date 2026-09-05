@@ -1550,6 +1550,22 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
     return payload
 
 
+
+def generate_json_report(results, ai_summary=None, metadata=None):
+    """Complete machine-readable export: raw results + both report models."""
+    payload = {
+        "metadata": metadata or {},
+        "results": {key: value for key, value in (results or {}).items()
+                    if not str(key).startswith("__")},
+        "runtime_evidence": (results or {}).get("__runtime_evidence__"),
+        "runtime_findings": (results or {}).get("__runtime_findings__", []),
+        "report_model": build_report_model(results, ai_summary=ai_summary, metadata=metadata),
+        "dashboard": build_dashboard_payload(results, ai_summary=ai_summary, metadata=metadata),
+        "ai_summary": ai_summary or {},
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+
+
 def generate_openapi_report(results, metadata=None):
     """Render the discovered API surface as an OpenAPI 3.1 document.
 
