@@ -39,9 +39,11 @@ opinions.
 - [ ] **Source-map ingestion**: when a bundle references `.map`, fetch it and
   analyze the *original* sources — real names in reports, unmangled taint
   flows. Remap line numbers back to the bundle for verification.
-- [ ] **Data-driven dependency intelligence**: replace the hardcoded
-  `dep_entity` dict with a shipped dataset (RetireJS-style) that extracts
-  versions and emits known-vulnerability findings with references.
+- [x] **Data-driven dependency intelligence** (v1): curated advisory table
+  (`core/dependency_intel.py`) extracts bundle versions from banners and
+  emits known-vulnerability findings with CVE references — never claiming a
+  CVE without an extracted version. (Widen the table over time; a full
+  RetireJS import can replace it later.)
 - [x] **Validator-tiered secrets**: JWT/PEM structural validation and
   canonical-format matching for Slack/GitHub/Stripe/AWS/SendGrid/Twilio/npm
   upgrade validated candidates to high confidence (`validated` verdicts ride

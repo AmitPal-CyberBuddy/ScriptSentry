@@ -66,6 +66,18 @@ release yet.
   from timing out to ~10 s. This was very likely the dominant cost behind
   long silent analyze stages on production targets.
 
+### Dependencies: known-vulnerability matching
+
+- **Version banners are now fingerprints.** Bundled libraries carry their
+  versions in banner comments and module metadata (`/*! jQuery v3.4.1 */`,
+  `_.VERSION="4.17.15"`). A curated advisory table (jQuery, Lodash,
+  Underscore, Moment, Axios, Bootstrap, AngularJS, CryptoJS — fix-version
+  ranges with CVE ids) turns those into findings: "Vulnerable library:
+  jQuery 3.4.1 (CVE-2020-11022)" with severity and summary, honest medium
+  confidence (a fingerprint, not a probe). The contract is conservative:
+  **no version extracted → no vulnerability claimed** — inventory stays
+  inventory; patched versions are annotated but silent.
+
 ### Secrets: the value itself is now evidence
 
 - **Credential validation tiers.** Candidates are checked against the

@@ -14,6 +14,7 @@ from core.decoder import decode_candidate_strings, extract_hidden_values
 from core.framework_rules import analyze_framework
 from core.taint import analyze_taint
 from core.source_maps import source_map_reference
+from core.dependency_intel import check_dependencies
 
 
 class ScanCancelled(Exception):
@@ -674,6 +675,12 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
             "evidence_type": "static_pattern",
             "observation": bool(observation),
         })
+
+    # Known-vulnerability matching for identified libraries: annotate the
+    # dependency inventory with extracted versions and emit one finding per
+    # vulnerable library (version-string fingerprints, curated CVE table).
+    vulnerability_signals = check_dependencies(results.get("dependency_scan", []), content)
+    risk_signals.extend(vulnerability_signals)
 
     if results.get("credible_secrets"):
         # A candidate whose VALUE validates (JWT that decodes, canonical
