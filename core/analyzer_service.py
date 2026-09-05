@@ -5,7 +5,9 @@ import re
 import shutil
 import tempfile
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, as_completed, wait
+from concurrent.futures.process import BrokenProcessPool
+from pickle import PicklingError
 from urllib.parse import urljoin, urlparse
 
 try:
@@ -43,6 +45,18 @@ REQUEST_HEADERS = {
 def _check_cancel(cancel_check):
     if cancel_check and cancel_check():
         raise ScanCancelled("Scan cancelled by user")
+
+
+def analyze_engine():
+    """Which engine runs the CPU-bound per-document analysis.
+
+    ``process`` (default): each document is analyzed in a worker process, so
+    the GIL no longer serializes tree-sitter parsing and the Python AST
+    walks -- a 6-worker scan gets ~6 cores instead of ~1. ``thread`` opts
+    back into the legacy in-process pool (also the automatic fallback when
+    process pools are unavailable).
+    """
+    return (os.environ.get("SCRIPTSENTRY_ANALYZE_ENGINE") or "process").strip().lower()
 
 
 # Source-map expansion: how much of a map's embedded original code we are
@@ -154,6 +168,44 @@ def _expand_source_map_sources(data, map_metadata, contents, source_url, cancel_
         map_metadata["analysis_skipped"] = skip_reasons[:20]
 
 
+def _scan_document_cpu(path, content, source_url="", cancel_check=None,
+                       progress_heartbeat=None):
+    """CPU-only half of _scan_document: scan_file + crypto fingerprinting.
+
+    Everything here is pure computation over the content string with plain
+    dict/list outputs, so it can run inside a process-pool worker (see
+    _analyze_document_worker). Network work (source maps) stays in the
+    caller's process.
+    """
+    content = content or ""
+    data = scan_file(path, content=content, cancel_check=cancel_check,
+                     progress_heartbeat=progress_heartbeat)
+    data["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+    data["url"] = str(source_url or "")
+    crypto = extract_crypto_material(content, filename=os.path.basename(path))
+    data.update(crypto)
+    data.setdefault("analysis_warnings", [])
+    return data
+
+
+def _expand_document_source_maps(data, content, source_url="", cancel_check=None,
+                                 progress_heartbeat=None):
+    """Fetch and analyze a bundle's source map when it references one (I/O)."""
+    if not data.get("source_map", {}).get("present"):
+        return
+    try:
+        map_metadata, map_contents = load_source_map(content, base_url=source_url, timeout=10)
+        data["source_map"] = map_metadata
+        if map_contents:
+            _expand_source_map_sources(
+                data, map_metadata, map_contents, source_url,
+                cancel_check=cancel_check, progress_heartbeat=progress_heartbeat)
+    except ScanCancelled:
+        raise
+    except Exception as exc:
+        data.setdefault("analysis_warnings", []).append(f"source_map: {exc}")
+
+
 def _scan_document(path, content, source_url="", cancel_check=None, progress_heartbeat=None):
     """Run all analyzers for one document and retain provenance.
 
@@ -162,26 +214,40 @@ def _scan_document(path, content, source_url="", cancel_check=None, progress_hea
     must never be used as a substitute for the script's actual origin.
     """
     content = content or ""
-    data = scan_file(path, content=content, cancel_check=cancel_check,
-                     progress_heartbeat=progress_heartbeat)
-    data["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
-    data["url"] = str(source_url or "")
-    if data.get("source_map", {}).get("present"):
-        try:
-            map_metadata, map_contents = load_source_map(content, base_url=source_url, timeout=10)
-            data["source_map"] = map_metadata
-            if map_contents:
-                _expand_source_map_sources(
-                    data, map_metadata, map_contents, source_url,
-                    cancel_check=cancel_check, progress_heartbeat=progress_heartbeat)
-        except ScanCancelled:
-            raise
-        except Exception as exc:
-            data.setdefault("analysis_warnings", []).append(f"source_map: {exc}")
-    crypto = extract_crypto_material(content, filename=os.path.basename(path))
-    data.update(crypto)
-    data.setdefault("analysis_warnings", [])
+    data = _scan_document_cpu(path, content, source_url=source_url,
+                              cancel_check=cancel_check,
+                              progress_heartbeat=progress_heartbeat)
+    _expand_document_source_maps(data, content, source_url=source_url,
+                                 cancel_check=cancel_check,
+                                 progress_heartbeat=progress_heartbeat)
     return data
+
+
+def _analyze_document_worker(path, content, source_url="", heartbeat_queue=None, phase="analyze"):
+    """Process-pool entry point: analyze one document in a worker process.
+
+    Returns ``(data, script_refs)`` -- both plain picklable structures. The
+    tree-sitter parse, the taint/attack-surface walks and module-reference
+    discovery all share one parse *inside this process*, then the results
+    cross the process boundary once. Mid-file heartbeats for large bundles
+    travel back through ``heartbeat_queue`` as ``(phase, name, detail)``
+    tuples so the dashboard keeps moving during long analyses.
+    """
+    content = content or ""
+    heartbeat = None
+    if heartbeat_queue is not None and len(content) >= HEARTBEAT_MIN_CHARS:
+        name = os.path.basename(path) if path else "inline script"
+
+        def heartbeat(detail, _phase=phase, _name=name, _q=heartbeat_queue):
+            try:
+                _q.put((_phase, _name, str(detail)))
+            except Exception:
+                pass
+
+    data = _scan_document_cpu(path, content, source_url=source_url,
+                              cancel_check=None, progress_heartbeat=heartbeat)
+    refs = extract_script_refs(content)
+    return data, refs
 
 
 def _merge_into(results, path, content, seen_hashes=None, source_url="", cancel_check=None,
@@ -896,43 +962,122 @@ def analyze_url(
     for path, _, _, _, _ in initial_tasks:
         known_paths.add(path)
 
-    def merge_document(path, base_url, content, phase="analyze"):
-        """Thread-safe merge. Returns a skip reason, or None when added."""
+    def _task_heartbeat(content, phase, path):
+        if len(content or "") < HEARTBEAT_MIN_CHARS:
+            # Announce progress *inside* a long single-file analysis. Without
+            # this a 2 MB bundle is silent from "Scanning x..." to "Analyzed
+            # x", which is the single longest quiet stretch of a scan.
+            return None
+        file_name = os.path.basename(path) if path else "inline script"
+
+        def heartbeat(detail, _phase=phase, _name=file_name):
+            scan_progress(_phase, f"Analyzing {_name} - {detail}")
+
+        return heartbeat
+
+    def _skip_message(phase, reason, name):
+        scan_progress(phase, f"Skipping {reason.replace('_', ' ')} {name} ({len(results)}/{max_files})")
+
+    def prepare_task(task):
+        """Parent-side pre-analysis: announce, read, size/dedupe checks.
+
+        Returns ``(path, base_url, content, phase, depth)`` or None when the
+        task was skipped (reason already recorded/announced).
+        """
         _check_cancel(cancel_check)
+        path, base_url, inline_content, phase, depth = task
+        name = os.path.basename(path) if path else "inline script"
+        if inline_content is None:
+            # Announce the work BEFORE it starts. The old code only spoke after
+            # a file finished, so a big bundle silently monopolized a worker
+            # for a minute or more while the UI showed nothing new -- the
+            # single most "is it stuck?" moment of a scan.
+            scan_progress(phase, f"Scanning {name}…")
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                record_skip("read_error")
+                scan_progress(phase, f"Could not read {name} — skipped")
+                return None
+        else:
+            content = inline_content
         content = content or ""
         if len(content.encode("utf-8", errors="ignore")) > FILE_RULES.get("max_js_size", 2_000_000):
             record_skip("oversized_script")
-            return "oversized_script"
+            _skip_message(phase, "oversized_script", name)
+            return None
         digest = hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()
         with lock:
             if digest in seen_hashes:
                 state["skipped_files"] += 1
                 state["skipped_reasons"].add("duplicate_content")
-                return "duplicate_content"
-            seen_hashes.add(digest)
-        heartbeat = None
-        if len(content) >= HEARTBEAT_MIN_CHARS:
-            # Announce progress *inside* a long single-file analysis. Without
-            # this a 2 MB bundle is silent from "Scanning x..." to "Analyzed
-            # x", which is the single longest quiet stretch of a scan.
-            file_name = os.path.basename(path) if path else "inline script"
+                already_seen = True
+            else:
+                seen_hashes.add(digest)
+                already_seen = False
+        if already_seen:
+            _skip_message(phase, "duplicate_content", name)
+            return None
+        return path, base_url, content, phase, depth
 
-            def heartbeat(detail, _phase=phase, _name=file_name):
-                scan_progress(_phase, f"Analyzing {_name} - {detail}")
+    def complete_task(prepared, data, refs):
+        """Parent-side post-analysis: source maps, merge, progress, discovery."""
+        path, base_url, content, phase, depth = prepared
+        name = os.path.basename(path) if path else "inline script"
+        _expand_document_source_maps(data, content, source_url=base_url,
+                                     cancel_check=cancel_check)
+        with lock:
+            results[path] = data
+            state["path_to_url"][path] = base_url
+            state["script_urls"].append(base_url)
+        scan_progress(phase, f"Analyzed {name} ({len(results)}/{max_files})")
+        return discover_tasks(refs, base_url, depth)
 
+    def analyze_inline(prepared):
+        """Thread-engine analysis of one prepared task (also the fallback)."""
+        path, base_url, content, phase, depth = prepared
+        data = _scan_document(path, content, source_url=base_url,
+                              cancel_check=cancel_check,
+                              progress_heartbeat=_task_heartbeat(content, phase, path))
+        return complete_task(prepared, data, extract_script_refs(content))
+
+    def merge_document(path, base_url, content, phase="analyze"):
+        """Thread-safe merge used by non-BFS callers. Returns a skip reason."""
+        reason = None
+        if len((content or "").encode("utf-8", errors="ignore")) > FILE_RULES.get("max_js_size", 2_000_000):
+            record_skip("oversized_script")
+            return "oversized_script"
+        digest = hashlib.md5((content or "").encode("utf-8", errors="ignore")).hexdigest()
+        with lock:
+            if digest in seen_hashes:
+                state["skipped_files"] += 1
+                state["skipped_reasons"].add("duplicate_content")
+                reason = "duplicate_content"
+            else:
+                seen_hashes.add(digest)
+        if reason:
+            return reason
         data = _scan_document(path, content, source_url=base_url, cancel_check=cancel_check,
-                              progress_heartbeat=heartbeat)
+                              progress_heartbeat=_task_heartbeat(content, phase, path))
         with lock:
             results[path] = data
             state["path_to_url"][path] = base_url
             state["script_urls"].append(base_url)
         return None
 
-    def discover_tasks(content, base_url, depth):
+    def discover_tasks(refs, base_url, depth):
+        """Resolve discovered module refs into follow-up scan tasks.
+
+        ``refs`` are the raw module/bundler references (extracted inside the
+        worker when the process engine is active, where the parse is already
+        cached); this parent-side half does the URL joining, dedupe and the
+        chunk downloads.
+        """
         if depth >= max_depth:
             return []
         new_tasks = []
-        for ref in extract_script_refs(content):
+        for ref in refs:
             with lock:
                 at_cap = len(results) >= max_files
             if at_cap:
@@ -966,48 +1111,152 @@ def analyze_url(
         return new_tasks
 
     def process_task(task):
-        _check_cancel(cancel_check)
-        path, base_url, inline_content, phase, depth = task
-        name = os.path.basename(path) if path else "inline script"
-        if inline_content is None:
-            # Announce the work BEFORE it starts. The old code only spoke after
-            # a file finished, so a big bundle silently monopolized a worker
-            # for a minute or more while the UI showed nothing new -- the
-            # single most "is it stuck?" moment of a scan.
-            scan_progress(phase, f"Scanning {name}…")
-        if inline_content is not None:
-            content = inline_content
-        else:
-            try:
-                with open(path, encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-            except Exception:
-                record_skip("read_error")
-                scan_progress(phase, f"Could not read {name} — skipped")
-                return []
-        skipped = merge_document(path, base_url, content, phase=phase)
-        if skipped:
-            scan_progress(phase, f"Skipping {skipped.replace('_', ' ')} {name} ({len(results)}/{max_files})")
+        """Thread-engine round worker: prepare, analyze in-process, discover."""
+        prepared = prepare_task(task)
+        if prepared is None:
             return []
-        scan_progress(phase, f"Analyzed {name} ({len(results)}/{max_files})")
-        return discover_tasks(content, base_url, depth)
+        try:
+            return analyze_inline(prepared) or []
+        except ScanCancelled:
+            raise
+        except Exception:
+            record_skip("worker_error")
+            return []
 
     # Bounded-parallel BFS rounds. Each round scans current assets with a
     # worker pool, then hands discovered chunks to the next round.
+    #
+    # Engine: the per-document analysis is CPU-bound (tree-sitter parse +
+    # Python AST walks), so by default it runs in a PROCESS pool -- the GIL
+    # would otherwise serialize all workers onto one core. The parent keeps
+    # every I/O duty: file reads, dedupe, chunk downloads, source-map
+    # fetching and all progress reporting (worker heartbeats arrive via a
+    # queue and are re-emitted here). SCRIPTSENTRY_ANALYZE_ENGINE=thread
+    # opts back into the legacy in-process pool, and a broken process pool
+    # (e.g. spawn restrictions) degrades to it automatically.
     current_round = initial_tasks
-    while current_round and len(results) < max_files:
-        _check_cancel(cancel_check)
+    pool = None
+    heartbeat_queue = None
+    if analyze_engine() != "thread":
+        try:
+            import multiprocessing as _mp
+
+            _ctx = _mp.get_context("spawn")
+            _manager = _ctx.Manager()
+            heartbeat_queue = _manager.Queue()
+            pool = ProcessPoolExecutor(max_workers=workers, mp_context=_ctx)
+        except Exception:
+            pool = None
+            heartbeat_queue = None
+
+    def _drain_heartbeats():
+        if heartbeat_queue is None:
+            return
+        while True:
+            try:
+                phase, name, detail = heartbeat_queue.get_nowait()
+            except Exception:
+                break
+            scan_progress(phase, f"Analyzing {name} - {detail}")
+
+    def _shutdown_pool(force=False):
+        nonlocal pool
+        if pool is None:
+            return
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+            if force:
+                for proc in list(getattr(pool, "_processes", {}).values() or []):
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        pool = None
+
+    def run_round_via_processes(tasks):
+        """One BFS round on the process pool; returns the next round's tasks."""
         next_round = []
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_map = {executor.submit(process_task, task): task for task in current_round}
-            for future in as_completed(future_map):
+        submitted = {}
+        for task in tasks:
+            prepared = prepare_task(task)  # may raise ScanCancelled
+            if prepared is None:
+                continue
+            path, base_url, content, phase, depth = prepared
+            try:
+                future = pool.submit(_analyze_document_worker, path, content,
+                                     base_url, heartbeat_queue, phase)
+                submitted[future] = prepared
+            except Exception:
+                record_skip("worker_error")
+        pending = set(submitted)
+        while pending:
+            try:
+                _check_cancel(cancel_check)
+            except ScanCancelled:
+                _shutdown_pool(force=True)
+                raise
+            done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+            _drain_heartbeats()
+            for future in done:
+                prepared = submitted[future]
                 try:
-                    next_round.extend(future.result() or [])
+                    data, refs = future.result()
                 except ScanCancelled:
                     raise
                 except Exception:
+                    if isinstance(future.exception(), BrokenProcessPool) or isinstance(
+                            future.exception(), PicklingError):
+                        # Pool is unusable -- analyze this document in-process
+                        # and let the outer loop fall back to threads.
+                        _shutdown_pool(force=True)
+                        try:
+                            next_round.extend(analyze_inline(prepared) or [])
+                        except ScanCancelled:
+                            raise
+                        except Exception:
+                            record_skip("worker_error")
+                        continue
                     record_skip("worker_error")
-        current_round = next_round[: max(0, max_files - len(results))]
+                    continue
+                try:
+                    next_round.extend(complete_task(prepared, data, refs) or [])
+                except ScanCancelled:
+                    _shutdown_pool(force=True)
+                    raise
+                except Exception:
+                    record_skip("worker_error")
+        return next_round
+
+    try:
+        while current_round and len(results) < max_files:
+            _check_cancel(cancel_check)
+            next_round = []
+            if pool is not None:
+                try:
+                    next_round = run_round_via_processes(current_round)
+                except ScanCancelled:
+                    raise
+                except Exception:
+                    # Any other pool-level failure: degrade to threads.
+                    _shutdown_pool(force=True)
+                    record_skip("worker_error")
+            if pool is None:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    future_map = {executor.submit(process_task, task): task for task in current_round}
+                    for future in as_completed(future_map):
+                        try:
+                            next_round.extend(future.result() or [])
+                        except ScanCancelled:
+                            raise
+                        except Exception:
+                            record_skip("worker_error")
+            current_round = next_round[: max(0, max_files - len(results))]
+    except BaseException:
+        _shutdown_pool(force=True)
+        raise
+    _shutdown_pool(force=False)
 
     results["__scan_summary__"] = {
         "total_discovered": len(discovered) + len(inline_scripts),

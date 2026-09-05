@@ -57,11 +57,19 @@ opinions.
 
 *The analyze stage is the O(n^1.7) bottleneck; measuring first.*
 
-- [ ] Profile `scan_file` end-to-end and cut duplicate full-content passes
-  (secret regexes + endpoint/api/storage/header scans + 10 sub-analyzers
-  each rescanning the same text) into a shared single-pass context.
-- [ ] Move the CPU-bound analyze stage to a `ProcessPoolExecutor` (I/O
-  stages stay on threads) — near-linear multi-core gains under the GIL.
+- [x] Profile `scan_file` end-to-end and cut the duplicate full-content
+  passes: the profile said the ten sub-analyzers were cheap and the real
+  rocks were taint's six full AST re-descents (now one flattening pass with
+  per-statement node buckets), per-match `content[:pos].count("\n")` line
+  numbering (shared bisected line index), crypto's per-candidate
+  `content.find` re-scans (`finditer` + bisect), an O(matches × endpoints)
+  dedupe, ~40 redundant `content.lower()` copies, and the converter's
+  post-hoc range pass (ranges now emitted eagerly). 440KB bundle:
+  ~10.3s → ~5.2s per file.
+- [x] Move the CPU-bound analyze stage to a `ProcessPoolExecutor` (I/O
+  stages stay in the parent; worker heartbeats via queue; automatic thread
+  fallback; `SCRIPTSENTRY_ANALYZE_ENGINE=thread` opt-out). Multi-core gains
+  scale with bundle count.
 - [ ] Self-tuning ETA: persist observed stage durations (bytes × workers →
   seconds) locally and adapt `core/eta.py`'s calibration per machine.
 

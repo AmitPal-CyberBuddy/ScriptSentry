@@ -94,6 +94,37 @@ release yet.
   been empty since it shipped. Fixed, with a regression test; findings now
   carry their validation verdict per candidate.
 
+### Performance: measure first, then cut
+
+- **The scan pipeline was profiled end-to-end and the real bottlenecks cut.**
+  On a 440 KB minified bundle a single-file scan dropped from ~10.3s to
+  ~5.2s. The big rocks were not where the roadmap guessed: not the ten
+  sub-analyzers (~330ms combined) but the taint analyzer re-descending the
+  whole AST six times (now flattened once per document, ~5.3s → ~1.8s),
+  line-number computation that sliced and re-counted the entire document per
+  regex match (`content[:pos].count("\n")` — attack-surface GraphQL/URL
+  sweeps, the taint regex fallback; now a shared bisected line index,
+  `core/text_index.py`), the crypto extractor re-scanning the full content
+  once per candidate string via `content.find` (now `finditer` + a bisected
+  proximity window, ~1.7s → ~0.2s — and candidate positions are now the real
+  match positions, not the first occurrence of a repeated string), an
+  O(matches × endpoints) dedupe scan, ~40 full-content `str.lower()` copies
+  in the dependency scan, and a redundant full-tree conversion pass in the
+  new tree-sitter converter (estree `range`s are now emitted eagerly per
+  node). Finding order and all detection outcomes are preserved; 349 tests
+  pin both modes.
+- **The analyze stage now uses all cores.** Per-document analysis is
+  CPU-bound (parsing + Python AST walks), so a thread pool serialized every
+  worker onto one core under the GIL. URL scans now run the analysis in a
+  process pool (`ProcessPoolExecutor`, spawn context) — parsing and walks in
+  workers, all I/O (reads, dedupe, chunk downloads, source-map fetches) and
+  all progress reporting in the parent; worker heartbeats for large bundles
+  travel back through a queue so the dashboard keeps moving mid-file. A
+  broken/unavailable pool degrades to the thread engine automatically, and
+  `SCRIPTSENTRY_ANALYZE_ENGINE=thread` opts out entirely. On a 2-core
+  machine the 4-file benchmark improves ~17%; the gap grows with core count
+  and bundle count. Uploaded snippets/analyze one file in place unchanged.
+
 ### Modern JavaScript parsing
 
 - **tree-sitter is now the primary AST engine.** The analyzer parses with
