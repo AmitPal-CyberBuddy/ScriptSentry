@@ -70,8 +70,11 @@ opinions.
   stages stay in the parent; worker heartbeats via queue; automatic thread
   fallback; `SCRIPTSENTRY_ANALYZE_ENGINE=thread` opt-out). Multi-core gains
   scale with bundle count.
-- [ ] Self-tuning ETA: persist observed stage durations (bytes × workers →
-  seconds) locally and adapt `core/eta.py`'s calibration per machine.
+- [x] Self-tuning ETA: each completed URL scan records measured analyze /
+  normalize durations and folds them into a persisted, clamped EWMA
+  (`core/eta_calibration.py`, `$SCRIPTSENTRY_STATE_DIR`, per-engine keys,
+  `SCRIPTSENTRY_ETA_SELF_TUNING=0` kill switch) that `core/eta.py` applies
+  on top of its shipped constants.
 
 ## Phase 4 — Product depth
 

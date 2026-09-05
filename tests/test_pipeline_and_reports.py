@@ -17,6 +17,15 @@ from core.reporter import (
     scan_reliability,
 )
 
+# The ETA model may pick up per-machine calibration from a previous real
+# scan (core.eta_calibration). Point the state dir at a scratch directory so
+# these assertions stay deterministic no matter what this machine has run.
+os.environ.setdefault(
+    "SCRIPTSENTRY_STATE_DIR",
+    tempfile.mkdtemp(prefix="scriptsentry-test-state-"),
+)
+
+
 
 SAMPLE = (
     'const apiKey = "Ab3x9Kq1Zp7m";\n'

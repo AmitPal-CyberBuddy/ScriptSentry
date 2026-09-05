@@ -94,6 +94,21 @@ release yet.
   been empty since it shipped. Fixed, with a regression test; findings now
   carry their validation verdict per candidate.
 
+### The ETA learns your machine
+
+- **Self-tuning calibration.** The workload cost model shipped with constants
+  measured on one laptop; on a faster box (or with the new process engine) it
+  started every scan with the same systematic error. Now each successful URL
+  scan reports the measured wall-clock seconds of the CPU-bound stages
+  (analyze, normalize); the correction folds into a bounded EWMA
+  (`core/eta_calibration.py`, clamped to 0.25–4.0, ~3 scans to converge) and
+  persists to `$SCRIPTSENTRY_STATE_DIR/eta_calibration.json` (default
+  `~/.cache/scriptsentry/`), keyed per analyze engine since the process pool
+  legitimately changes the math. Network-bound stages are never tuned, junk
+  samples (no files, tiny bytes, absurd durations) are rejected, and
+  `SCRIPTSENTRY_ETA_SELF_TUNING=0` switches the whole loop off. Canceled or
+  failed scans record nothing; bookkeeping can never break a finished scan.
+
 ### Performance: measure first, then cut
 
 - **The scan pipeline was profiled end-to-end and the real bottlenecks cut.**

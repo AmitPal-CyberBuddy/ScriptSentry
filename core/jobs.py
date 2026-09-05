@@ -70,6 +70,12 @@ class Job:
         self._rate_ema = None
         self._last_advance_ts = None   # last time the fraction actually grew
         self.eta_basis = ""
+        # Self-tuning ETA: wall-clock seconds per pipeline stage, measured
+        # from the progress events and folded into the persisted calibration
+        # (core.eta_calibration) once the scan completes successfully.
+        self._stage_started_ts = {}
+        self._stage_durations = {}
+        self._active_stage = ""
         self.cost_model = CostModel(
             mode=mode, max_files=self.max_files, max_depth=self.max_depth,
             timeout=self.timeout, workers=self.max_workers,
@@ -239,6 +245,15 @@ class Job:
                         "stage", "stages"):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
+
+            stage = self.stage or ""
+            if stage and stage != self._active_stage:
+                if self._active_stage and self._active_stage in self._stage_started_ts:
+                    elapsed = max(0.0, now - self._stage_started_ts.pop(self._active_stage))
+                    self._stage_durations[self._active_stage] = (
+                        self._stage_durations.get(self._active_stage, 0.0) + elapsed)
+                self._stage_started_ts[stage] = now
+                self._active_stage = stage
             if kwargs.get("expected_files") is not None:
                 self.expected_files = max(
                     self.expected_files, int(kwargs["expected_files"] or 0))
@@ -298,6 +313,7 @@ class Job:
             self.bytes_scanned = int(summary.get("bytes_scanned", 0))
             self.total_bytes = int(summary.get("total_bytes", 0))
             self.skipped_files = int(summary.get("skipped_files", 0))
+            self._record_stage_calibration()
             self.eta_confidence = 1.0
             self._samples = []
             self._rate_ema = None
@@ -320,6 +336,45 @@ class Job:
             self.eta_seconds = None
             self.eta_confidence = 0.0
             self.eta_basis = ""
+
+    def _record_stage_calibration(self):
+        """Fold this scan's measured stage durations into the ETA calibration.
+
+        Bookkeeping must never break a finished scan: every failure mode is
+        swallowed. Only successful completions reach this point.
+        """
+        try:
+            now = time.time()
+            if self._active_stage and self._active_stage in self._stage_started_ts:
+                elapsed = max(0.0, now - self._stage_started_ts.pop(self._active_stage))
+                self._stage_durations[self._active_stage] = (
+                    self._stage_durations.get(self._active_stage, 0.0) + elapsed)
+                self._active_stage = ""
+            if not self._stage_durations:
+                return
+            from core import eta_calibration
+            from core.eta import CostModel
+
+            def base_cost(stage):
+                model = CostModel(
+                    mode=self.mode, max_files=self.max_files,
+                    max_depth=self.max_depth, timeout=self.timeout,
+                    workers=self.max_workers, engine=eta_calibration.analyze_engine_name(),
+                )
+                model.files_expected = max(1, int(self.files_scanned or 1))
+                model.bytes_expected = float(max(self.bytes_scanned, self.total_bytes) or 0)
+                model.bytes_known = bool(self.bytes_scanned)
+                return model._stage_cost(stage)
+
+            eta_calibration.record_scan(
+                dict(self._stage_durations),
+                files_total=self.files_scanned,
+                bytes_scanned=max(self.bytes_scanned, self.total_bytes),
+                workers=self.max_workers,
+                base_cost=base_cost,
+            )
+        except Exception:
+            pass
 
     def cancel(self):
         """Request cooperative cancellation; in-flight work stops at the next check.

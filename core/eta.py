@@ -31,6 +31,9 @@ import os
 __all__ = ["CostModel", "AVG_JS_BYTES"]
 
 
+from core.eta_calibration import TUNED_STAGES, ratio_for
+
+
 def _env_float(name, default):
     try:
         value = float(os.environ.get(name, ""))
@@ -65,6 +68,15 @@ NORMALIZE_MB_PER_SEC = 80.0
 PARALLEL_EFFICIENCY = 0.8
 
 
+def _analysis_engine():
+    """Which analyze engine this scan will use (for calibration keys)."""
+    try:
+        from core.eta_calibration import analyze_engine_name
+        return analyze_engine_name()
+    except Exception:
+        return "process"
+
+
 class CostModel:
     """Estimate remaining scan seconds from the discovered workload.
 
@@ -84,7 +96,8 @@ class CostModel:
     assumed.
     """
 
-    def __init__(self, mode="url", max_files=50, max_depth=5, timeout=15, workers=6):
+    def __init__(self, mode="url", max_files=50, max_depth=5, timeout=15, workers=6,
+                 engine=None):
         self.mode = str(mode or "url").lower()
         self.max_files = max(1, int(max_files or 50))
         self.max_depth = max(1, int(max_depth or 5))
@@ -99,6 +112,13 @@ class CostModel:
         self.states: dict = {}
         self.stage_fraction: dict = {}
         self.files_done = 0
+        # Self-tuning: per-machine correction factors persisted by
+        # core.eta_calibration after past scans (bounded EWMA, kill switch
+        # SCRIPTSENTRY_ETA_SELF_TUNING=0). Absent file => all 1.0.
+        self.engine = str(engine or _analysis_engine()).lower()
+        self._calibration = {
+            stage: ratio_for(stage, self.engine) for stage in TUNED_STAGES
+        }
 
     # -- observation ------------------------------------------------------
     def observe(
@@ -175,13 +195,17 @@ class CostModel:
             return per_file * files / self._workers_for(files)
         if key == "normalize":
             mb = self._bytes_estimate() / 1e6
-            return 0.2 + mb / NORMALIZE_MB_PER_SEC / self._workers_for(files)
+            return (0.2 + mb / NORMALIZE_MB_PER_SEC / self._workers_for(files)) \
+                * self._calibration.get("normalize", 1.0)
         if key == "analyze":
             mb = self._bytes_estimate() / 1e6
             # Superlinear in bundle size (whole-content passes over few huge
-            # lines); parallel only across files.
+            # lines); parallel only across files. The persisted per-machine
+            # ratio multiplies the whole stage (the fixed per-file share is
+            # dominated by the same machine's speed).
             return (ANALYZE_FIXED_PER_FILE * files
-                    + ANALYZE_COEFF * (mb ** ANALYZE_EXPONENT) / self._workers_for(files))
+                    + ANALYZE_COEFF * (mb ** ANALYZE_EXPONENT) / self._workers_for(files)) \
+                * self._calibration.get("analyze", 1.0)
         if key == "correlate":
             return 0.4 + 0.02 * files
         if key == "verify":
