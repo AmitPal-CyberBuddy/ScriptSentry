@@ -94,18 +94,40 @@ release yet.
   been empty since it shipped. Fixed, with a regression test; findings now
   carry their validation verdict per candidate.
 
+### Modern JavaScript parsing
+
+- **tree-sitter is now the primary AST engine.** The analyzer parses with
+  tree-sitter (JavaScript grammar, TypeScript grammars for `.ts`-shaped
+  input) and keeps `esprima` as an automatic fallback. Esprima predates
+  optional chaining, nullish coalescing and class fields, so every modern
+  bundle used to silently drop to the capped-confidence regex fallback; those
+  files now get the full AST pipeline — taint flows, attack surface, import
+  discovery — on syntax written after 2020. A ~350 KB minified bundle parses
+  and converts in under a second, and the parse-once cache still guarantees
+  one parse per document no matter how many analyzers need the tree.
+- **Partial trees instead of hard failures.** tree-sitter recovers from
+  syntax errors, so a bundle with a corrupted region still yields an AST for
+  everything else; the unparseable regions are counted and surfaced as an
+  honest "AST parse note" in the report instead of discarding the file.
+- **Estree compatibility preserved.** The converter emits estree-shaped
+  dictionaries — including `range` offsets in character positions, dynamic
+  `import()` modelled as `ImportExpression`, and `?.`/`??` mapped onto
+  `MemberExpression`/`BinaryExpression` with their `optional`/operator
+  markers — so taint evidence, source/sink labels and module discovery
+  behave exactly as they did under esprima. Byte-to-character translation
+  keeps ranges correct in sources that contain non-ASCII text.
+
 ### Development infrastructure
 
 - **CI is here.** A GitHub Actions workflow now runs the whole test suite on
   Python 3.10–3.12 *and* on a second matrix entry with the optional AST
-  parser removed — pinning the documented regex-fallback degradation so the
+  AST stack removed — pinning the documented regex-fallback degradation so the
   fallback mode can never silently regress. Loopback URL-scan pipeline tests
   run in CI too, the shipped web UI is syntax-checked with Node, and ruff
   (`ruff.toml`, pyflakes + pycodestyle errors) guards the Python correctness
   floor. The suite went from "268 tests, 10 fail without optional deps" to
-  283 tests that pass in **both** modes: tests needing the optional `esprima`
-  parser or `requests` package now skip with an honest reason instead of
-  failing. Falling out of the new lint gate: dead code and unused imports
+  283 tests that pass in **both** modes: tests needing an AST engine or the
+  `requests` package now skip with an honest reason instead of failing. Falling out of the new lint gate: dead code and unused imports
   removed across `core/`, two bare `except:` blocks made explicit, and a
   duplicated `file_size`/`line_count` pair dropped from the report model.
   See the new `ROADMAP.md` for what comes next.

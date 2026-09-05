@@ -32,11 +32,14 @@ opinions.
   `via: source_map` attribution in findings/exports/UI. (Two quadratic
   regexes surfaced by this work — crypto extractor + taint fallback on
   large single-line base64 blobs — were fixed on the way: minutes → ~2s.)
-- [ ] **Modern parser**: add tree-sitter (+ JavaScript/TS grammars) as the
-  primary AST source, keeping esprima as a fallback. Esprima predates
-  optional chaining, nullish coalescing and class fields, so modern bundles
-  silently drop to the capped-confidence fallback today.
-- [ ] **Source-map ingestion**: when a bundle references `.map`, fetch it and
+- [x] **Modern parser**: tree-sitter (+ JavaScript/TypeScript grammars) is
+  now the primary AST source; esprima remains the fallback. Optional
+  chaining, nullish coalescing, class fields and dynamic `import()` parse
+  natively (no more confidence-capped fallback for post-2020 syntax).
+  Converter emits estree-shaped dicts with `range` character offsets so
+  taint evidence keeps slicing exact source text; garbage input yields a
+  partial tree plus a surfaced "parse note" instead of a hard failure.
+- [x] **Source-map ingestion**: when a bundle references `.map`, fetch it and
   analyze the *original* sources — real names in reports, unmangled taint
   flows. Remap line numbers back to the bundle for verification.
 - [x] **Data-driven dependency intelligence** (v1): curated advisory table

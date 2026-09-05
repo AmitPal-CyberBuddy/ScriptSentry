@@ -1,8 +1,18 @@
 """Optional JavaScript AST parsing helpers.
 
-Uses the pure-Python ``esprima`` package when available. Everything is wrapped
-so the analyzer still works (with regex fallbacks) when the parser is absent or
-the source uses syntax the parser cannot handle.
+Two AST engines are supported, tried in this order:
+
+1. **tree-sitter** (``core.tree_sitter_ast``) -- fast, tolerant, and covers
+   post-2020 syntax (optional chaining, nullish coalescing, class fields)
+   that the pure-Python ``esprima`` cannot parse at all. Its trees are
+   converted to the same ESTree-shaped plain dicts every consumer walks.
+2. **esprima** -- the original pure-Python engine, still used when
+   tree-sitter is not installed. Modern syntax is made parseable for it via
+   ``_sanitize_modern_syntax`` (a meaning-altering fallback kept for
+   compatibility only).
+
+Everything is wrapped so the analyzer still works (with regex fallbacks) when
+no parser is installed or the source cannot be parsed at all.
 
 Parsing is also *expensive*: turning a large minified bundle into a plain-dict
 AST can cost tens of seconds, and one scan of one file used to parse the very
@@ -22,8 +32,15 @@ try:
 except ImportError:
     esprima = None
 
+try:
+    from core.tree_sitter_ast import parse_to_dict as _ts_parse_to_dict
+    from core.tree_sitter_ast import tree_sitter_available as _ts_available
+except ImportError:  # pragma: no cover - the module ships with the package
+    _ts_parse_to_dict = None
+    _ts_available = None
 
-PARSER_NAME = "esprima"
+
+PARSER_NAME = "tree-sitter"
 
 # Parse without the token stream: collecting ``tokens`` makes ``toDict``
 # roughly 2.5x slower and 2.5x larger, and nothing downstream reads tokens
@@ -47,21 +64,50 @@ _CACHE_LOCK = threading.Lock()
 
 
 def parser_available():
-    """True when the optional JavaScript parser is installed.
+    """True when ANY JavaScript AST engine is installed.
 
-    Everything keeps working without it, but taint analysis degrades to the
+    Everything keeps working without one, but taint analysis degrades to the
     line-based fallback, so callers should surface this to the analyst instead
     of silently producing weaker results.
+    """
+    if _ts_available is not None and _ts_available():
+        return True
+    return esprima is not None
+
+
+def esprima_available():
+    """True when esprima specifically is importable.
+
+    The engine preferentially uses tree-sitter; a few tests pin esprima's
+    exact behaviour and must skip when only tree-sitter is installed.
     """
     return esprima is not None
 
 
 def parser_status():
+    if _ts_available is not None and _ts_available():
+        return {
+            "name": "tree-sitter",
+            "available": True,
+            "mode": "ast",
+            "engines": ["tree-sitter"] + (["esprima"] if esprima is not None else []),
+            "install_hint": "pip install tree-sitter tree-sitter-javascript tree-sitter-typescript",
+        }
+    if esprima is not None:
+        return {
+            "name": "esprima",
+            "available": True,
+            "mode": "ast",
+            "engines": ["esprima"],
+            "install_hint": "pip install tree-sitter tree-sitter-javascript tree-sitter-typescript "
+                            "(esprima cannot parse post-2020 JavaScript syntax)",
+        }
     return {
-        "name": PARSER_NAME,
-        "available": esprima is not None,
-        "mode": "ast" if esprima is not None else "regex_fallback",
-        "install_hint": f"pip install {PARSER_NAME}",
+        "name": "none",
+        "available": False,
+        "mode": "regex_fallback",
+        "engines": [],
+        "install_hint": "pip install tree-sitter tree-sitter-javascript tree-sitter-typescript",
     }
 
 
@@ -166,10 +212,24 @@ def _sanitize_modern_syntax(content):
 
 
 def _parse(content):
-    if esprima is None:
-        return None, "esprima-not-installed"
+    """Parse with the best available engine: tree-sitter, then esprima."""
     if not content or not content.strip():
         return None, "empty"
+    # Engine 1: tree-sitter -- covers modern syntax natively and tolerates
+    # partial garbage (returns a partial tree plus an error note).
+    if _ts_parse_to_dict is not None:
+        tree, error = _ts_parse_to_dict(content)
+        if tree is not None:
+            # Partial trees (ERROR regions) are still usable analysis input;
+            # the note rides along so parse_ast can surface it.
+            return tree, error
+        last_error = error or "tree-sitter-parse-failed"
+    else:
+        last_error = "no-ast-parser"
+    # Engine 2: esprima (with the meaning-preserving-ISH modern-syntax
+    # rewrite -- kept only because esprima may be the only engine present).
+    if esprima is None:
+        return None, last_error
     attempts = []
     candidates = [content, _sanitize_modern_syntax(content)]
     seen = set()
@@ -185,20 +245,20 @@ def _parse(content):
                 attempts.append(f"{method}: {exc}")
     if attempts:
         return None, attempts[0].split(":", 1)[-1].strip()
-    return None, "parse-failed"
+    return None, last_error
 
 
 def _content_key(content):
     return hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
 
 
-def _cache_put(key, tree, source_bytes):
+def _cache_put(key, tree, source_bytes, note=None):
     """Store a successfully parsed tree under its content hash.
 
     The stored dict is shared with every consumer of this content. Consumers
     walk it read-only (taint, attack surface and module discovery only ever
     ``get`` from nodes), so no copies are made -- a deep copy would erase the
-    entire speedup.
+    entire speedup. ``note`` carries a tree-sitter partial-tree annotation.
     """
     global _RAW_CACHE_SOURCE_BYTES
     if source_bytes > _RAW_CACHE_MAX_SOURCE_BYTES:
@@ -206,11 +266,11 @@ def _cache_put(key, tree, source_bytes):
     with _CACHE_LOCK:
         if key in _RAW_CACHE:
             return
-        _RAW_CACHE[key] = (tree, source_bytes)
+        _RAW_CACHE[key] = (tree, note, source_bytes)
         _RAW_CACHE_SOURCE_BYTES += source_bytes
         while (_RAW_CACHE_SOURCE_BYTES > _RAW_CACHE_MAX_TOTAL_SOURCE_BYTES
                or len(_RAW_CACHE) > _RAW_CACHE_MAX_ENTRIES) and len(_RAW_CACHE) > 1:
-            _old_key, (_tree, old_bytes) = _RAW_CACHE.popitem(last=False)
+            _old_key, (_tree, _note, old_bytes) = _RAW_CACHE.popitem(last=False)
             _RAW_CACHE_SOURCE_BYTES -= old_bytes
 
 
@@ -221,17 +281,17 @@ def parse_raw_with_error(content):
     exactly once no matter how many analyzers need the tree. Returns the
     *shared* cached dict on a hit -- treat it as read-only.
     """
-    if esprima is None:
-        return None, "esprima-not-installed"
+    if not parser_available():
+        return None, "no-ast-parser"
     content = content or ""
     if not content.strip():
         return None, "empty"
     key = _content_key(content)
     with _CACHE_LOCK:
         if key in _RAW_CACHE:
-            tree, _size = _RAW_CACHE[key]
+            tree, note, _size = _RAW_CACHE[key]
             _RAW_CACHE.move_to_end(key)
-            return tree, None
+            return tree, note
         if key in _FAILURE_CACHE:
             _FAILURE_CACHE.move_to_end(key)
             return None, _FAILURE_CACHE[key]
@@ -245,6 +305,8 @@ def parse_raw_with_error(content):
         return None, error
 
     if not isinstance(tree, dict):
+        # tree-sitter trees arrive as dicts already; only esprima needs the
+        # explicit conversion.
         try:
             tree = esprima.toDict(tree)
         except Exception:  # noqa: BLE001
@@ -254,8 +316,9 @@ def parse_raw_with_error(content):
             _FAILURE_CACHE[key] = "ast-conversion-failed"
         return None, "ast-conversion-failed"
 
-    _cache_put(key, tree, len(content.encode("utf-8", errors="ignore")))
-    return tree, None
+    note = error if isinstance(tree, dict) and isinstance(error, str) else None
+    _cache_put(key, tree, len(content.encode("utf-8", errors="ignore")), note)
+    return tree, note
 
 
 def parse_raw(content):
@@ -292,7 +355,7 @@ def parse_ast(content):
     every scanned file, roughly doubling the cost of the analyze stage.
     """
     result = {
-        "available": bool(esprima is not None),
+        "available": bool(parser_available()),
         "parse_error": None,
         "imports": [],
         "exports": [],
@@ -308,13 +371,16 @@ def parse_ast(content):
         "node_count": 0,
     }
 
-    if esprima is None:
+    if not parser_available():
         return result
 
     tree, error = parse_raw_with_error(content)
     if tree is None:
         result["parse_error"] = error
         return result
+    if error:
+        # tree-sitter partial tree: analysis continues on the usable parts.
+        result["parse_error"] = error
 
     result["token_count"] = len(tree.get("tokens", []) or [])
     result["comment_count"] = len(tree.get("comments", []) or [])

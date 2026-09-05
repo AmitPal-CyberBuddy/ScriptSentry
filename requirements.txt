@@ -3,5 +3,8 @@ beautifulsoup4
 colorama
 tqdm
 jsbeautifier
+tree-sitter
+tree-sitter-javascript
+tree-sitter-typescript
 esprima
 playwright
