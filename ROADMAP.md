@@ -78,8 +78,10 @@ opinions.
 
 ## Phase 4 — Product depth
 
-- [ ] Local scan history + diffing (SQLite): "3 new, 2 resolved since your
-  last scan" — turns one-shot scans into monitoring.
+- [x] Local scan history + diffing (SQLite): `core/history.py` records each
+  completed dashboard scan with stable per-finding fingerprints and the
+  dashboard answers "3 new, 2 resolved since your last scan" (plus a
+  history panel that re-renders past reports).
 - [ ] Deeper discovery: sitemap.xml/robots.txt, SPA hash-route hints, and an
   API-surface map (optional OpenAPI-shaped export) built from the endpoint
   inventory the engine already extracts.

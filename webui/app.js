@@ -1179,6 +1179,8 @@
       const btn = $(sel);
       if (btn) btn.disabled = busy;
     });
+    // Historical report views must not fight a live scan for the dashboard.
+    document.querySelectorAll(".history-view").forEach((btn) => { btn.disabled = busy; });
   }
 
   function showLoading(text) {
@@ -1527,8 +1529,81 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       throw new Error("The analysis is not ready yet.");
     }
     payload = data.payload;
+    viewedScanNote = "";
     renderDashboard();
+    renderHistoryChip();
+    refreshHistory().catch(() => {});
     $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // ---------------- Scan history (local SQLite) ----------------
+
+  let viewedScanNote = "";
+
+  function renderHistoryChip() {
+    const box = $("#history-diff");
+    if (!box) return;
+    const h = payload && payload.history;
+    if (!h || !h.previous_scan_id) {
+      box.hidden = true;
+      return;
+    }
+    const parts = [];
+    if (h.new_count) parts.push(`<strong>${h.new_count}</strong> new`);
+    if (h.resolved_count) parts.push(`<strong>${h.resolved_count}</strong> resolved`);
+    parts.push(`${h.unchanged_count || 0} unchanged`);
+    box.innerHTML = `vs previous scan of this target: ${parts.join(" · ")}`;
+    box.hidden = false;
+  }
+
+  async function refreshHistory() {
+    const list = $("#history-list");
+    const card = $("#history-card");
+    if (!list || !card) return;
+    const data = await getJSON("/api/history?limit=12");
+    const scans = Array.from(data.scans || []);
+    if (!scans.length && !viewedScanNote) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    const note = $("#history-note");
+    if (note) note.textContent = viewedScanNote || "";
+    list.innerHTML = scans.map((s) => {
+      const when = s.created_at ? new Date(s.created_at * 1000).toLocaleString() : "";
+      const diff = s.diff && s.diff.previous_scan_id != null
+        ? ` <span class="history-counts">+${s.diff.new_count || 0} / −${s.diff.resolved_count || 0}</span>`
+        : "";
+      const dur = s.duration_ms ? ` · ${(s.duration_ms / 1000).toFixed(1)}s` : "";
+      return `<div class="history-row">` +
+        `<span class="history-when">${escapeHtml(when)}</span>` +
+        `<span class="history-target" title="${escapeHtml(s.target || "")}">${escapeHtml(s.target || s.mode || "")}</span>` +
+        `<span class="meta">${s.files_total || 0} file(s)${dur} · ${s.findings_total || 0} finding(s)${diff}</span>` +
+        (s.report_stored
+          ? `<button class="btn ghost history-view" data-scan="${s.scan_id}">View</button>`
+          : `<span class="meta">summary only</span>`) +
+        `</div>`;
+    }).join("");
+    list.querySelectorAll(".history-view").forEach((btn) => {
+      btn.addEventListener("click", () => viewHistoryScan(btn.dataset.scan, btn));
+    });
+  }
+
+  async function viewHistoryScan(scanId, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const data = await getJSON(`/api/history/${encodeURIComponent(scanId)}?include=payload`);
+      if (!data.scan || !data.scan.payload) return;
+      payload = data.scan.payload;
+      const when = data.scan.created_at ? new Date(data.scan.created_at * 1000).toLocaleString() : "";
+      viewedScanNote = `viewing scan #${data.scan.scan_id} from ${when} (start a new scan to return to live results)`;
+      renderDashboard();
+      const chip = $("#history-diff");
+      if (chip) chip.hidden = true;
+      refreshHistory().catch(() => {});
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   function setFieldError(inputId, errorId, message, { neutral = false } = {}) {

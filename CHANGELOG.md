@@ -94,6 +94,22 @@ release yet.
   been empty since it shipped. Fixed, with a regression test; findings now
   carry their validation verdict per candidate.
 
+### Scan history: "3 new, 2 resolved since your last scan"
+
+- **Local scan history with cross-scan diffing.** Every completed dashboard
+  scan is now recorded (SQLite, WAL, one file under the shared state
+  directory — `core/history.py`) with a fingerprint per finding that is
+  stable across scans (finding id + document + sink/title; deliberately not
+  line numbers, which shift with unrelated edits). The dashboard shows the
+  diff against the previous scan of the same target as soon as a scan
+  finishes, and a history panel lists recent scans (files, findings,
+  duration, +new/−resolved) with a View button that re-renders a past scan
+  through the same dashboard code path. Retention keeps the newest 200
+  scans (`SCRIPTSENTRY_HISTORY_MAX`); oversized reports store summary-only;
+  `SCRIPTSENTRY_HISTORY=0` turns recording off; canceled/failed scans record
+  nothing and history failures can never fail a finished scan. Local-only,
+  like everything else.
+
 ### The ETA learns your machine
 
 - **Self-tuning calibration.** The workload cost model shipped with constants

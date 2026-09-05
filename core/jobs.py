@@ -502,7 +502,22 @@ class JobManager:
             try:
                 if not job.start():
                     return
+                started = time.monotonic()
                 result = target(*args, **kwargs)
+                # Local scan history (SQLite): record before complete() so the
+                # dashboard sees the diff as soon as it sees the result. A
+                # history failure must never fail a finished scan.
+                history_info = None
+                try:
+                    from core.history import enabled as history_enabled, record_scan
+                    if history_enabled():
+                        history_info = record_scan(
+                            result, mode=job.mode, target=job.source,
+                            duration_ms=(time.monotonic() - started) * 1000.0)
+                except Exception:  # noqa: BLE001 - bookkeeping is best-effort
+                    history_info = None
+                if history_info and isinstance(result, dict):
+                    result.setdefault("__history__", history_info)
                 job.complete(result)
             except Exception as exc:  # noqa: BLE001 - surfaced to dashboard
                 job.fail(exc)

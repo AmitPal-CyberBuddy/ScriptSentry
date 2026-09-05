@@ -35,6 +35,9 @@ from urllib.parse import urlparse
 
 from config import DEFAULT_PROFILE, SCAN_MAX_WORKERS, SCAN_PROFILES
 from core.analyzer_service import analyze_content, analyze_files, analyze_url
+from core.history import diff_scans as history_diff
+from core.history import get_scan as history_get
+from core.history import list_scans as history_list
 from core.jobs import jobs
 from core.js_parser import parser_status
 from core.runtime_evidence import playwright_available, runtime_evidence_enabled
@@ -227,6 +230,38 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 raw = jobs.result(job_id)
                 payload = self._payload(raw, metadata={"mode": job.mode, "source": job.source})
                 self._send_json({"ok": True, "job": job.snapshot(), "ready": True, "payload": payload})
+                return
+            if parsed.path == "/api/history":
+                limit = self._query_param(parsed, "limit", "50")
+                target = self._query_param(parsed, "target", "")
+                self._send_json({"ok": True,
+                                 "scans": history_list(limit=int(limit) if limit.isdigit() else 50,
+                                                       target=target or None)})
+                return
+            if parsed.path.startswith("/api/history/diff"):
+                from_id = self._query_param(parsed, "from", "")
+                to_id = self._query_param(parsed, "to", "")
+                diff = history_diff(from_id, to_id) if from_id and to_id else None
+                if diff is None:
+                    self._send_error_json("Provide from= and to= scan ids", 400)
+                    return
+                self._send_json({"ok": True, "diff": diff})
+                return
+            if parsed.path.startswith("/api/history/"):
+                scan_id = parsed.path.rsplit("/", 1)[-1]
+                include_payload = self._query_param(parsed, "include", "") == "payload"
+                scan = history_get(scan_id, include_report=include_payload)
+                if scan is None:
+                    self._send_error_json("Unknown scan id", 404)
+                    return
+                if include_payload:
+                    report = scan.pop("report", None)
+                    if report is None:
+                        self._send_error_json("This scan's full report was not retained", 410)
+                        return
+                    meta = {"mode": scan.get("mode"), "source": scan.get("target")}
+                    scan["payload"] = self._payload(report, metadata=meta)
+                self._send_json({"ok": True, "scan": scan})
                 return
             self._send_error_json("Not found", 404)
             return

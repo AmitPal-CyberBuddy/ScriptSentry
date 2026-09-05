@@ -58,11 +58,8 @@ def analyze_engine_name():
 
 
 def state_path():
-    override = os.environ.get("SCRIPTSENTRY_STATE_DIR")
-    if override:
-        return os.path.join(override, "eta_calibration.json")
-    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
-    return os.path.join(base, "scriptsentry", "eta_calibration.json")
+    from core.state import state_dir
+    return os.path.join(state_dir(), "eta_calibration.json")
 
 
 def _load_entries():

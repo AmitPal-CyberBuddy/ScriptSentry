@@ -1344,6 +1344,8 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         page_url = ""
     script_inventory = build_script_intel(results, runtime_evidence, page_url)
     exfil_candidates = data_exfiltration_candidates(results, runtime_evidence, page_url)
+    # Cross-scan diff recorded by the job runner (None when disabled).
+    history_info = results.get("__history__") or None
 
     category_meta = [
         ("secrets", "Secrets & Credentials", "#ff4d6d", "shield"),
@@ -1537,5 +1539,9 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         "exfil_candidates": deduplicate_findings(exfil_candidates),
         "scan_summary": scan_summary,
         "ai_summary": ai_summary or {},
+        # Cross-scan diff vs the previous scan of the same target (None on
+        # the first recorded scan). history_info is None when recording is
+        # disabled or the scan was not recorded.
+        "history": history_info,
     }
     return payload

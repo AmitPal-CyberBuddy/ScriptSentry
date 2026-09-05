@@ -245,6 +245,15 @@
 
         <div class="engine-notes" id="engine-notes" role="status" aria-live="polite" hidden></div>
 
+      <div class="card history-card" id="history-card" hidden>
+        <div class="row" style="justify-content:space-between; align-items:center; margin:0 0 8px">
+          <h3 style="margin:0">🕘 Scan history</h3>
+          <span class="meta" id="history-note"></span>
+        </div>
+        <div class="history-diff" id="history-diff" hidden></div>
+        <div id="history-list"></div>
+      </div>
+
       <div class="view-tabs fade-up" id="view-tabs" role="tablist" aria-label="Analysis views">
           <button class="view-tab active" data-view="overview" role="tab" aria-selected="true" tabindex="0">📊 Overview</button>
           <button class="view-tab" data-view="findings" role="tab" aria-selected="false" tabindex="-1">🚦 Findings</button>
