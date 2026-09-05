@@ -4,6 +4,7 @@
 single choke point for every network fetch -- serialize requests per host.
 Off by default; the delay must never apply to a different host.
 """
+import importlib.util
 import contextlib
 import time
 import unittest
@@ -46,6 +47,8 @@ class CrawlDelayTest(unittest.TestCase):
         with mock.patch.dict("os.environ", {"SCRIPTSENTRY_CRAWL_DELAY_MS": "banana"}):
             self.assertEqual(crawl_delay_seconds(), 0.0)
 
+    @unittest.skipUnless(importlib.util.find_spec("requests") is not None,
+                         "safe_get's session path needs the requests package")
     def test_safe_get_waits(self):
         from core import url_policy
         waited = []
