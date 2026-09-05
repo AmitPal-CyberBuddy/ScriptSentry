@@ -2265,6 +2265,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     const body = [];
     const auth = [];
     const internal = [];
+    const hashRoutes = [];
     (payload.files || []).forEach((f) => {
       const as = f.attack_surface || {};
       params.push(...(as.parameters || []));
@@ -2272,11 +2273,13 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       body.push(...(as.body_fields || []));
       auth.push(...(as.auth_hints || []));
       internal.push(...(as.internal_endpoints || []));
+      hashRoutes.push(...(as.hash_routes || []));
     });
 
     const panels = [
       ["Endpoints & Realtime", endpoints, (e) => `${e.method} ${e.url}${e.internal ? " ⚠internal" : ""}`, "#22d3ee"],
       ["GraphQL Operations", graphql, (g) => `${g.operation}${g.line ? ` (L${g.line})` : ""}`, "#a78bfa"],
+      ["SPA Hash Routes", hashRoutes, (r) => `#${r.route || ""}${r.internal ? " ⚠internal" : ""}`, "#ffd166"],
       ["Parameters", params, (p) => p, "#38bdf8"],
       ["Headers", headers, (h) => h, "#fb7185"],
       ["Body Fields", body, (b) => b, "#34d399"],

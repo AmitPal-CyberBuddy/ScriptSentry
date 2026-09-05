@@ -250,6 +250,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
     exfil_candidates = data_exfiltration_candidates(results, runtime_evidence, page_url)
     all_attack_surface = {
         "endpoints": [], "websockets": [], "sse": [], "graphql": [],
+        "hash_routes": [],
         "parameters": [], "domains": [], "headers": [], "body_fields": [],
         "auth_hints": [], "internal_endpoints": [],
     }
@@ -406,7 +407,12 @@ def build_report_model(results, ai_summary=None, metadata=None):
         seen = set()
         for item in items or []:
             if isinstance(item, dict):
-                sig = (item.get("url") or item.get("operation") or item.get("type") or "", item.get("method") or "", item.get("line") or 0)
+                if key == "hash_routes":
+                    # A route is the same route no matter which file/line
+                    # mentions it; keep the first observation.
+                    sig = (item.get("route") or "",)
+                else:
+                    sig = (item.get("url") or item.get("route") or item.get("operation") or item.get("type") or "", item.get("method") or "", item.get("line") or 0)
             else:
                 sig = (str(item),)
             if sig in seen:
@@ -733,6 +739,13 @@ def generate_report(results, ai_summary=None, metadata=None):
                     [f"{w.get('kind', 'WS')} {w.get('url', '')}" for w in (asrf.get("websockets", []) + asrf.get("sse", []))[:12]],
                     12,
                 ))
+            if asrf.get("hash_routes"):
+                report.extend(_txt_section(
+                    "Attack Surface · SPA hash routes (client-side, not HTTP endpoints)",
+                    [f"#{r.get('route', '')}" + ("  [hidden/internal]" if r.get("internal") else "")
+                     for r in asrf.get("hash_routes", [])[:10]],
+                    10,
+                ))
             if asrf.get("auth_hints") or asrf.get("internal_endpoints"):
                 extras = [f"auth: {a.get('type', a)}" for a in asrf.get("auth_hints", [])[:6]]
                 extras += [f"internal: {e.get('method', 'GET')} {e.get('url', '')}" for e in asrf.get("internal_endpoints", [])[:6]]
@@ -1017,9 +1030,10 @@ def generate_html_report(results, ai_summary=None, metadata=None):
         if norm["framework_findings"]:
             html.append(f"<div class=\"sec\" style=\"margin-top:14px\"><h4>Framework Risks</h4><ul>{dict_items(norm['framework_findings'], lambda x: (x.get('framework') or '') + ': ' + (x.get('type') or x.get('id', '')) + ' — ' + (x.get('sink') or ''), 8)}</ul></div>")
         asrf = norm.get("attack_surface", {}) or {}
-        if asrf.get("endpoints") or asrf.get("websockets") or asrf.get("sse") or asrf.get("auth_hints") or asrf.get("internal_endpoints"):
+        if asrf.get("endpoints") or asrf.get("websockets") or asrf.get("sse") or asrf.get("auth_hints") or asrf.get("internal_endpoints") or asrf.get("hash_routes"):
             ep_lines = [f"{e.get('method', 'GET')} {e.get('url', '')}" for e in asrf.get("endpoints", [])[:12]]
             ep_lines += [f"{w.get('kind', 'WS')} {w.get('url', '')}" for w in (asrf.get("websockets", []) + asrf.get("sse", []))[:8]]
+            ep_lines += [f"SPA route: #{r.get('route', '')}" for r in asrf.get("hash_routes", [])[:6]]
             ep_lines += [f"auth: {a.get('type', a)}" for a in asrf.get("auth_hints", [])[:4]]
             ep_lines += [f"internal: {e.get('method', 'GET')} {e.get('url', '')}" for e in asrf.get("internal_endpoints", [])[:4]]
             html.append(f"<div class=\"sec\" style=\"margin-top:14px\"><h4>Attack Surface</h4><ul>{items_html(ep_lines, 16)}</ul></div>")
@@ -1671,4 +1685,18 @@ def generate_openapi_report(results, metadata=None):
         document["x-graphql"] = surface["graphql"]
     if surface.get("auth_hints"):
         document["x-auth-schemes"] = list({str(h.get("type") or h) for h in surface["auth_hints"] if isinstance(h, dict) or True})[:20]
+    if surface.get("hash_routes"):
+        # Client-side SPA routes live in the shipped bundle, not on the wire;
+        # they are a review hint, so they go under an extension, never "paths".
+        seen_routes = set()
+        x_routes = []
+        for route in surface["hash_routes"]:
+            if not isinstance(route, dict):
+                continue
+            name = str(route.get("route") or "")
+            if not name or name in seen_routes:
+                continue
+            seen_routes.add(name)
+            x_routes.append({"route": f"#{name}", "internal": bool(route.get("internal"))})
+        document["x-spa-hash-routes"] = x_routes[:100]
     return json.dumps(document, indent=2, ensure_ascii=False, default=str)

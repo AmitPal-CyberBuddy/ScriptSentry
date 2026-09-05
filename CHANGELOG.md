@@ -147,6 +147,13 @@ release yet.
   query parameters and header/auth hints, with websockets/SSE/GraphQL under
   `x-` extensions. It is explicitly an *observation* export — descriptions
   say the operations were seen in shipped JavaScript, not documented.
+- **SPA hash-route hints.** Client-side routes hidden in quoted hash
+  fragments (`#/admin/users`, `#/settings/profile` — router tables, redirects,
+  `href`s) are now reported as attack-surface hints: a dashboard panel, a
+  report section, and an `x-spa-hash-routes` extension in the OpenAPI export.
+  They are marked `⚠ internal` when they match the internal/hidden hints and
+  are deliberately *not* listed as API paths — the server answers a hash
+  route with the same document as any other.
 - **Crawl politeness.** `SCRIPTSENTRY_CRAWL_DELAY_MS=<ms>` serializes every
   network request per host (pages, scripts, source maps — one choke point
   in `safe_get`), for scanning sites you own without bursting. Default off.

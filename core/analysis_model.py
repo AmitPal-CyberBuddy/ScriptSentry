@@ -469,7 +469,7 @@ def merge_attack_surface(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         sig = (
-            item.get("url") or item.get("operation") or item.get("type") or "",
+            item.get("url") or item.get("route") or item.get("operation") or item.get("type") or "",
             item.get("method") or item.get("kind") or "",
             item.get("line") or 0,
         )

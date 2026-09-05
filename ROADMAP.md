@@ -85,7 +85,9 @@ opinions.
 - [x] Deeper discovery: robots.txt/`Sitemap:`/sitemap.xml pages feed recon
   (bounded to 10 same-origin pages, kill switch
   `SCRIPTSENTRY_SITEMAP_DISCOVERY=0`); the endpoint inventory now exports
-  as an OpenAPI 3.1 document (`🧭 API map` / `--format openapi`).
+  as an OpenAPI 3.1 document (`🧭 API map` / `--format openapi`); hidden SPA
+  hash routes (`#/admin/...`) surface as attack-surface hints and as an
+  `x-spa-hash-routes` extension (never as API paths).
 - [x] Crawl politeness: `SCRIPTSENTRY_CRAWL_DELAY_MS` enforces a per-host
   minimum interval at the single fetch choke point (`safe_get`).
 - [x] Local LLM flexibility: `--ai openai` calls any OpenAI-compatible

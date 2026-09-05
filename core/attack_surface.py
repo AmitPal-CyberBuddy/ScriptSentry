@@ -267,6 +267,37 @@ def _graphql_sweep(content, filename, lines=None):
     return {"urls": list(dict.fromkeys(urls)), "operations": ops[:40]}
 
 
+# SPA frameworks keep their client-side routes in quoted hash fragments
+# (`href="#/admin/users"`, `redirectTo: "#/login"`, router tables).  These are
+# *not* HTTP endpoints -- the server always answers with the same document --
+# but hidden hash routes (admin panels, debug screens, impersonation flows)
+# are exactly what a reviewer wants surfaced, so they are reported as
+# attack-surface hints, never as API paths.
+HASH_ROUTE_RE = re.compile(r"[\"'`]#/([A-Za-z0-9_][A-Za-z0-9_./:{}\-]{0,119})[\"'`]")
+_HASH_ROUTE_ASSET_RE = re.compile(r"\.(?:js|mjs|cjs|css|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|mp4|webm|map|html?)$", re.I)
+HASH_ROUTE_CAP = 60
+
+
+def _hash_route_sweep(content, lines=None):
+    """Quoted ``#/...`` fragments that look like SPA routes, deduped, capped."""
+    if lines is None:
+        lines = LineIndex(content)
+    routes = []
+    seen = set()
+    for match in HASH_ROUTE_RE.finditer(content):
+        path = f"/{match.group(1)}"
+        if _HASH_ROUTE_ASSET_RE.search(path):
+            continue
+        if not re.search(r"[a-z]", path, re.I):
+            continue
+        if path in seen:
+            continue
+        seen.add(path)
+        routes.append({"route": path, "line": lines.line_at(match.start()),
+                       "internal": _is_internal(path)})
+    return routes[:HASH_ROUTE_CAP]
+
+
 def extract_attack_surface(content, filename="inline.js"):
     """Return a structured attack-surface object for a JS document."""
     endpoints = []
@@ -330,6 +361,9 @@ def extract_attack_surface(content, filename="inline.js"):
     graphql_urls.update(gq["urls"])
     graphql_ops.extend(gq["operations"])
 
+    # SPA hash-route hints (client-side routes; reported, not fetched).
+    hash_routes = _hash_route_sweep(content, lines)
+
     # Unconditional endpoint extraction from URL literals, incl. hidden routes.
     # Require an actual URL/path shape so header/object keys like "Authorization"
     # do not become fake endpoints.
@@ -392,6 +426,7 @@ def extract_attack_surface(content, filename="inline.js"):
         "websockets": websockets[:30],
         "sse": sse[:20],
         "graphql": {"urls": sorted(graphql_urls)[:30], "operations": graphql_ops[:40]},
+        "hash_routes": hash_routes,
         "parameters": sorted(set(_flatten_params(params)))[:80],
         "domains": sorted(domains)[:60],
         "headers": sorted(headers)[:40],
