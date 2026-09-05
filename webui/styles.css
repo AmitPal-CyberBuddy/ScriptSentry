@@ -2473,6 +2473,38 @@ main.wrap {
   color: var(--faint);
 }
 
+/* The rail carries the section's supporting facts so the left column
+   earns its width: a mono spec sheet, not empty space. */
+.rail-facts {
+  margin: var(--space-sm) 0 0;
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--hairline);
+  display: grid;
+  gap: 9px;
+}
+
+.rail-facts div {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: var(--space-2xs);
+  align-items: baseline;
+}
+
+.rail-facts dt {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.rail-facts dd {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 /* Each capability is one divided row: number, name, one-line truth.
    No card, no icon chip — the number is the visual unit. */
 .feature-card {

@@ -38,6 +38,10 @@ class BaseHandler(SimpleHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), usb=()")
+        # The engine serves files it owns from disk; a cached page that
+        # pairs with a newer engine (or vice versa) reads as bugs. The
+        # revalidation cost on localhost is negligible.
+        self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
     def _send_json(self, payload, status=200):

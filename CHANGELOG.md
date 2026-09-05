@@ -30,6 +30,12 @@ release yet.
   micro-labels, and color reserved for data (severity, status, charts).
   All 434 tests — including the responsive-contract suite (grid hygiene,
   cascade order, touch targets, breakpoints) — pass unchanged.
+- **The capability rail carries the engine facts** (AST engine, exports,
+  history, AI notes, privacy) so the left column of the index is content,
+  not empty space; the setup dialog gains the pip/pipx/Docker path as a
+  third tab; the 404 page is rebuilt in the new design language; and the
+  local server sends `Cache-Control: no-cache` so a stale cached page can
+  never pair with a newer engine.
 
 ### Maintainability: the engine behind the tool
 
