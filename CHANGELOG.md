@@ -66,6 +66,22 @@ release yet.
   from timing out to ~10 s. This was very likely the dominant cost behind
   long silent analyze stages on production targets.
 
+### Secrets: the value itself is now evidence
+
+- **Credential validation tiers.** Candidates are checked against the
+  providers whose token *shape* is proof: JWTs must base64url-decode into
+  JSON with an `alg` header (`structure` tier), PEM blocks must carry a
+  decodable body, and Slack/GitHub/Stripe/SendGrid/AWS/Twilio/npm tokens
+  match their canonical documented formats (`format` tier). A validated
+  candidate upgrades the hardcoded-secret finding to **high** confidence
+  (carrying the provider verdicts); unvalidated entropy guesses stay at
+  medium. Nothing else gains anything — ordinary strings validate to None.
+- **The secret analyzer never produced a finding.** A `match.groups() > 1`
+  tuple/int comparison raised TypeError on the first regex match — silently
+  swallowed into `analyzer_errors` — so the `secret_analysis` section has
+  been empty since it shipped. Fixed, with a regression test; findings now
+  carry their validation verdict per candidate.
+
 ### Development infrastructure
 
 - **CI is here.** A GitHub Actions workflow now runs the whole test suite on

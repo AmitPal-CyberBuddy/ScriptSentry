@@ -676,7 +676,23 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
         })
 
     if results.get("credible_secrets"):
-        _signal("hardcoded_secret", "HIGH", "Hardcoded secret candidate", results["credible_secrets"][:3], confidence="medium", observation=False)
+        # A candidate whose VALUE validates (JWT that decodes, canonical
+        # Slack/GitHub/AWS/... shape) is stronger evidence than entropy alone
+        # can provide -- say so instead of capping every static guess at
+        # medium.
+        from core.secret_validation import validate as _validate_secret
+        verdicts = [
+            verdict for verdict in
+            (_validate_secret(candidate) for candidate in results["credible_secrets"])
+            if verdict
+        ]
+        _signal(
+            "hardcoded_secret", "HIGH", "Hardcoded secret candidate",
+            results["credible_secrets"][:3],
+            confidence="high" if verdicts else "medium", observation=False,
+        )
+        if verdicts:
+            risk_signals[-1]["validated"] = verdicts[:3]
     if results.get("keys") and results.get("ivs"):
         _signal("exposed_key_iv_pair", "CRITICAL", "Static crypto key/IV pair exposed", [results["keys"][:2], results["ivs"][:2]], confidence="medium", observation=False)
     elif results.get("keys"):

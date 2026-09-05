@@ -42,9 +42,11 @@ opinions.
 - [ ] **Data-driven dependency intelligence**: replace the hardcoded
   `dep_entity` dict with a shipped dataset (RetireJS-style) that extracts
   versions and emits known-vulnerability findings with references.
-- [ ] **Validator-tiered secrets**: checksum validation for AWS/Slack/Google/
-  JWT-shaped candidates, upgrading confidence from "candidate" to
-  "validated format" (and killing residual false positives).
+- [x] **Validator-tiered secrets**: JWT/PEM structural validation and
+  canonical-format matching for Slack/GitHub/Stripe/AWS/SendGrid/Twilio/npm
+  upgrade validated candidates to high confidence (`validated` verdicts ride
+  along on findings). (Also fixed on the way: the secret analyzer had never
+  emitted a finding — a tuple/int TypeError was swallowed per match.)
 
 ## Phase 3 — Performance at production scale
 
