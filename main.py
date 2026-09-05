@@ -13,8 +13,7 @@ import sys
 from config import DEFAULT_PROFILE, REPORT_FORMATS, SCAN_MAX_WORKERS, SCAN_PROFILES
 from core.analyzer_service import analyze_url
 from core.reporter import (
-    build_dashboard_payload,
-    build_report_model,
+    generate_json_report,
     generate_csv_report,
     generate_html_report,
     generate_report,
@@ -31,23 +30,23 @@ def _save(path, content):
         handle.write(content)
 
 
+def save_openapi(results, metadata=None):
+    from core.reporter import generate_openapi_report
+    path = os.path.join(OUTPUT_DIR, "api-surface.openapi.json")
+    _save(path, generate_openapi_report(results, metadata=metadata))
+    print(f"  OpenAPI surface: {path}")
+
+
 def save_json(results, ai_summary=None, metadata=None):
-    payload = {
-        "metadata": metadata or {},
-        "results": {key: value for key, value in results.items() if not str(key).startswith("__")},
-        "runtime_evidence": results.get("__runtime_evidence__"),
-        "runtime_findings": results.get("__runtime_findings__", []),
-        "report_model": build_report_model(results, ai_summary=ai_summary, metadata=metadata),
-        "dashboard": build_dashboard_payload(results, ai_summary=ai_summary, metadata=metadata),
-        "ai_summary": ai_summary or {},
-    }
+    payload = generate_json_report(results, ai_summary=ai_summary, metadata=metadata)
     path = os.path.join(OUTPUT_DIR, "report.json")
     _save(path, json.dumps(payload, indent=2, ensure_ascii=False, default=str))
     print(f"[+] JSON report saved: {path}")
 
 
 def run(urls, max_depth=5, timeout=15, profile=DEFAULT_PROFILE, output_formats=None,
-        ai_provider="disabled", model=None, ollama_url=None, max_workers=SCAN_MAX_WORKERS):
+        ai_provider="disabled", model=None, ollama_url=None, openai_base_url=None,
+        api_key=None, max_workers=SCAN_MAX_WORKERS):
     """Analyze one or more URLs through the same service used by the dashboard."""
     if not urls:
         raise ValueError("At least one target URL is required")
@@ -82,6 +81,8 @@ def run(urls, max_depth=5, timeout=15, profile=DEFAULT_PROFILE, output_formats=N
             provider=ai_provider,
             model=model,
             ollama_url=ollama_url,
+            openai_base_url=openai_base_url,
+            api_key=api_key,
         )
 
     formats = output_formats or ["all"]
@@ -89,6 +90,8 @@ def run(urls, max_depth=5, timeout=15, profile=DEFAULT_PROFILE, output_formats=N
         _save(os.path.join(OUTPUT_DIR, "report.txt"), generate_report(results, ai_summary=ai_summary, metadata=metadata))
     if "all" in formats or "json" in formats:
         save_json(results, ai_summary=ai_summary, metadata=metadata)
+    if "all" in formats or "openapi" in formats:
+        save_openapi(results, metadata=metadata)
     if "all" in formats or "html" in formats:
         _save(os.path.join(OUTPUT_DIR, "report.html"), generate_html_report(results, ai_summary=ai_summary, metadata=metadata))
     if "all" in formats or "csv" in formats:
@@ -103,7 +106,8 @@ def build_parser():
     """Argument parser for the CLI (separated for tests)."""
     parser = argparse.ArgumentParser(description="Inventory and analyze JavaScript behavior and security signals")
     parser.add_argument("--serve", action="store_true", help="Launch the visual web dashboard")
-    parser.add_argument("--host", default="127.0.0.1", help="Dashboard bind address (loopback by default)")
+    parser.add_argument("--host", default=os.environ.get("SCRIPTSENTRY_HOST", "127.0.0.1"),
+                        help="Dashboard bind address (loopback by default)")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
     parser.add_argument("urls", nargs="*", help="One or more public http(s) target URLs")
     parser.add_argument("--max-depth", type=int, default=5)
@@ -111,18 +115,24 @@ def build_parser():
     parser.add_argument("--workers", type=int, default=SCAN_MAX_WORKERS)
     parser.add_argument("--profile", choices=sorted(SCAN_PROFILES), default=DEFAULT_PROFILE)
     parser.add_argument("--format", choices=REPORT_FORMATS, default="all")
-    parser.add_argument("--ai", choices=["disabled", "ollama"], default="disabled",
-                        help="Executive summary mode. 'ollama' calls a LOCAL "
-                             "Ollama server (code never leaves your machine) "
-                             "and falls back to the built-in rule-based "
-                             "summary when Ollama is offline. Cloud "
-                             "providers are intentionally not supported: "
-                             "sending scanned code to a third party would "
-                             "break the privacy-first design.")
+    parser.add_argument("--ai", choices=["disabled", "ollama", "openai"], default="disabled",
+                        help="Executive summary mode. 'ollama'/'openai' call LOCAL "
+                             "model servers (code never leaves your machine): "
+                             "Ollama, or any OpenAI-compatible server such as "
+                             "LM Studio or llama.cpp. Falls back to the built-in "
+                             "rule-based summary when the server is offline. "
+                             "Hosted cloud providers remain unsupported on "
+                             "purpose: sending scanned code to a third party "
+                             "would break the privacy-first design.")
     parser.add_argument("--ollama-url", default="http://localhost:11434",
                         help="Local Ollama server base URL (used with --ai ollama)")
+    parser.add_argument("--openai-base-url", default=None,
+                        help="OpenAI-compatible LOCAL server base URL for --ai openai "
+                             "(default: http://localhost:1234/v1, i.e. LM Studio)")
+    parser.add_argument("--api-key", default=None,
+                        help="Optional bearer token for --ai openai servers that require one")
     parser.add_argument("--model", default=None,
-                        help="Ollama model name for --ai ollama (default: llama3.2)")
+                        help="Model name for --ai ollama/--ai openai (default: llama3.2)")
     return parser
 
 
@@ -154,6 +164,8 @@ def main(argv=None):
         ai_provider=args.ai,
         model=args.model,
         ollama_url=args.ollama_url,
+        openai_base_url=args.openai_base_url,
+        api_key=args.api_key,
         max_workers=max(1, min(args.workers, 32)),
     )
     return 0

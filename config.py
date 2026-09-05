@@ -30,7 +30,7 @@ RUNTIME_EVIDENCE = {
 }
 
 DEFAULT_PROFILE = "balanced"
-REPORT_FORMATS = ["txt", "json", "html", "csv", "sarif", "all"]
+REPORT_FORMATS = ["txt", "json", "html", "csv", "sarif", "openapi", "all"]
 
 # Bounded worker pool used while scanning/downloaded assets are analyzed and
 # nested chunks are followed. Raise this on a fast machine for very large

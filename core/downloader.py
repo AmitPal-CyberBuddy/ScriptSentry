@@ -7,6 +7,11 @@ from urllib.parse import urlparse, unquote
 from config import FILE_RULES, JS_DIR, REQUEST_HEADERS
 from core.url_policy import read_response_text, safe_get
 
+# Crawl politeness lives in core.url_policy.safe_get -- the single choke
+# point for every fetch (pages, scripts, source maps) -- so the download
+# stage inherits it without a second limiter here.
+from core.url_policy import crawl_delay_seconds  # noqa: F401  (public re-export)
+
 
 def get_safe_filename(url):
     """Return a collision-free, URL-unique filename for a script asset."""
@@ -80,14 +85,13 @@ def download_js(js_links, progress_callback=None, output_dir=None, timeout=15, c
             for url in js_links
         }
         done = 0
-        for future in as_completed(futures):
+        for done, future in enumerate(as_completed(futures), start=1):
             try:
                 path = future.result()
             except Exception:
                 path = None
             if path:
                 results.append(path)
-            done += 1
             if progress_callback:
                 progress_callback(
                     phase="download",

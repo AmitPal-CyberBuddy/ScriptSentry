@@ -152,7 +152,7 @@ class GridTrackTest(unittest.TestCase):
     def test_autofit_minimums_are_container_bounded(self):
         offenders = []
         for selector, value in declarations("grid-template-columns"):
-            for m in re.finditer(r"minmax\(\s*([0-9.]+)px\s*,", value):
+            for _m in re.finditer(r"minmax\(\s*([0-9.]+)px\s*,", value):
                 if "min(100%" not in value:
                     offenders.append(f"{selector}: {value}")
         self.assertEqual(

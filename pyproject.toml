@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scriptsentry"
+description = "Inventory and analyze the JavaScript a website actually ships — local-only static analysis with a web dashboard."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ScriptSentry contributors" }]
+keywords = ["javascript", "security", "static-analysis", "taint-analysis", "recon"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: JavaScript",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+dependencies = [
+    "requests",
+    "beautifulsoup4",
+    "colorama",
+    "tqdm",
+    "jsbeautifier",
+    "tree-sitter",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "esprima",
+    "playwright",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+# Runtime browser evidence (dynamic analysis) needs a Chromium binary:
+#   pip install "scriptsentry[runtime]" && playwright install chromium
+runtime = ["playwright"]
+
+[project.scripts]
+scriptsentry = "main:main"
+scriptsentry-server = "server:main"
+
+[project.urls]
+Homepage = "https://amitpal-cyberbuddy.github.io/ScriptSentry/"
+
+[tool.setuptools]
+packages = { find = { include = ["ai*", "analyzers*", "core*"] } }
+py-modules = ["main", "server", "config", "scriptsentry"]
+
+[tool.setuptools.dynamic]
+version = { attr = "core.version.__version__" }
+
+[tool.setuptools.data-files]
+# The dashboard is served from these directories; ship them with the wheel.
+"share/scriptsentry/webui" = [
+    "webui/app.js",
+    "webui/styles.css",
+    "webui/config.js",
+    "webui/index.html",
+    "webui/404.html",
+]
+
+[tool.coverage.run]
+source = ["ai", "analyzers", "api", "core", "config", "main", "server"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]

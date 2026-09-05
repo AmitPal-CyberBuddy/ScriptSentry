@@ -1,3 +1,4 @@
+import contextlib
 import importlib
 import math
 import re
@@ -14,6 +15,7 @@ from core.decoder import decode_candidate_strings, extract_hidden_values
 from core.framework_rules import analyze_framework
 from core.taint import analyze_taint
 from core.source_maps import source_map_reference
+from core.dependency_intel import check_dependencies
 
 
 class ScanCancelled(Exception):
@@ -24,6 +26,13 @@ class ScanCancelled(Exception):
     Without that, the cancel button appears dead while one worker chews through
     one big file.
     """
+
+
+# Below this size a document analyzes in well under a second on any plausible
+# machine; heartbeat events would only add noise to the activity log. Large
+# production bundles are the ones that can occupy a worker for minutes without
+# finishing, and those are exactly the ones that must keep reporting.
+HEARTBEAT_MIN_CHARS = 150_000
 
 
 def _raise_if_cancelled(cancel_check):
@@ -135,7 +144,7 @@ def _credible_secret(candidate):
     return len(value) >= 10 and _shannon_entropy(value) >= 3.2 and classes >= 2
 
 
-def _run_additional_analyzers(content, results, cancel_check=None):
+def _run_additional_analyzers(content, results, cancel_check=None, progress_heartbeat=None):
     analyzers = [
         ("secret_analyzer", "secret_analysis"),
         ("crypto_analyzer", "crypto_analysis"),
@@ -149,8 +158,10 @@ def _run_additional_analyzers(content, results, cancel_check=None):
         ("flow_analyzer", "data_flow_summary"),
     ]
 
-    for module_name, result_key in analyzers:
+    for index, (module_name, result_key) in enumerate(analyzers, start=1):
         _raise_if_cancelled(cancel_check)
+        if progress_heartbeat is not None:
+            progress_heartbeat(f"analyzer {index}/{len(analyzers)} ({module_name})")
         try:
             module = importlib.import_module(f"analyzers.{module_name}")
             payload = module.analyze(content, previous=results)
@@ -165,7 +176,15 @@ def _run_additional_analyzers(content, results, cancel_check=None):
             results[result_key] = [] if result_key != "obfuscation_analysis" else {}
 
 
-def scan_file(file_path, content=None, cancel_check=None):
+def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=None):
+    """Run every analysis pass over one document.
+
+    ``progress_heartbeat``, when given, is called with a short pass name at
+    each heavy checkpoint *for large documents only* (see
+    ``HEARTBEAT_MIN_CHARS``). A 2 MB minified bundle can hold one worker for
+    minutes; without these in-flight events the dashboard cannot tell
+    "working on a big bundle" from "gone".
+    """
     results = {
         "secrets": [],
         "credible_secrets": [],
@@ -215,6 +234,12 @@ def scan_file(file_path, content=None, cancel_check=None):
 
     _raise_if_cancelled(cancel_check)
     content = content or ""
+
+    def _beat(detail):
+        if progress_heartbeat is not None and len(content) >= HEARTBEAT_MIN_CHARS:
+            with contextlib.suppress(Exception):
+                progress_heartbeat(detail)
+
     source_map = source_map_reference(content)
     if source_map:
         results["source_map"] = {"present": True, "url": source_map, "sources": [], "available": False}
@@ -247,6 +272,7 @@ def scan_file(file_path, content=None, cancel_check=None):
         r'https://discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_\-]+',
     ]
 
+    _beat("secret patterns")
     raw_secrets = []
     for pattern in secret_patterns:
         # A regex over a 2 MB minified bundle is fast, but a dozen of them in
@@ -298,6 +324,8 @@ def scan_file(file_path, content=None, cancel_check=None):
         if context:
             results["secret_context"].append(context)
 
+    _beat("hardcoded config scan")
+
     # =========================================
     # 🔐 HARD-CODED CONFIG OBJECTS
     # =========================================
@@ -314,6 +342,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     # 🔐 DEOBFUSCATION / DECODED VALUES
     # =========================================
     _raise_if_cancelled(cancel_check)
+    _beat("decoder pass")
     results["decoded_strings"] = decode_candidate_strings(content)
     results["decoded_strings"] += extract_hidden_values(content)
     results["decoded_strings"] = list(dict.fromkeys(results["decoded_strings"]))[:30]
@@ -325,6 +354,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     # plain substring test over config.CRYPTO_KEYWORDS, so "DES" matched
     # "desktop", "Hex" matched "hexagon" and every design token or
     # desktop-theme helper became a crypto finding.
+    _beat("crypto markers")
     for marker in crypto_markers_in(content):
         if marker["name"] not in results["crypto"]:
             results["crypto"].append(marker["name"])
@@ -333,6 +363,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     # =========================================
     # 🌐 ENDPOINT EXTRACTION (EXTENDED)
     # =========================================
+    _beat("endpoint extraction")
     endpoint_patterns = [
         r'/api/[a-zA-Z0-9/_\-]+',
         r'https?://[a-zA-Z0-9\.\-]+/[a-zA-Z0-9/_\-]*',
@@ -355,10 +386,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     ]
     for pattern in api_patterns:
         for match in re.findall(pattern, content):
-            if isinstance(match, tuple):
-                data = match[0] if match else ''
-            else:
-                data = match
+            data = (match[0] if match else '') if isinstance(match, tuple) else match
             if data and data not in results["api_calls"]:
                 results["api_calls"].append(data)
 
@@ -372,10 +400,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     ]
     for pattern in storage_patterns:
         for match in re.findall(pattern, content, re.I):
-            if isinstance(match, tuple):
-                text = '.'.join(part for part in match if part)
-            else:
-                text = match
+            text = '.'.join(part for part in match if part) if isinstance(match, tuple) else match
             if text not in results["storage"]:
                 results["storage"].append(text)
     # "Sensitive" used to mean "mentions document.cookie anywhere" (or, via the
@@ -473,6 +498,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     # 🧠 AST INTELLIGENCE
     # =========================================
     _raise_if_cancelled(cancel_check)
+    _beat("AST parse")
     try:
         results["ast_analysis"] = analyze_ast(content, filename=results.get("loc_id", "inline.js"))
     except Exception as exc:
@@ -511,6 +537,7 @@ def scan_file(file_path, content=None, cancel_check=None):
         "three": {"name": "Three.js", "kind": "media"},
         "monaco": {"name": "Monaco", "kind": "editor"},
     }
+    _beat("dependency scan")
     seen_deps = set()
     for source in (results.get("ast_analysis", {}).get("dependencies", []) or []):
         source = (source or "").split("/")[0]
@@ -539,11 +566,14 @@ def scan_file(file_path, content=None, cancel_check=None):
             import_sources.add(source)
 
     # Regex fallbacks for common libraries that live in the bundle itself.
+    # content.lower() is hoisted: it was re-lowercased per marker (and again
+    # per alias hint), ~40 full-content copies per scanned document.
+    lowered = content.lower()
     for marker, entity in dep_entity.items():
-        if entity["kind"].lower() in ("framework", "library", "crypto") and marker in content.lower():
-            if marker not in seen_deps:
-                seen_deps.add(marker)
-                dependency_scan.append({**entity, "source": marker, "evidence": "bundle marker"})
+        if (entity["kind"].lower() in ("framework", "library", "crypto") and marker in lowered
+                and marker not in seen_deps):
+            seen_deps.add(marker)
+            dependency_scan.append({**entity, "source": marker, "evidence": "bundle marker"})
     # Bundle aliases / framework conventions that don't carry the package name in code.
     alias_hints = {
         "react": ("React", ["dangerouslysetinnerhtml", "react.createelement"], "framework"),
@@ -556,13 +586,14 @@ def scan_file(file_path, content=None, cancel_check=None):
     for marker, (name, hints, kind) in alias_hints.items():
         if marker in seen_deps:
             continue
-        if any(h in content.lower() for h in hints) or (marker == "jquery" and re.search(r"\$\s*\([^)]*\)\s*\.(html|append|ajax|get|post|on)", content)):
+        if any(h in lowered for h in hints) or (marker == "jquery" and re.search(r"\$\s*\([^)]*\)\s*\.(html|append|ajax|get|post|on)", content)):
             seen_deps.add(marker)
             dependency_scan.append({"name": name, "kind": kind, "source": marker, "evidence": "bundle alias"})
     results["dependency_scan"] = dependency_scan[:40]
 
     _raise_if_cancelled(cancel_check)
-    _run_additional_analyzers(content, results, cancel_check=cancel_check)
+    _run_additional_analyzers(content, results, cancel_check=cancel_check,
+                              progress_heartbeat=_beat)
 
     # =========================================
     # 📊 SCORING SYSTEM (EXTENDED)
@@ -641,8 +672,30 @@ def scan_file(file_path, content=None, cancel_check=None):
             "observation": bool(observation),
         })
 
+    # Known-vulnerability matching for identified libraries: annotate the
+    # dependency inventory with extracted versions and emit one finding per
+    # vulnerable library (version-string fingerprints, curated CVE table).
+    vulnerability_signals = check_dependencies(results.get("dependency_scan", []), content)
+    risk_signals.extend(vulnerability_signals)
+
     if results.get("credible_secrets"):
-        _signal("hardcoded_secret", "HIGH", "Hardcoded secret candidate", results["credible_secrets"][:3], confidence="medium", observation=False)
+        # A candidate whose VALUE validates (JWT that decodes, canonical
+        # Slack/GitHub/AWS/... shape) is stronger evidence than entropy alone
+        # can provide -- say so instead of capping every static guess at
+        # medium.
+        from core.secret_validation import validate as _validate_secret
+        verdicts = [
+            verdict for verdict in
+            (_validate_secret(candidate) for candidate in results["credible_secrets"])
+            if verdict
+        ]
+        _signal(
+            "hardcoded_secret", "HIGH", "Hardcoded secret candidate",
+            results["credible_secrets"][:3],
+            confidence="high" if verdicts else "medium", observation=False,
+        )
+        if verdicts:
+            risk_signals[-1]["validated"] = verdicts[:3]
     if results.get("keys") and results.get("ivs"):
         _signal("exposed_key_iv_pair", "CRITICAL", "Static crypto key/IV pair exposed", [results["keys"][:2], results["ivs"][:2]], confidence="medium", observation=False)
     elif results.get("keys"):
@@ -653,7 +706,6 @@ def scan_file(file_path, content=None, cancel_check=None):
         crypto_names = list(dict.fromkeys(results.get("crypto", []) + [f.get("signal" if isinstance(f, dict) else "") for f in results.get("crypto_flows", [])]))[:3]
         _signal("client_side_crypto", "MEDIUM", "Client-side cryptographic flow detected", crypto_names or ["crypto library/operation present"])
     if results.get("storage"):
-        storage_text = " ".join(map(str, results["storage"])).lower()
         # storage_text holds API names only ("localStorage.setItem"), so
         # substring tests against it were meaningless -- "session" matched
         # "sessionStorage" and marked every cached UI state as sensitive.
@@ -680,10 +732,12 @@ def scan_file(file_path, content=None, cancel_check=None):
     # =========================================
     _raise_if_cancelled(cancel_check)
     filename = results.get("loc_id", "inline.js")
+    _beat("taint flows")
     try:
         results["dataflows"] = analyze_taint(content, filename=filename)
     except Exception:
         results["dataflows"] = []
+    _beat("framework rules")
     try:
         results["framework_findings"] = analyze_framework(content, filename=filename)
     except Exception:
@@ -693,6 +747,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     # 🎯 ATTACK SURFACE
     # =========================================
     _raise_if_cancelled(cancel_check)
+    _beat("attack surface")
     try:
         results["attack_surface"] = extract_attack_surface(content, filename=filename)
     except Exception:
@@ -702,6 +757,7 @@ def scan_file(file_path, content=None, cancel_check=None):
     # Correlation is centralised in core.analysis_model so every consumer receives
     # the same evidence-based, de-duplicated view.
     _raise_if_cancelled(cancel_check)
+    _beat("correlating findings")
     results["findings"] = correlate_findings(
         results["dataflows"],
         results["framework_findings"],
@@ -736,7 +792,5 @@ def scan_content(content, filename="inline.js", cancel_check=None):
             handle.write(content)
         return scan_file(tmp_path, cancel_check=cancel_check)
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass

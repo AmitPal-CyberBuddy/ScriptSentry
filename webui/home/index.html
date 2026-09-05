@@ -95,99 +95,144 @@
   <main class="wrap" id="main">
     <!-- ============================ Hero ============================ -->
     <section class="hero" id="top">
-      <span class="eyebrow">🛡️ Free · Open source · Runs on your machine</span>
-      <h1>Watch Every Line.<br />Detect Every Risk.</h1>
-      <p>
-        A privacy-first JavaScript security analyzer I built for people who read other
-        people’s bundles. Paste a snippet, drop your files, or point it at a live URL —
-        then explore the secrets, crypto keys, API calls, storage, DOM risks, obfuscation
-        and data flows it hides. All of it runs on your machine.
-      </p>
-      <div class="hero-cta">
-        <a class="btn btn-lg" href="../tool/">⚡ Open the Analyzer</a>
-        <button class="btn btn-lg ghost" id="hero-setup" type="button">🛠️ Setup Guide</button>
-      </div>
-      <div class="badges">
-        <span class="badge">🔒 100% local analysis</span>
-        <span class="badge">🆓 Free &amp; open source</span>
-        <span class="badge">⚖️ Evidence-weighted scoring</span>
-        <span class="badge">🔐 Crypto &amp; key hunts</span>
-        <span class="badge">🌐 API surface mapping</span>
+      <div>
+        <span class="eyebrow">Free · Open source · Runs on your machine</span>
+        <h1>Watch every line.<br /><span class="h1-accent">Detect every risk.</span></h1>
+        <p class="hero-lede">
+          A privacy-first JavaScript security analyzer for people who read other
+          people&rsquo;s bundles. Paste a snippet, drop your files, or point it at a live
+          URL &mdash; then explore the secrets, crypto keys, API calls, storage, DOM
+          risks, obfuscation and data flows it hides. All of it runs on your machine.
+        </p>
+        <div class="hero-cta">
+          <a class="btn btn-lg" href="../tool/">⚡ Open the Analyzer</a>
+          <button class="btn btn-lg ghost" id="hero-setup" type="button">🛠️ Setup Guide</button>
+        </div>
+        <div class="badges" aria-label="Capabilities at a glance">
+          <span class="badge">100% local analysis</span>
+          <span class="badge">evidence-weighted scoring</span>
+          <span class="badge">crypto &amp; key hunts</span>
+          <span class="badge">API surface mapping</span>
+          <span class="badge">scan history &amp; diffing</span>
+          <span class="badge">local-model AI notes</span>
+        </div>
       </div>
 
-      <div class="notice-grid">
-        <div class="notice-card privacy fade-up">
-          <div class="notice-ico">🔒</div>
-          <div>
-            <b>Private by design.</b> This page is only the interface. I never see what you
-            analyze — the work happens on <b>your</b> machine, by the local engine listening
-            on <code>localhost</code>. No uploads, no cloud, no account.
-          </div>
+      <!-- The anchor: a static instrument card in the report's own language -->
+      <aside class="hero-signal" aria-label="Example of a ScriptSentry report signal">
+        <div class="signal-head"><b>Live signal</b><span>demo report</span></div>
+        <div class="signal-risk">
+          <span class="signal-verdict">CRITICAL</span>
+          <span class="signal-sub">score 86 &middot; checkout.bundle.js</span>
         </div>
-        <div class="notice-card legal fade-up">
-          <div class="notice-ico">⚖️</div>
-          <div>
-            <b>Authorized testing only.</b> Scan only what you own or have written permission to
-            test. ScriptSentry gives you triage signals, not proof — verify every finding before
-            you act on it.
-          </div>
+        <div class="signal-bars" aria-hidden="true">
+          <span class="signal-bar"><span>critical</span><span class="track"><span class="fill" style="width:72%;background:var(--danger)"></span></span><span class="n">4</span></span>
+          <span class="signal-bar"><span>high</span><span class="track"><span class="fill" style="width:46%;background:var(--warning)"></span></span><span class="n">9</span></span>
+          <span class="signal-bar"><span>medium</span><span class="track"><span class="fill" style="width:28%;background:var(--primary)"></span></span><span class="n">14</span></span>
+        </div>
+        <ul class="signal-list">
+          <li><span class="fid">dom_xss</span> location.search &rarr; innerHTML (confirmed)</li>
+          <li><span class="fid">secret</span> sk_live_&hellip; validates against provider format</li>
+          <li><span class="fid">open_redirect</span> ?next= &rarr; external host</li>
+        </ul>
+        <div class="signal-foot"><span>6 files &middot; tree-sitter AST</span><span class="ok">nothing left your machine</span></div>
+      </aside>
+    </section>
+
+    <div class="notice-grid">
+      <div class="notice-card privacy fade-up">
+        <div class="notice-ico">🔒</div>
+        <div>
+          <b>Private by design.</b> This page is only the interface. I never see what you
+          analyze &mdash; the work happens on <b>your</b> machine, by the local engine listening
+          on <code>localhost</code>. No uploads, no cloud, no account.
         </div>
       </div>
-    </section>
+      <div class="notice-card legal fade-up">
+        <div class="notice-ico">⚖️</div>
+        <div>
+          <b>Authorized testing only.</b> Scan only what you own or have written permission to
+          test. ScriptSentry gives you triage signals, not proof &mdash; verify every finding before
+          you act on it.
+        </div>
+      </div>
+    </div>
 
     <!-- ============================ What it finds ============================ -->
     <section class="section" id="features">
-      <div class="section-head">
-        <span class="section-kicker">01 — Capabilities</span>
-        <h2>What It Finds</h2>
-        <p>
-          Not just dangerous strings — what the scripts actually <em>do</em>: what they read,
-          where that data can go, which third parties are involved, and how risky that
-          behavior is.
-        </p>
-      </div>
-
       <div class="feature-grid">
-        <article class="feature-card">
-          <div class="feature-ico">🔐</div>
-          <h3>Secrets &amp; Credentials</h3>
-          <p>JWTs, API keys, auth headers, crypto keys and IVs — filtered so placeholders and template markers don't cry wolf.</p>
-        </article>
-        <article class="feature-card">
-          <div class="feature-ico">🕳️</div>
-          <h3>Real DOM-XSS &amp; Redirects</h3>
-          <p>Source→sink taint analysis: <code>location</code>, <code>postMessage</code>, storage, cookies and forms flowing into <code>innerHTML</code>, <code>eval</code> or a redirect.</p>
-        </article>
-        <article class="feature-card">
-          <div class="feature-ico">🚚</div>
-          <h3>Data Exfiltration</h3>
-          <p>Sensitive reads correlated with external or third-party destinations, WebSockets, SSE and beacon calls.</p>
-        </article>
-        <article class="feature-card">
-          <div class="feature-ico">🌐</div>
-          <h3>Attack Surface</h3>
-          <p>Endpoints, HTTP methods, GraphQL, parameters, headers, body fields and internal or hidden routes.</p>
-        </article>
-        <article class="feature-card">
-          <div class="feature-ico">📦</div>
-          <h3>Dependencies &amp; Tech Stack</h3>
-          <p>Frameworks and libraries, plus framework-specific risky APIs: React <code>dangerouslySetInnerHTML</code>, Angular <code>bypassSecurityTrust*</code>, Vue <code>v-html</code>, jQuery sinks.</p>
-        </article>
-        <article class="feature-card">
-          <div class="feature-ico">💾</div>
-          <h3>Storage &amp; Crypto Use</h3>
-          <p>localStorage / sessionStorage / cookie usage and client-side crypto routines, with key and IV material surfaced.</p>
-        </article>
-        <article class="feature-card">
-          <div class="feature-ico">🧩</div>
-          <h3>Obfuscation</h3>
-          <p>Encoded and hidden strings, suspicious runtime calls, and minified or packed bundle detection.</p>
-        </article>
-        <article class="feature-card">
-          <div class="feature-ico">🖥️</div>
-          <h3>Runtime Evidence <span class="tag">Optional</span></h3>
-          <p>A local headless browser watches the live page: network traffic, DOM sinks, <code>eval</code>, storage and scripts loaded only at runtime.</p>
-        </article>
+        <div class="feature-rail">
+          <div class="section-head">
+            <span class="section-kicker">01 — Capabilities</span>
+            <h2>What It Finds</h2>
+            <p>
+              Not just dangerous strings &mdash; what the scripts actually <em>do</em>: what they read,
+              where that data can go, which third parties are involved, and how risky that
+              behavior is.
+            </p>
+            <span class="index-count">10 capabilities &middot; one engine &middot; zero uploads</span>
+            <dl class="rail-facts">
+              <div><dt>engine</dt><dd>tree-sitter AST, esprima fallback</dd></div>
+              <div><dt>exports</dt><dd>HTML &middot; TXT &middot; CSV &middot; SARIF &middot; JSON &middot; OpenAPI</dd></div>
+              <div><dt>memory</dt><dd>local scan history, build-over-build diffs</dd></div>
+              <div><dt>ai notes</dt><dd>Ollama &middot; LM Studio &middot; llama.cpp (optional)</dd></div>
+              <div><dt>privacy</dt><dd>pairing-token API, nothing leaves localhost</dd></div>
+            </dl>
+          </div>
+        </div>
+
+        <div class="feature-index">
+          <article class="feature-card">
+            <span class="feature-num">01</span>
+            <h3>Secrets &amp; Credentials</h3>
+            <p>JWTs, API keys, auth headers, crypto keys and IVs &mdash; filtered so placeholders and template markers don't cry wolf, and every candidate is validated against its provider's key format before it is graded.</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-num">02</span>
+            <h3>Real DOM-XSS &amp; Redirects</h3>
+            <p>Source&rarr;sink taint analysis: <code>location</code>, <code>postMessage</code>, storage, cookies and forms flowing into <code>innerHTML</code>, <code>eval</code> or a redirect.</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-num">03</span>
+            <h3>Data Exfiltration</h3>
+            <p>Sensitive reads correlated with external or third-party destinations, WebSockets, SSE and beacon calls.</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-num">04</span>
+            <h3>Attack Surface</h3>
+            <p>Endpoints, HTTP methods, GraphQL, parameters, headers, body fields &mdash; plus internal routes and hidden SPA hash-route hints (<code>#/admin/...</code>) &mdash; exportable as an OpenAPI-shaped API map.</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-num">05</span>
+            <h3>Dependencies &amp; Tech Stack</h3>
+            <p>Frameworks and libraries, plus framework-specific risky APIs: React <code>dangerouslySetInnerHTML</code>, Angular <code>bypassSecurityTrust*</code>, Vue <code>v-html</code>, jQuery sinks &mdash; and bundled packages matched against known-vulnerability intel.</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-num">06</span>
+            <h3>Storage &amp; Crypto Use</h3>
+            <p>localStorage / sessionStorage / cookie usage and client-side crypto routines, with key and IV material surfaced.</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-num">07</span>
+            <h3>Obfuscation</h3>
+            <p>Encoded and hidden strings, suspicious runtime calls, and minified or packed bundle detection.</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-num">08</span>
+            <h3>Scan History &amp; Diffing</h3>
+            <p>Every local scan is remembered. Read <em>&ldquo;3 new, 2 resolved since your last scan&rdquo;</em> at a glance, revisit any past report, and diff a bundle against its previous build.</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-num">09</span>
+            <h3>Runtime Evidence <span class="tag">Optional</span></h3>
+            <p>A local headless browser watches the live page: network traffic, DOM sinks, <code>eval</code>, storage and scripts loaded only at runtime.</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-num">10</span>
+            <h3>Local AI Triage Notes <span class="tag">Optional</span></h3>
+            <p>Point <code>--ai</code> at a model on your own machine (Ollama, LM Studio, llama.cpp) for a written brief of the riskiest findings. Cloud providers are deliberately unsupported &mdash; the privacy contract holds.</p>
+          </article>
+        </div>
       </div>
     </section>
 
@@ -201,24 +246,24 @@
 
       <ol class="steps">
         <li class="step-card">
-          <span class="step-num">1</span>
+          <span class="step-num">01</span>
           <h3>Give It Code</h3>
           <p>Paste JavaScript, drag &amp; drop your bundle files, or scan a URL. The engine crawls imports and bundler chunk maps to find the real script graph.</p>
         </li>
         <li class="step-card">
-          <span class="step-num">2</span>
+          <span class="step-num">02</span>
           <h3>It Profiles Behavior</h3>
-          <p>Every script gets a behavior profile: first/third-party attribution, sensitive reads, DOM and network writes, browser APIs and a 0–100 script risk score.</p>
+          <p>Every script gets a behavior profile: first/third-party attribution, sensitive reads, DOM and network writes, browser APIs and a 0&ndash;100 script risk score.</p>
         </li>
         <li class="step-card">
-          <span class="step-num">3</span>
+          <span class="step-num">03</span>
           <h3>Follow the Data</h3>
-          <p>Taint analysis traces source→sink paths, ranks them by evidence strength, and states the limits of every conclusion.</p>
+          <p>Taint analysis traces source&rarr;sink paths, ranks them by evidence strength, and states the limits of every conclusion. If the app ships source maps, the analysis reads your original source instead of the minified blob.</p>
         </li>
         <li class="step-card">
-          <span class="step-num">4</span>
+          <span class="step-num">04</span>
           <h3>Triage, Then Export</h3>
-          <p>Mark findings open, needs review, confirmed, false positive or informational, then export HTML, TXT, CSV or SARIF.</p>
+          <p>Mark findings open, needs review, confirmed, false positive or informational, then export HTML, TXT, CSV, SARIF or raw JSON &mdash; and hand the discovered API surface to your proxy as an OpenAPI map.</p>
         </li>
       </ol>
     </section>
@@ -228,7 +273,7 @@
       <div class="section-head">
         <span class="section-kicker">03 — Trustworthiness</span>
         <h2>Built to Avoid Crying Wolf</h2>
-        <p>ScriptSentry keeps three questions separate — most scanners blur them together.</p>
+        <p>ScriptSentry keeps three questions separate &mdash; most scanners blur them together.</p>
       </div>
 
       <div class="trust-table" role="table" aria-label="Severity, confidence and status are separate axes">
@@ -237,21 +282,21 @@
         </div>
         <div class="trust-row" role="row">
           <span role="cell">How bad would it be <em>if real</em>?</span>
-          <span role="cell" data-label="Answer">Severity — Info → Critical</span>
+          <span role="cell" data-label="Answer">Severity &mdash; Info &rarr; Critical</span>
         </div>
         <div class="trust-row" role="row">
           <span role="cell">How certain is the <em>evidence</em>?</span>
-          <span role="cell" data-label="Answer">Confidence — low → high → confirmed</span>
+          <span role="cell" data-label="Answer">Confidence &mdash; low &rarr; high &rarr; confirmed</span>
         </div>
         <div class="trust-row" role="row">
           <span role="cell">What's the analyst state?</span>
-          <span role="cell" data-label="Answer">Open · Needs review · Confirmed · False positive · Informational</span>
+          <span role="cell" data-label="Answer">Open &middot; Needs review &middot; Confirmed &middot; False positive &middot; Informational</span>
         </div>
       </div>
 
       <p class="section-note">
-        A regex hit is <b>not</b> treated as proof. A static source→sink path is reported as
-        high confidence but stays <b>Open</b> — encoding, framework sanitizers or unreachable
+        A regex hit is <b>not</b> treated as proof. A static source&rarr;sink path is reported as
+        high confidence but stays <b>Open</b> &mdash; encoding, framework sanitizers or unreachable
         code may still neutralize it. <b>Confirmed</b> is reserved for deterministic proof or a
         demonstrated runtime effect.
       </p>
@@ -264,55 +309,75 @@
         <h2>Run Your Own Engine</h2>
         <p>
           The page you are reading is only the interface. Start the engine on your machine once,
-          and this dashboard connects to it automatically — nothing is uploaded anywhere.
+          and this dashboard connects to it automatically &mdash; nothing is uploaded anywhere.
         </p>
       </div>
 
       <div class="setup-card">
-        <div class="setup-card-head">
-          <div>
-            <h3>One File Is Enough</h3>
-            <p class="modal-note">Download a single launcher. On first run it fetches the engine, installs dependencies and starts — no clone required.</p>
+        <div class="setup-main">
+          <div class="setup-card-head">
+            <div>
+              <h3>One File Is Enough</h3>
+              <p class="modal-note">Download a single launcher. On first run it fetches the engine, installs dependencies and starts &mdash; no clone required.</p>
+            </div>
+            <div class="setup-actions">
+              <button class="btn js-download-launcher" type="button"
+                      data-download="https://raw.githubusercontent.com/AmitPal-CyberBuddy/ScriptSentry/main/scriptsentry.py"
+                      data-filename="scriptsentry.py">
+                ⬇️ Download scriptsentry.py
+              </button>
+              <span class="download-hint" id="download-hint" role="status" aria-live="polite"></span>
+            </div>
           </div>
-          <div class="setup-actions">
-            <button class="btn js-download-launcher" type="button"
-                    data-download="https://raw.githubusercontent.com/AmitPal-CyberBuddy/ScriptSentry/main/scriptsentry.py"
-                    data-filename="scriptsentry.py">
-              ⬇️ Download scriptsentry.py
-            </button>
-            <span class="download-hint" id="download-hint" role="status" aria-live="polite"></span>
-          </div>
-        </div>
 
-        <ol class="setup-steps">
-          <li><b>Download</b> the launcher above (or copy it straight from GitHub).</li>
-          <li><b>Run it:</b> <code>python3 scriptsentry.py --port 8000</code> — the first run downloads the engine.</li>
-          <li><b>Copy the pairing token</b> it prints, then paste it into the setup dialog.</li>
-        </ol>
-
-        <div class="code-box">
-          <pre id="setup-code-easy"># downloads &amp; starts the engine on first run
-python3 scriptsentry.py --port 8000</pre>
-          <button class="btn ghost" data-copy="setup-code-easy" type="button">📋 Copy</button>
-        </div>
-
-        <details class="setup-details">
-          <summary>Prefer the full repo? (git clone)</summary>
           <ol class="setup-steps">
-            <li>Clone <code>ScriptSentry</code> and open a terminal inside it.</li>
-            <li><b>Install deps:</b> <code>pip install -r requirements.txt</code></li>
-            <li><b>Start the server:</b> <code>python3 server.py --port 8000</code></li>
-            <li>Keep this page open and press <em>Retry Connection</em> in the setup dialog.</li>
+            <li><b>Download</b> the launcher above (or copy it straight from GitHub).</li>
+            <li><b>Run it:</b> <code>python3 scriptsentry.py --port 8000</code> &mdash; the first run downloads the engine.</li>
+            <li><b>Copy the pairing token</b> it prints, then paste it into the setup dialog.</li>
           </ol>
+
           <div class="code-box">
-            <pre id="setup-code-clone">git clone https://github.com/AmitPal-CyberBuddy/ScriptSentry.git
+            <pre id="setup-code-easy">python3 scriptsentry.py --port 8000</pre>
+            <button class="btn ghost" data-copy="setup-code-easy" type="button">📋 Copy</button>
+          </div>
+        </div>
+
+        <div class="setup-aside">
+          <details class="setup-details">
+            <summary>Prefer the full repo? (git clone)</summary>
+            <ol class="setup-steps">
+              <li>Clone <code>ScriptSentry</code> and open a terminal inside it.</li>
+              <li><b>Install deps:</b> <code>pip install -r requirements.txt</code></li>
+              <li><b>Start the server:</b> <code>python3 server.py --port 8000</code></li>
+              <li>Keep this page open and press <em>Retry Connection</em> in the setup dialog.</li>
+            </ol>
+            <div class="code-box">
+              <pre id="setup-code-clone">git clone https://github.com/AmitPal-CyberBuddy/ScriptSentry.git
 cd ScriptSentry
 pip install -r requirements.txt
 python3 server.py --port 8000</pre>
-            <button class="btn ghost" data-copy="setup-code-clone" type="button">📋 Copy</button>
-          </div>
-          <p class="modal-note">⚠️ If you change the port, update <code>webui/config.js</code> to the same port.</p>
-        </details>
+              <button class="btn ghost" data-copy="setup-code-clone" type="button">📋 Copy</button>
+            </div>
+            <p class="modal-note">⚠️ If you change the port, update <code>webui/config.js</code> to the same port.</p>
+          </details>
+
+          <details class="setup-details">
+            <summary>Prefer a package install? (pip / pipx / Docker)</summary>
+            <ol class="setup-steps">
+              <li>Clone the repo, then <b>install it:</b> <code>pip install .</code> (or <code>pipx install .</code>).</li>
+              <li><b>Start the dashboard:</b> <code>scriptsentry-server --port 8000</code> &mdash; same pairing-token flow.</li>
+              <li><b>Or scan from the CLI:</b> <code>scriptsentry --help</code> &mdash; every report format, no web UI needed.</li>
+            </ol>
+            <div class="code-box">
+              <pre id="setup-code-pip">git clone https://github.com/AmitPal-CyberBuddy/ScriptSentry.git
+cd ScriptSentry
+pip install .
+scriptsentry-server --port 8000</pre>
+              <button class="btn ghost" data-copy="setup-code-pip" type="button">📋 Copy</button>
+            </div>
+            <p class="modal-note">🐳 <b>Docker</b> (Chromium for runtime evidence preinstalled): <code>docker build -t scriptsentry . &amp;&amp; docker run --rm -p 8000:8000 scriptsentry</code></p>
+          </details>
+        </div>
       </div>
     </section>
 
@@ -323,17 +388,16 @@ python3 server.py --port 8000</pre>
         <h2>Connect With Me</h2>
         <p>
           I am Amit Pal, and I build ScriptSentry for analysts, with analysts. When a result
-          looks wrong — or you have a bundle that deserves a second pair of eyes — send it to me.
+          looks wrong &mdash; or you have a bundle that deserves a second pair of eyes &mdash; send it to me.
         </p>
       </div>
 
       <div class="connect-card">
-        <div class="connect-avatar" aria-hidden="true">🛡️</div>
         <div class="connect-body">
-          <h3>Found a Bug — or a Finding That Is Wrong?</h3>
+          <h2>Found a Bug &mdash; or a Finding That Is Wrong?</h2>
           <p class="connect-lead">
             Open an issue with the finding, the snippet that triggered it, and what you expected
-            instead — the template asks for exactly that. Real production bundles are the best
+            instead &mdash; the template asks for exactly that. Real production bundles are the best
             test suite there is, and a false positive I can reproduce is a bug I can fix.
           </p>
           <p class="connect-lead">
@@ -341,15 +405,15 @@ python3 server.py --port 8000</pre>
             itself</em>? Report it privately instead, so it can be fixed before it is public.
           </p>
           <div class="connect-actions">
-            <a class="btn" href="https://github.com/AmitPal-CyberBuddy/ScriptSentry/issues/new/choose" target="_blank" rel="noopener noreferrer">🐞 Open an issue · needs a GitHub account</a>
+            <a class="btn" href="https://github.com/AmitPal-CyberBuddy/ScriptSentry/issues/new/choose" target="_blank" rel="noopener noreferrer">🐞 Open an issue &middot; needs a GitHub account</a>
             <a class="btn ghost" href="https://github.com/AmitPal-CyberBuddy/ScriptSentry/security/advisories/new" target="_blank" rel="noopener noreferrer">🔐 Report a vulnerability privately</a>
             <a class="btn ghost" href="https://www.linkedin.com/in/amitpal-wb/" target="_blank" rel="noopener noreferrer">💼 LinkedIn</a>
           </div>
           <p class="connect-note">
-            <b>Next on my bench: build-over-build diffing.</b> Snapshot a bundle today, snapshot
-            it again after the next release, and see only what changed — new secrets, new sinks,
-            new third parties — with a CI gate that fails on newly confirmed findings. Ideas are
-            welcome while I design it.
+            <b>Built in: build-over-build diffing.</b> Snapshot a bundle today, rescan it after
+            the next release, and see only what changed &mdash; new secrets, new sinks, new third
+            parties. The dashboard keeps your recent local scans and diffs them for you; kick
+            the tires and tell me what the diff gets wrong.
           </p>
         </div>
       </div>

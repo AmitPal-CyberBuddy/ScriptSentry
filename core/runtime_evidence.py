@@ -13,6 +13,7 @@ If Playwright is not installed (or ``SCRIPTSENTRY_RUNTIME_EVIDENCE=0``), the
 analyzer degrades back to pure static analysis and reports the reason in the
 runtime evidence block.
 """
+import contextlib
 import os
 import time
 from datetime import datetime, timezone
@@ -457,16 +458,12 @@ def capture_runtime_evidence(
             except Exception as exc:
                 page_errors.append(f"page.goto failed: {exc}")
 
-            try:
+            with contextlib.suppress(Exception):
                 page.wait_for_timeout(wait_after_load_ms)
-            except Exception:
-                pass
 
             # Let already-expired async chunks settle for the strict profile.
-            try:
+            with contextlib.suppress(Exception):
                 page.wait_for_load_state("networkidle", timeout=min(3000, max(500, timeout_ms // 4)))
-            except Exception:
-                pass
 
             try:
                 state = page.evaluate(EXTRACT_INSTRUMENTED_STATE_JS)
@@ -539,15 +536,11 @@ def capture_runtime_evidence(
         }
     except Exception as exc:
         if browser is not None:
-            try:
+            with contextlib.suppress(Exception):
                 browser.close()
-            except Exception:
-                pass
         if context is not None:
-            try:
+            with contextlib.suppress(Exception):
                 context.close()
-            except Exception:
-                pass
         return {
             "enabled": True,
             "available": True,

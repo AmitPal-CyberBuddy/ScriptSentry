@@ -6,6 +6,8 @@ previous version reported ``user: "johndoe"`` as a credential finding.
 """
 import re
 
+from core.secret_validation import validate
+
 # name patterns -> classification
 PATTERNS = [
     (
@@ -64,8 +66,16 @@ def analyze(content, previous=None):
     seen = set()
     for kind, pattern, _default in PATTERNS:
         for match in pattern.finditer(content or ""):
-            name = match.group(1) if match.groups() > 1 else kind
-            value = match.group(match.groups()) if match.groups() else match.group(0)
+            # `match.groups() > 1` compared a tuple to an int (TypeError on
+            # every match, silently swallowed into analyzer_errors) -- the
+            # analyzer never produced a single finding. Use group counts.
+            groups = match.groups()
+            if len(groups) >= 2:
+                name, value = groups[0], groups[-1]
+            elif groups:
+                name, value = kind, groups[0]
+            else:
+                name, value = kind, match.group(0)
             if not value or len(str(value)) < 6:
                 continue
             if PLACEHOLDER_RE.match(str(value).strip()):
@@ -74,10 +84,15 @@ def analyze(content, previous=None):
             if key in seen:
                 continue
             seen.add(key)
+            # The value itself can prove what it is (JWT structure, canonical
+            # provider formats) -- carry that verdict so reports can say
+            # "validated format" instead of a bare heuristic guess.
+            verdict = validate(str(value))
             findings.append({
                 "kind": kind,
                 "name": str(name)[:80],
                 "value": str(value)[:160],
                 "classification": _classify_secret(str(name), str(value)),
+                **({"validated": verdict} if verdict else {}),
             })
     return findings

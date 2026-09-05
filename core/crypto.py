@@ -1,7 +1,6 @@
 import re
 import base64
-import os
-from urllib.parse import urlparse
+import bisect
 
 
 # =========================================
@@ -66,11 +65,8 @@ def is_valid_key(value):
         return False
 
     # Require either special crypto-like characters or high entropy
-    if not any(ch in val for ch in ['~', '<', '>', '$', '%', '&', '+', ';', '_', '/', '=', '?', '@', '#']):
-        if not re.fullmatch(r'[A-Za-z0-9+/]{16,}={0,2}', val) and len(set(val)) < 10:
-            return False
-
-    return True
+    return not (not any(ch in val for ch in ['~', '<', '>', '$', '%', '&', '+', ';', '_', '/', '=', '?', '@', '#'])
+                and not re.fullmatch(r'[A-Za-z0-9+/]{16,}={0,2}', val) and len(set(val)) < 10)
 
 
 def looks_like_url_or_path(value):
@@ -84,9 +80,7 @@ def looks_like_url_or_path(value):
         return True
     if re.search(r'\.(?:js|mjs|css|png|jpg|jpeg|gif|svg|ico|json|html|map)\b', text):
         return True
-    if re.match(r'^(?:api|v[0-9]+|auth|login|logout|graphql|assets|static|js|css)/', text):
-        return True
-    return False
+    return bool(re.match(r'^(?:api|v[0-9]+|auth|login|logout|graphql|assets|static|js|css)/', text))
 
 
 def is_valid_iv(value):
@@ -105,10 +99,7 @@ def is_valid_iv(value):
     if re.fullmatch(r'[a-z]{3,}', lower) and len(set(val)) < 6 and len(val) < 20:
         return False
 
-    if len(set(val)) < 5:
-        return False
-
-    return True
+    return len(set(val)) >= 5
 
 
 # =========================================
@@ -165,20 +156,28 @@ def extract_crypto_material(content, filename="inline.js"):
     # =========================================
     # 🔑 KEY DETECTION (HYBRID ✅)
     # =========================================
-    candidates = re.findall(r'[\'"]([^"\'\\]{12,})[\'"]', content)
-
-    for c in candidates:
-        pos = content.find(c)
-        val = c.strip('"').strip("'")
+    # finditer (not findall + content.find) so each candidate carries its
+    # real position -- content.find returned the FIRST occurrence of a
+    # repeated string, i.e. the wrong location. The proximity test bisects
+    # the sorted crypto_locations instead of scanning all of them per
+    # candidate, and the "EncryptionKey" marker is checked once, not once
+    # per candidate (each of those was a full O(n) content scan; on a
+    # minified bundle this loop alone used to cost ~1.5s).
+    has_encryption_key_marker = "EncryptionKey" in content
+    sorted_locations = sorted(crypto_locations)
+    candidate_re = re.compile(r'[\'"]([^"\'\\]{12,})[\'"]')
+    for match in candidate_re.finditer(content):
+        val = match.group(1).strip('"').strip("'")
         if looks_like_url_or_path(val):
             continue
 
-        if (
-            any(abs(pos - loc) < 400 for loc in crypto_locations)
-            or "EncryptionKey" in content
-        ):
-            if is_valid_key(val):
-                findings["keys"].append({"value": val, "context": "crypto", "source": filename})
+        pos = match.start()
+        near_crypto = False
+        if sorted_locations:
+            index = bisect.bisect_left(sorted_locations, pos - 399)
+            near_crypto = index < len(sorted_locations) and sorted_locations[index] <= pos + 399
+        if (near_crypto or has_encryption_key_marker) and is_valid_key(val):
+            findings["keys"].append({"value": val, "context": "crypto", "source": filename})
 
     # =========================================
     # 🧪 IV DETECTION (EXPANDED ✅)
@@ -272,7 +271,7 @@ def extract_crypto_material(content, filename="inline.js"):
 
             if len(decoded) > 6:
                 findings["base64_decoded"].append(decoded)
-        except:
+        except Exception:
             pass
 
     # =========================================
@@ -288,9 +287,8 @@ def extract_crypto_material(content, filename="inline.js"):
 
     for ctx in findings["crypto_contexts"]:
         for line in ctx.split("\n"):
-            if any(k in line.lower() for k in ["encrypt", "decrypt", "aes"]):
-                if len(line.strip()) < 200:
-                    snippets.append(line.strip())
+            if any(k in line.lower() for k in ["encrypt", "decrypt", "aes"]) and len(line.strip()) < 200:
+                snippets.append(line.strip())
 
     findings["logic_snippets"] = list(set(snippets))[:20]
 
@@ -299,7 +297,12 @@ def extract_crypto_material(content, filename="inline.js"):
     # =========================================
     funcs = []
 
-    for match in re.finditer(r'\w+\(.*?\)\s*{', content):
+    # The argument list is bounded: an unbounded lazy wildcard here made
+    # every position of a long single-line run (minified bundles routinely
+    # carry multi-hundred-KB inline base64 source maps / data URIs) scan to
+    # end-of-line looking for ')' -- O(n^2), minutes per file. Function
+    # definitions with >200-char argument lists do not exist in practice.
+    for match in re.finditer(r'\w{1,64}\([^)\n]{0,200}\)\s*{', content):
         snip = content[match.start():match.start()+400]
 
         if any(k in snip.lower() for k in ["encrypt", "decrypt"]):
@@ -355,8 +358,11 @@ def extract_crypto_material(content, filename="inline.js"):
     # =========================================
     # 🔥 SERVICE TRACE
     # =========================================
+    # \w{1,64}, not \w+: the greedy form backtracks once per character of a
+    # failed run, so a long single-line base64 blob (inline source maps, data
+    # URIs) costs O(n^2) -- minutes per bundle. Real service names are short.
     crypto_calls = re.findall(
-        r'(\w+)\.(encryptData|decryptedData|decryptData)',
+        r'(\w{1,64})\.(encryptData|decryptedData|decryptData)',
         content
     )
 
@@ -420,7 +426,7 @@ def extract_crypto_material(content, filename="inline.js"):
 
             if ":" in val or len(val) > 10:
                 decoded.append(val)
-        except:
+        except Exception:
             pass
 
     findings["decoded_secrets"] = decoded

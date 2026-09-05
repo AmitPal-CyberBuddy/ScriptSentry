@@ -6,7 +6,9 @@
   <title>Page not found · ScriptSentry</title>
   <meta name="robots" content="noindex" />
   <style>
-    :root { color-scheme: light dark; }
+    /* Self-contained (the 404 must render even if styles.css is the
+       thing that 404'd). Tokens mirror webui/styles.css. */
+    :root { color-scheme: dark; }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; min-height: 100vh; }
     body {
@@ -14,91 +16,82 @@
       align-items: center;
       justify-content: center;
       font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
-      background: #0b1220;
-      color: #e6edf7;
+      background: #04070d;
+      color: #e8eefb;
     }
     main {
       max-width: 34rem;
       margin: 3rem 1.5rem;
-      text-align: center;
+    }
+    .plate {
+      border: 1px solid rgba(146, 180, 232, 0.14);
+      border-radius: 14px;
+      background: #0b1220;
+      padding: 2rem;
     }
     .code {
       display: block;
-      font-size: 4rem;
-      font-weight: 800;
-      letter-spacing: 0.06em;
-      color: #7fb3ff;
+      font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 3.2rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      line-height: 1;
+      color: transparent;
+      -webkit-text-stroke: 1px rgba(146, 180, 232, 0.45);
     }
-    h1 { margin: 0.5rem 0 0.75rem; font-size: 1.5rem; }
-    p { margin: 0 auto 1.75rem; line-height: 1.6; color: #a8b6cc; }
-    nav { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
+    .kicker {
+      font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: #22d3ee;
+    }
+    h1 { margin: 0.6rem 0 0.6rem; font-size: 1.4rem; letter-spacing: -0.02em; }
+    p { margin: 0 0 1.5rem; line-height: 1.6; color: #93a5c4; font-size: 0.95rem; }
+    nav { display: flex; gap: 0.6rem; flex-wrap: wrap; }
     a {
       display: inline-block;
-      padding: 0.6rem 1.2rem;
-      border-radius: 0.5rem;
-      background: #1d2b45;
-      color: #e6edf7;
+      padding: 0.65rem 1.1rem;
+      border: 1px solid rgba(146, 180, 232, 0.22);
+      border-radius: 8px;
+      background: transparent;
+      color: #e8eefb;
       text-decoration: none;
       font-weight: 600;
+      font-size: 0.92rem;
     }
-    a:hover { background: #26375a; }
+    a:hover { border-color: rgba(34, 211, 238, 0.55); color: #22d3ee; }
+    a.primary { background: #22d3ee; border-color: #22d3ee; color: #04222a; }
+    a.primary:hover { background: #67e3f4; color: #04222a; }
   </style>
 </head>
 <body>
   <main>
-    <span class="code">404</span>
-    <h1>This page moved</h1>
-    <p>The site was reorganised and this address is no longer in use.
-       Everything is still here — just under cleaner URLs without
-       “.html” in them.</p>
-    <nav id="nav-404">
-      <a href="home/">Overview</a>
-      <a href="tool/">Open the analyzer</a>
-      <a href="changelog/">What's new</a>
-    </nav>
+    <div class="plate">
+      <span class="kicker">Error</span>
+      <span class="code">404</span>
+      <h1>Nothing is posted at this address</h1>
+      <p>The analyzer, the overview and the changelog all live one click away.</p>
+      <nav id="nav-404">
+        <a class="primary" href="tool/">⚡ Open the analyzer</a>
+        <a href="home/">Overview</a>
+        <a href="changelog/">What's new</a>
+      </nav>
+    </div>
   </main>
 
   <script>
-    /* Rewrite the recovery links to absolute paths from the real site root.
-     *
-     * This one page cannot use plain relative links. GitHub Pages serves
-     * 404.html for *any* missing address, so a visitor hitting
-     * /ScriptSentry/tool/typo would resolve "tool/" against /ScriptSentry/tool/
-     * and land on /ScriptSentry/tool/tool/ -- another 404. The links that
-     * exist to rescue a lost visitor were themselves broken for every URL
-     * below the site root.
-     *
-     * A hardcoded root cannot work either: the site lives at /ScriptSentry/
-     * on Pages but at / when server.py serves it locally. So detect it.
-     */
+    // The site lives at / under server.py but at /<project>/ on GitHub
+    // Pages, so the recovery links are rewritten at runtime from the
+    // current path instead of hardcoding a site root.
     (function () {
-      var PAGES = ["home", "tool", "changelog"];
-      var path = window.location.pathname;
-      var root = "/";
-
-      // Find the deepest known page directory in the current path and treat
-      // everything before it as the site root.
-      for (var i = 0; i < PAGES.length; i++) {
-        var marker = "/" + PAGES[i] + "/";
-        var at = path.indexOf(marker);
-        if (at !== -1) { root = path.slice(0, at + 1); break; }
-      }
-
-      // Not under a known page (e.g. /ScriptSentry/typo). On a project page
-      // the first path segment is the repository name; on a user/apex site
-      // or locally there is no prefix.
-      if (root === "/" && window.location.hostname.endsWith(".github.io")) {
-        var first = path.split("/")[1];
-        if (first && PAGES.indexOf(first) === -1) root = "/" + first + "/";
-      }
-
-      var links = document.querySelectorAll("#nav-404 a");
-      for (var j = 0; j < links.length; j++) {
-        var target = links[j].getAttribute("href");
-        if (target && target.indexOf("/") !== 0 && target.indexOf("://") === -1) {
-          links[j].setAttribute("href", root + target);
-        }
-      }
+      var segments = window.location.pathname.replace(/\/$/, "").split("/");
+      segments.pop();                      // the missing page itself
+      var root = segments.join("/") + "/";
+      if (root === "/") return;            // served at the site root already
+      document.querySelectorAll("#nav-404 a").forEach(function (a) {
+        a.setAttribute("href", root + a.getAttribute("href"));
+      });
     })();
   </script>
 </body>

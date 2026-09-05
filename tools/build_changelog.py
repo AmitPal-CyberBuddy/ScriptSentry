@@ -212,7 +212,7 @@ def slice_block(html_text: str, start: str, end: str, label: str) -> str:
         begin = html_text.index(start)
         finish = html_text.index(end, begin) + len(end)
     except ValueError as exc:  # pragma: no cover - guards a rename in index.html
-        raise SystemExit(f"Could not find the {label} block in index.html: {exc}")
+        raise SystemExit(f"Could not find the {label} block in index.html: {exc}") from exc
     return html_text[begin:finish]
 
 

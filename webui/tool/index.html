@@ -94,16 +94,15 @@
 
   <main class="wrap wrap--wide" id="main">
     <section class="tool-hero" id="top">
-      <span class="eyebrow">⚡ Private by default · analyzed on your machine</span>
       <h1>JavaScript Security Console</h1>
+      <span class="eyebrow">Private by default</span>
       <p>
-        Paste a snippet, drop your bundle files, or point it at a live URL. Every byte is
-        analyzed by the engine running on <b>your</b> machine — nothing is uploaded, no account,
-        no cloud.
+        Paste a snippet, drop your bundle files, or point it at a live URL — every byte is
+        analyzed by the engine on <b>your</b> machine. Nothing is uploaded.
       </p>
       <div class="hero-cta">
-        <a class="btn ghost" href="../home/">🏠 Back to overview</a>
         <button class="btn ghost" id="hero-setup" type="button">🛠️ Setup Guide</button>
+        <a class="btn ghost" href="../home/">🏠 Overview</a>
       </div>
     </section>
 
@@ -112,7 +111,7 @@
 
       <section class="console fade-up">
         <div class="console-head">
-          <h2 class="console-title">🔎 Analysis Console</h2>
+          <h2 class="console-title">🔎 New scan</h2>
           <div class="tabs" role="tablist">
             <button class="tab active" data-pane="code" role="tab">Paste Code</button>
             <button class="tab" data-pane="url" role="tab">Scan URL</button>
@@ -240,10 +239,21 @@
             <button class="btn ghost" id="export-txt">📝 TXT</button>
             <button class="btn ghost" id="export-csv">📊 CSV</button>
             <button class="btn ghost" id="export-sarif">🧾 SARIF</button>
+            <button class="btn ghost" id="export-json" title="Raw JSON report (same shape as --format json)">🧱 JSON</button>
+            <button class="btn ghost" id="export-openapi" title="OpenAPI 3.1-shaped map of the discovered API surface">🧭 API map</button>
           </div>
         </div>
 
         <div class="engine-notes" id="engine-notes" role="status" aria-live="polite" hidden></div>
+
+      <div class="card history-card" id="history-card" hidden>
+        <div class="row" style="justify-content:space-between; align-items:center; margin:0 0 8px">
+          <h3 style="margin:0">🕘 Scan history</h3>
+          <span class="meta" id="history-note"></span>
+        </div>
+        <div class="history-diff" id="history-diff" hidden></div>
+        <div id="history-list"></div>
+      </div>
 
       <div class="view-tabs fade-up" id="view-tabs" role="tablist" aria-label="Analysis views">
           <button class="view-tab active" data-view="overview" role="tab" aria-selected="true" tabindex="0">📊 Overview</button>
@@ -452,6 +462,7 @@
           <div class="setup-toggle" role="tablist">
             <button class="setup-tab active" data-setup="easy" role="tab">⭐ Easiest: one file</button>
             <button class="setup-tab" data-setup="clone" role="tab">🐙 Clone the Repo</button>
+            <button class="setup-tab" data-setup="pip" role="tab">📦 pip / Docker</button>
           </div>
 
           <div class="setup-pane" data-setup-pane="easy">
@@ -495,6 +506,22 @@ cd ScriptSentry
 pip install -r requirements.txt
 python3 server.py --port 8000</pre>
               <button class="btn ghost" data-copy="setup-code-clone-modal" type="button">📋 Copy</button>
+            </div>
+          </div>
+
+          <div class="setup-pane" data-setup-pane="pip" hidden>
+            <ol class="setup-steps">
+              <li><b>Install the package:</b> clone the repo, then <code>pip install .</code> (or <code>pipx install .</code>).</li>
+              <li><b>Start the dashboard:</b> <code>scriptsentry-server --port 8000</code> — same pairing-token flow as the other paths.</li>
+              <li><b>Prefer the CLI?</b> <code>scriptsentry --help</code> runs scans and every report format without a browser.</li>
+              <li><b>Docker</b> ships the Playwright Chromium for runtime evidence: <code>docker run --rm -p 8000:8000 scriptsentry</code>.</li>
+            </ol>
+            <div class="code-box">
+              <pre id="setup-code-pip-modal">git clone https://github.com/AmitPal-CyberBuddy/ScriptSentry.git
+cd ScriptSentry
+pip install .
+scriptsentry-server --port 8000</pre>
+              <button class="btn ghost" data-copy="setup-code-pip-modal" type="button">📋 Copy</button>
             </div>
           </div>
 

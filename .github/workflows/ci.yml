@@ -1,0 +1,106 @@
+# ScriptSentry CI.
+#
+# The engine has two honest modes and CI pins both:
+#   * full            — every dependency from requirements.txt installed;
+#                       the whole suite must pass.
+#   * no-ast-parser   — esprima removed; the suite must still pass, with the
+#                       AST-precision contracts skipping (not failing), so the
+#                       documented regex-fallback degradation stays honest.
+# The loopback URL-scan pipeline tests are enabled in both (they only talk to
+# a local HTTP server). A separate job syntax-checks the shipped web UI, and
+# ruff enforces the pyflakes/pycodestyle correctness floor (see ruff.toml).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests (py${{ matrix.python-version }}, ${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.10"
+            mode: full
+          - python-version: "3.11"
+            mode: full
+          - python-version: "3.12"
+            mode: full
+          - python-version: "3.12"
+            mode: no-ast-parser
+    env:
+      # Lets the pipeline tests exercise analyze_url against local loopback
+      # HTTP servers (private-target protection is a scan-time guard, not a
+      # test-time one).
+      SCRIPTSENTRY_ALLOW_PRIVATE_TARGETS: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install engine dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Remove the AST parser (fallback-mode matrix entry)
+        if: matrix.mode == 'no-ast-parser'
+        run: python -m pip uninstall -y esprima
+
+      - name: Show dependency state
+        run: |
+          python -m pip list
+          python - <<'PY'
+          from core.js_parser import parser_status
+          print(parser_status())
+          PY
+
+      - name: Run the test suite
+        run: python -m unittest discover -s tests
+
+  ui:
+    name: web ui syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Syntax-check the shipped scripts
+        run: |
+          node --check webui/app.js
+          node --check webui/config.js
+      - name: Check webui/app.js is built from webui/src/app/
+        run: python3 tools/build_webui.py --check
+
+  lint:
+    name: lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: python -m pip install ruff
+      - name: Lint
+        run: ruff check . --output-format concise

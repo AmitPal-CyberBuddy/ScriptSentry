@@ -69,9 +69,8 @@ def decode_candidate_strings(content):
             candidate = match.strip()
             for decoder in (try_decode_base64, try_decode_hex):
                 decoded_value = decoder(candidate)
-                if decoded_value:
-                    if decoded_value not in decoded:
-                        decoded.append(decoded_value)
+                if decoded_value and decoded_value not in decoded:
+                    decoded.append(decoded_value)
     return decoded
 
 
@@ -84,7 +83,6 @@ def extract_hidden_values(content):
         for match in re.findall(pattern, content):
             cleaned = clean_value(match)
             decoded = try_decode_base64(cleaned) or try_decode_hex(cleaned)
-            if decoded:
-                if any(term in decoded.lower() for term in ['api', 'token', 'key', 'secret', 'user', 'auth', 'http']):
-                    findings.append(decoded)
+            if decoded and any(term in decoded.lower() for term in ['api', 'token', 'key', 'secret', 'user', 'auth', 'http']):
+                findings.append(decoded)
     return list(dict.fromkeys(findings))

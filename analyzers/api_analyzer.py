@@ -5,7 +5,6 @@ from the file as a whole.  The previous version scanned the entire file for the
 word "auth", so a single unrelated comment marked every endpoint in the file as
 authenticated.
 """
-import re
 
 # The call/transport catalogue lives in core.js_patterns so a new transport
 # type is picked up by every consumer at once.

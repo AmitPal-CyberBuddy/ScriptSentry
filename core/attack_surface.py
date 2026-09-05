@@ -5,6 +5,7 @@ import re
 from urllib.parse import urlparse
 
 from core.js_parser import parse_raw
+from core.text_index import LineIndex
 
 INTERNAL_HINTS = ("admin", "internal", "debug", "dev", "staging", "stage", "test",
                   "private", "config", "env", "health", "metrics", "local", "localhost",
@@ -104,7 +105,6 @@ def _body_fields(value_node):
 
 
 def _is_internal(url):
-    low = url.lower()
     parsed = urlparse(url if url.startswith(("http", "/", "ws")) else f"http://x{url}")
     path = parsed.path or str(url)
     return any(h in path.lower() for h in INTERNAL_HINTS) or parsed.hostname in ("localhost", "127.0.0.1", "0.0.0.0")
@@ -221,44 +221,81 @@ def _node_is_config(node):
     return isinstance(node, dict) and node.get("type") == "ObjectExpression"
 
 
-def _regex_sweep(content, filename):
+def _regex_sweep(content, filename, lines=None):
     findings = []
+    if lines is None:
+        lines = LineIndex(content)
     # Fetch/axios/XHR method calls where AST may not apply.
     for match in re.finditer(r"\baxios\.(get|post|put|patch|delete|head)\s*\(\s*[\"'][^\"']+[\"']", content, re.I):
         method = match.group(1).upper()
         m = re.search(r"[\"']([^\"']+)[\"']", match.group(0))
         url = m.group(1) if m else None
         findings.append({"kind": "endpoint", "url": url, "method": method, "params": _query_params(url),
-                         "headers": {}, "body_fields": [], "auth": None, "line": content[:match.start()].count("\n") + 1,
+                         "headers": {}, "body_fields": [], "auth": None, "line": lines.line_at(match.start()),
                          "internal": _is_internal(url) if url else False})
     for match in re.finditer(r"\bnew\s+WebSocket\s*\(\s*[\"']([^\"']+)[\"']", content, re.I):
         url = match.group(1)
-        findings.append({"kind": "websocket", "url": url, "protocols": [], "line": content[:match.start()].count("\n") + 1,
+        findings.append({"kind": "websocket", "url": url, "protocols": [], "line": lines.line_at(match.start()),
                          "internal": _is_internal(url)})
     for match in re.finditer(r"\bnew\s+EventSource\s*\(\s*[\"']([^\"']+)[\"']", content, re.I):
         url = match.group(1)
-        findings.append({"kind": "sse", "url": url, "protocols": [], "line": content[:match.start()].count("\n") + 1,
+        findings.append({"kind": "sse", "url": url, "protocols": [], "line": lines.line_at(match.start()),
                          "internal": _is_internal(url)})
     for match in re.finditer(r"(?:xhr|request)\.open\s*\(\s*[\"'](GET|POST|PUT|PATCH|DELETE)[\"']\s*,\s*[\"']([^\"']+)[\"']", content, re.I):
         method, url = match.group(1).upper(), match.group(2)
         findings.append({"kind": "endpoint", "url": url, "method": method, "params": _query_params(url),
-                         "headers": {}, "body_fields": [], "auth": None, "line": content[:match.start()].count("\n") + 1,
+                         "headers": {}, "body_fields": [], "auth": None, "line": lines.line_at(match.start()),
                          "internal": _is_internal(url)})
     for match in re.finditer(r"(?:navigator\s*\.\s*)?sendBeacon\s*\(\s*[\"']([^\"']+)[\"']", content, re.I):
         url = match.group(1)
         findings.append({"kind": "endpoint", "url": url, "method": "POST", "params": _query_params(url),
-                         "headers": {}, "body_fields": [], "auth": None, "line": content[:match.start()].count("\n") + 1,
+                         "headers": {}, "body_fields": [], "auth": None, "line": lines.line_at(match.start()),
                          "internal": _is_internal(url)})
     return findings
 
 
-def _graphql_sweep(content, filename):
+def _graphql_sweep(content, filename, lines=None):
+    if lines is None:
+        lines = LineIndex(content)
     ops = []
     for pattern in [r"\bquery\s+(\w*)\s*(\(|\{)", r"\bmutation\s+(\w*)\s*(\(|\{)"]:
         for match in re.finditer(pattern, content, re.I):
-            ops.append({"operation": match.group(1) or "(anonymous)", "line": content[:match.start()].count("\n") + 1})
+            if len(ops) >= 40:
+                break
+            ops.append({"operation": match.group(1) or "(anonymous)", "line": lines.line_at(match.start())})
     urls = re.findall(r"/[a-zA-Z0-9/_.-]*graphql[a-zA-Z0-9/_.-]*", content, re.I)
     return {"urls": list(dict.fromkeys(urls)), "operations": ops[:40]}
+
+
+# SPA frameworks keep their client-side routes in quoted hash fragments
+# (`href="#/admin/users"`, `redirectTo: "#/login"`, router tables).  These are
+# *not* HTTP endpoints -- the server always answers with the same document --
+# but hidden hash routes (admin panels, debug screens, impersonation flows)
+# are exactly what a reviewer wants surfaced, so they are reported as
+# attack-surface hints, never as API paths.
+HASH_ROUTE_RE = re.compile(r"[\"'`]#/([A-Za-z0-9_][A-Za-z0-9_./:{}\-]{0,119})[\"'`]")
+_HASH_ROUTE_ASSET_RE = re.compile(r"\.(?:js|mjs|cjs|css|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|mp4|webm|map|html?)$", re.I)
+HASH_ROUTE_CAP = 60
+
+
+def _hash_route_sweep(content, lines=None):
+    """Quoted ``#/...`` fragments that look like SPA routes, deduped, capped."""
+    if lines is None:
+        lines = LineIndex(content)
+    routes = []
+    seen = set()
+    for match in HASH_ROUTE_RE.finditer(content):
+        path = f"/{match.group(1)}"
+        if _HASH_ROUTE_ASSET_RE.search(path):
+            continue
+        if not re.search(r"[a-z]", path, re.I):
+            continue
+        if path in seen:
+            continue
+        seen.add(path)
+        routes.append({"route": path, "line": lines.line_at(match.start()),
+                       "internal": _is_internal(path)})
+    return routes[:HASH_ROUTE_CAP]
 
 
 def extract_attack_surface(content, filename="inline.js"):
@@ -308,7 +345,8 @@ def extract_attack_surface(content, filename="inline.js"):
             walk(body)
 
     # merge regex sweep where AST didn't find things
-    for item in _regex_sweep(content, filename):
+    lines = LineIndex(content)
+    for item in _regex_sweep(content, filename, lines):
         key = (item.get("kind"), item.get("url"), item.get("method"), item.get("line") or 0)
         if key not in {(e.get("kind"), e.get("url"), e.get("method"), e.get("line") or 0) for e in endpoints + websockets + sse if isinstance(e, dict)}:
             if item["kind"] == "websocket":
@@ -319,9 +357,12 @@ def extract_attack_surface(content, filename="inline.js"):
                 endpoints.append(item)
 
     # GraphQL
-    gq = _graphql_sweep(content, filename)
+    gq = _graphql_sweep(content, filename, lines)
     graphql_urls.update(gq["urls"])
     graphql_ops.extend(gq["operations"])
+
+    # SPA hash-route hints (client-side routes; reported, not fetched).
+    hash_routes = _hash_route_sweep(content, lines)
 
     # Unconditional endpoint extraction from URL literals, incl. hidden routes.
     # Require an actual URL/path shape so header/object keys like "Authorization"
@@ -332,15 +373,18 @@ def extract_attack_surface(content, filename="inline.js"):
         r"|(?:api|v[0-9]+|auth|login|logout|admin|internal|dev|staging|graphql|ws|wss)/[A-Za-z0-9/_.?=&%{}\-]+)[\"']",
         re.I,
     )
+    seen_endpoint_urls = {e.get("url") for e in endpoints}
+    realtime_urls = {w.get("url") for w in websockets} | {s.get("url") for s in sse}
     for m in url_re.finditer(content):
         url = m.group(1)
-        line = content[:m.start()].count("\n") + 1
+        line = lines.line_at(m.start())
         lower_url = url.lower()
-        if any(e.get("url") == url for e in endpoints):
+        if url in seen_endpoint_urls:
             continue
         # Realtime channels are already captured separately; don't duplicate as HTTP GET.
-        if lower_url.startswith(("ws://", "wss://")) or any(rt.get("url") == url for rt in websockets + sse):
+        if lower_url.startswith(("ws://", "wss://")) or url in realtime_urls:
             continue
+        seen_endpoint_urls.add(url)
         endpoints.append({
             "kind": "endpoint", "url": url, "method": "GET", "params": _query_params(url),
             "headers": {}, "body_fields": [], "auth": None, "line": line, "internal": _is_internal(url),
@@ -374,7 +418,7 @@ def extract_attack_surface(content, filename="inline.js"):
         auth_hints.append({
             "type": "credential/header usage",
             "evidence": content[max(0, m.start() - 40):m.start() + 120].strip(),
-            "line": content[:m.start()].count("\n") + 1,
+            "line": lines.line_at(m.start()),
         })
 
     return {
@@ -382,6 +426,7 @@ def extract_attack_surface(content, filename="inline.js"):
         "websockets": websockets[:30],
         "sse": sse[:20],
         "graphql": {"urls": sorted(graphql_urls)[:30], "operations": graphql_ops[:40]},
+        "hash_routes": hash_routes,
         "parameters": sorted(set(_flatten_params(params)))[:80],
         "domains": sorted(domains)[:60],
         "headers": sorted(headers)[:40],

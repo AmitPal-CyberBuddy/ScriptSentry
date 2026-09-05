@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass, field
 
 from core.js_parser import parse_raw
+from core.text_index import LineIndex
 
 # The source/sink catalogue lives in core.js_patterns so that the taint engine
 # and the analyzers can never disagree about what counts as a sink.  The names
@@ -446,7 +447,7 @@ class TaintAnalyzer:
             callee = node.get("callee", {})
             callee_name = _name(callee)
             if callee_name == "URLSearchParams":
-                return _Taint(["source:URL search params"], False, [f"new URLSearchParams"], "high")
+                return _Taint(["source:URL search params"], False, ["new URLSearchParams"], "high")
             return None
 
         # Call expressions -> detect source getters / sanitizers / sinks
@@ -467,7 +468,7 @@ class TaintAnalyzer:
             # from the jar. document.cookie reads are handled by the
             # member-expression branch via SOURCE_PATTERNS.
             if "cookie" in lower and ("get" in lower or "read" in lower):
-                return _Taint([f"source:document.cookie"], False, [f"read {callee_txt}"], "high")
+                return _Taint(["source:document.cookie"], False, [f"read {callee_txt}"], "high")
             if "referrer" in lower:
                 return _Taint(["source:document.referrer"], False, [f"read {callee_txt}"], "high")
 
@@ -651,7 +652,7 @@ class TaintAnalyzer:
             for arg in args:
                 candidate = self._taint_of_expr(arg)
                 if candidate:
-                    taint = candidate if taint is None else (taint.copy() if not taint else taint)
+                    taint = candidate if taint is None else (taint or taint.copy())
                     if candidate is not taint:
                         taint.merge(candidate)
             if not taint or not taint.sources:
@@ -998,11 +999,6 @@ class TaintAnalyzer:
         name = self._function_call_name(node)
         if name and name in self.functions:
             self._analyze_function_flow(node, name)
-        # Also allow a simple single-identifier alias to the collected function.
-        if name and "." not in (name or ""):
-            for fn_name, fn in self.functions.items():
-                if fn_name == name:
-                    self._analyze_function_flow(node, fn_name)
 
     def analyze(self):
         tree = parse_raw(self.content)
@@ -1014,27 +1010,65 @@ class TaintAnalyzer:
             return self.findings
         self.ast_used = True
 
-        # Pass 0: index declared functions so call args can be propagated into sinks.
+        # Flatten once, bucket by node type per top-level statement, then run
+        # the same passes in the same order over flat lists. Bucketing mirrors
+        # the type guards inside each handler, so every handler sees exactly
+        # the nodes it would have seen from the recursive walks -- only the
+        # repeated descent is gone. Inter-procedural body re-walks (below)
+        # still use _walk, bounded by the function-flow depth limit.
         statements = tree.get("body", []) or []
+
+        # Per-statement node buckets, each in document order. The bucket
+        # filters mirror the type guards inside the handlers, so every
+        # handler sees exactly the nodes the recursive walks delivered --
+        # only the repeated tree descent is gone.
+        per_stmt = []
         for stmt in statements:
-            self._walk(stmt, self._collect_functions)
+            flat = []
+            self._flatten(stmt, flat)
+            buckets = {"funcs": [], "decls": [], "assigns": [], "sinks": [], "calls": []}
+            for node in flat:
+                ntype = node.get("type")
+                if ntype == "CallExpression" or ntype == "OptionalCallExpression":
+                    buckets["calls"].append(node)
+                    buckets["sinks"].append(node)
+                elif ntype == "AssignmentExpression":
+                    buckets["assigns"].append(node)
+                    buckets["funcs"].append(node)
+                    buckets["sinks"].append(node)
+                elif ntype == "NewExpression":
+                    buckets["sinks"].append(node)
+                elif ntype == "VariableDeclaration":
+                    buckets["decls"].append(node)
+                elif ntype == "FunctionDeclaration" or ntype == "VariableDeclarator":
+                    buckets["funcs"].append(node)
+            per_stmt.append(buckets)
+
+        # Pass 0: index declared functions so call args can be propagated into sinks.
+        for buckets in per_stmt:
+            for node in buckets["funcs"]:
+                self._collect_functions(node)
 
         # Two passes: first assignments so reads later see taint, then sink checks.
-        for stmt in statements:
-            self._walk(stmt, self._handle_variable_declaration)
-        for stmt in statements:
-            self._walk(stmt, self._handle_assignment)
-        for stmt in statements:
-            self._walk(stmt, self._check_call_sink)
-            self._walk(stmt, self._check_assignment_sink)
-        for stmt in statements:
-            self._walk(stmt, self._check_function_flow)
+        for buckets in per_stmt:
+            for node in buckets["decls"]:
+                self._handle_variable_declaration(node)
+        for buckets in per_stmt:
+            for node in buckets["assigns"]:
+                self._handle_assignment(node)
+        for buckets in per_stmt:
+            for node in buckets["sinks"]:
+                self._check_call_sink(node)
+            for node in buckets["sinks"]:
+                self._check_assignment_sink(node)
+        for buckets in per_stmt:
+            for node in buckets["calls"]:
+                self._check_function_flow(node)
 
         # If AST parsed but found no flows, only run the regex fallback when the code
         # actually has a taint source. A bare `eval("...")` is a pattern the scanner's
         # `unsafe_runtime` risk signal already covers, not a source-to-sink flow.
         if not self.findings and self._has_obvious_dangerous_patterns() and self._has_source_like_pattern():
-            before = set()
             self._regex_analyze()
             self.ast_used = True  # AST parsed; fallback only supplemented missing flows.
         self._apply_quality_metadata()
@@ -1051,7 +1085,6 @@ class TaintAnalyzer:
         doc_limitations = list(self.limitations)
         if not self.ast_used:
             doc_limitations.insert(0, "AST parser unavailable; flow derived from line-based heuristics.")
-        quality = "heuristic" if not self.ast_used else ("medium" if doc_limitations else "high")
         for finding in self.findings:
             notes = []
             for note in list(finding.get("limitations", []) or []) + doc_limitations:
@@ -1076,6 +1109,25 @@ class TaintAnalyzer:
         for value in node.values():
             if isinstance(value, (list, dict)):
                 self._walk(value, callback)
+
+    @staticmethod
+    def _flatten(node, out):
+        """Append every dict node to ``out`` in _walk's visit order.
+
+        One flattening pass replaces the six per-pass recursive walks in
+        :meth:`analyze` -- each analysis pass then iterates a pre-filtered
+        node list instead of re-descending the whole tree.
+        """
+        if isinstance(node, list):
+            for child in node:
+                TaintAnalyzer._flatten(child, out)
+            return
+        if not isinstance(node, dict):
+            return
+        out.append(node)
+        for value in node.values():
+            if isinstance(value, (list, dict)):
+                TaintAnalyzer._flatten(value, out)
 
     # ---------------- fallback / heuristics ----------------
     def _has_obvious_dangerous_patterns(self):
@@ -1130,10 +1182,21 @@ class TaintAnalyzer:
 
         # Split at statement boundaries but retain line numbers. This works for
         # ordinary source and still gives useful evidence for minified bundles.
-        statements = [(text[:m.start()].count("\n") + 1, m.group(0).strip())
+        lines = LineIndex(text)
+        statements = [(lines.line_at(m.start()), m.group(0).strip())
                       for m in re.finditer(r"[^;\n]+", text) if m.group(0).strip()]
 
-        for line_no, statement in statements:
+        # A real statement (line- or semicolon-delimited) is never enormous.
+        # What exceeds this bound is data, not code -- a multi-hundred-KB
+        # embedded string (inline base64 source maps, bundled assets) -- and
+        # the per-position expression regexes below cost O(n^2) on such a
+        # non-delimited run: minutes per file. Skipping the monster keeps the
+        # fallback linear with no analytical loss.
+        MAX_STATEMENT_CHARS = 4000
+
+        for _, statement in statements:
+            if len(statement) > MAX_STATEMENT_CHARS:
+                continue
             # `search` (not `match`) so assignments nested inside an expression
             # are still tracked -- a minified bundle puts several of them on one
             # line.  The lookbehind/lookahead keep member assignments

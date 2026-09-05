@@ -23,18 +23,21 @@ import threading
 import time
 import unittest
 from functools import partial
+from unittest import mock
 
 from core.beautifier import beautify
 from core.jobs import Job
-from core.js_parser import esprima, parser_available
+from core.js_parser import parser_available
 from core.analyzer_service import analyze_url
 
 requires_ast_parser = unittest.skipUnless(
     parser_available(),
-    "needs the optional esprima AST parser (pip install esprima)",
+    "needs a JS AST parser (tree-sitter or esprima)",
 )
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP_JS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webui", "app.js")
+SERVER_PY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py")
 TOOL_HTML = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webui", "tool", "index.html")
 STYLES_CSS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webui", "styles.css")
 
@@ -89,7 +92,7 @@ class ParseCacheTest(unittest.TestCase):
 
     def setUp(self):
         if not parser_available():
-            self.skipTest("needs the optional esprima AST parser")
+            self.skipTest("needs a JS AST parser (tree-sitter or esprima)")
         from core import js_parser
         with js_parser._CACHE_LOCK:
             js_parser._RAW_CACHE.clear()
@@ -98,19 +101,18 @@ class ParseCacheTest(unittest.TestCase):
     def test_second_parse_of_same_content_is_cached(self):
         from core import js_parser
         calls = {"n": 0}
-        real_parse = esprima.parseModule
+        real_parse = js_parser._parse
 
-        def counting(source, opts):
+        def counting(source):
             calls["n"] += 1
-            return real_parse(source, opts)
+            return real_parse(source)
 
         content = "const token = 'a'; function f(x) { return x + token; } f(1);"
-        esprima.parseModule = counting
-        try:
+        # Count at the engine boundary so the cache contract holds no matter
+        # which engine (tree-sitter or esprima) is primary.
+        with mock.patch.object(js_parser, "_parse", counting):
             first = js_parser.parse_raw(content)
             second = js_parser.parse_raw(content)
-        finally:
-            esprima.parseModule = real_parse
         self.assertIsNotNone(first)
         self.assertEqual(calls["n"], 1, "same content must be parsed once, not once per consumer")
         self.assertIs(first, second, "cache should hand back the shared read-only tree")
@@ -118,21 +120,20 @@ class ParseCacheTest(unittest.TestCase):
     def test_parse_failures_are_cached_too(self):
         from core import js_parser
         calls = {"n": 0}
-        real_parse = esprima.parseModule
 
-        def counting(source, opts):
+        def failing(source):
             calls["n"] += 1
-            return real_parse(source, opts)
+            return None, "synthetic-parse-failure"
 
         content = "this is ((( not javascript"
-        esprima.parseModule = counting
-        try:
+        # tree-sitter tolerates garbage with a partial tree, so force an
+        # engine-level failure to pin the negative-result cache contract.
+        with mock.patch.object(js_parser, "_parse", failing):
             first_tree, first_error = js_parser.parse_raw_with_error(content)
             second_tree, second_error = js_parser.parse_raw_with_error(content)
-        finally:
-            esprima.parseModule = real_parse
         self.assertIsNone(first_tree)
-        self.assertEqual(first_error, second_error)
+        self.assertEqual(first_error, "synthetic-parse-failure")
+        self.assertEqual(second_error, first_error)
         self.assertEqual(calls["n"], 1, "a failed parse must not be retried per consumer")
 
     def test_oversize_content_bypasses_the_cache(self):
@@ -297,6 +298,54 @@ class DashboardPollContractTest(unittest.TestCase):
     def test_cancel_is_not_styled_as_an_error(self):
         self.assertIn("neutral: canceled", self.app)
         self.assertIn(".field-error.is-neutral", self.css)
+
+    def test_poll_cadence_is_adaptive_not_fixed(self):
+        # A scan that reports the same snapshot (one big bundle being
+        # analyzed) must back off gradually instead of hammering
+        # /api/status twice a second for the whole scan.
+        for needle in ("POLL_MAX_INTERVAL_MS", "POLL_MAX_HIDDEN_INTERVAL_MS",
+                       "lastSignature"):
+            self.assertIn(needle, self.app)
+
+    def test_running_scan_disables_conflicting_actions(self):
+        # While a scan occupies the engine, starting another scan (including
+        # via "Analyze Files", which used to stay enabled) or exporting a
+        # report (the engine would 409 it) must be impossible in the UI.
+        self.assertIn("setScanBusy(true)", self.app)
+        self.assertIn("setScanBusy(false)", self.app)
+        for sel in ("#analyze-code", "#analyze-url", "#analyze-files",
+                    "#export-html", "#export-sarif"):
+            self.assertIn(f'"{sel}"', self.app)
+
+    def test_quiet_hint_names_the_stage_cost_before_panicking(self):
+        # The old 90-second advice ("Cancel and retry with a lower file cap
+        # or fewer workers") fired in the middle of perfectly normal
+        # large-bundle analysis and blamed the user's settings.
+        self.assertNotIn("Cancel and retry with a lower file cap or fewer workers", self.app)
+        self.assertNotIn("no stage change for", self.app)
+        self.assertIn("STAGE_QUIET_NOTES", self.app)
+        self.assertIn("QUIET_STALL_MS", self.app)
+        self.assertIn("QUIET_STUCK_MS", self.app)
+        # Cancel advice, when it eventually appears, is conditioned on the
+        # engine terminal being quiet too.
+        self.assertIn("terminal shows no activity", self.app)
+
+    def test_report_export_surfaces_engine_rejections_inline(self):
+        # Exporting while a scan runs is an analysis-state error (409), not a
+        # pairing problem: the setup dialog must stay closed.
+        self.assertIn("err.statusCode = res.status", self.app)
+        self.assertIn("still running", self.app.lower())
+
+    def test_server_does_not_log_every_status_poll(self):
+        # The handler plumbing lives in the api/ package since the server was
+        # split; the quiet-heartbeat contract lives with it.
+        handler_path = os.path.join(ROOT, "api", "http.py")
+        with open(handler_path, encoding="utf-8") as fh:
+            handler_src = fh.read()
+        self.assertIn("_quiet_access_log", handler_src,
+                      "successful /api/status & /api/health polls must not flood the log")
+        self.assertIn('"/api/status"', handler_src)
+        self.assertIn('"/api/health"', handler_src)
 
 
 if __name__ == "__main__":

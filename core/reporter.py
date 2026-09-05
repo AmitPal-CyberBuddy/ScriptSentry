@@ -1,6 +1,8 @@
 import html
-import itertools
+import json
 import os
+from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from core.js_parser import parser_status
 from core.analysis_model import deduplicate_findings, split_findings
@@ -189,8 +191,6 @@ def _normalize_data(file_name, data):
         "framework_findings": data.get("framework_findings", []),
         "findings": data.get("findings", []),
         "finding_statuses": data.get("finding_statuses", {}),
-        "file_size": data.get("file_size", 0),
-        "line_count": data.get("line_count", 0),
     }
 
 
@@ -250,6 +250,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
     exfil_candidates = data_exfiltration_candidates(results, runtime_evidence, page_url)
     all_attack_surface = {
         "endpoints": [], "websockets": [], "sse": [], "graphql": [],
+        "hash_routes": [],
         "parameters": [], "domains": [], "headers": [], "body_fields": [],
         "auth_hints": [], "internal_endpoints": [],
     }
@@ -312,7 +313,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
                     "origin": f.get("origin") or norm["origin"],
                 })
         asrf = norm.get("attack_surface", {}) or {}
-        for key in all_attack_surface.keys():
+        for key in all_attack_surface:
             all_attack_surface[key].extend(asrf.get(key, []) or [])
 
     # Runtime evidence is global (not tied to one downloaded file). It enters
@@ -406,7 +407,12 @@ def build_report_model(results, ai_summary=None, metadata=None):
         seen = set()
         for item in items or []:
             if isinstance(item, dict):
-                sig = (item.get("url") or item.get("operation") or item.get("type") or "", item.get("method") or "", item.get("line") or 0)
+                if key == "hash_routes":
+                    # A route is the same route no matter which file/line
+                    # mentions it; keep the first observation.
+                    sig = (item.get("route") or "",)
+                else:
+                    sig = (item.get("url") or item.get("route") or item.get("operation") or item.get("type") or "", item.get("method") or "", item.get("line") or 0)
             else:
                 sig = (str(item),)
             if sig in seen:
@@ -733,6 +739,13 @@ def generate_report(results, ai_summary=None, metadata=None):
                     [f"{w.get('kind', 'WS')} {w.get('url', '')}" for w in (asrf.get("websockets", []) + asrf.get("sse", []))[:12]],
                     12,
                 ))
+            if asrf.get("hash_routes"):
+                report.extend(_txt_section(
+                    "Attack Surface · SPA hash routes (client-side, not HTTP endpoints)",
+                    [f"#{r.get('route', '')}" + ("  [hidden/internal]" if r.get("internal") else "")
+                     for r in asrf.get("hash_routes", [])[:10]],
+                    10,
+                ))
             if asrf.get("auth_hints") or asrf.get("internal_endpoints"):
                 extras = [f"auth: {a.get('type', a)}" for a in asrf.get("auth_hints", [])[:6]]
                 extras += [f"internal: {e.get('method', 'GET')} {e.get('url', '')}" for e in asrf.get("internal_endpoints", [])[:6]]
@@ -909,7 +922,7 @@ def generate_html_report(results, ai_summary=None, metadata=None):
         "<div class=\"body\">",
         "<h2>📌 Executive Summary</h2>",
         "<div class=\"card\"><p>" + esc(f"Risk posture is {summary['risk_label'].lower()} with {summary['total_findings']} findings across {summary['total_files']} file(s).") + "</p>",
-        f"<div class=\"bars\">",
+        "<div class=\"bars\">",
     ]
 
     # Category bars
@@ -1017,9 +1030,10 @@ def generate_html_report(results, ai_summary=None, metadata=None):
         if norm["framework_findings"]:
             html.append(f"<div class=\"sec\" style=\"margin-top:14px\"><h4>Framework Risks</h4><ul>{dict_items(norm['framework_findings'], lambda x: (x.get('framework') or '') + ': ' + (x.get('type') or x.get('id', '')) + ' — ' + (x.get('sink') or ''), 8)}</ul></div>")
         asrf = norm.get("attack_surface", {}) or {}
-        if asrf.get("endpoints") or asrf.get("websockets") or asrf.get("sse") or asrf.get("auth_hints") or asrf.get("internal_endpoints"):
+        if asrf.get("endpoints") or asrf.get("websockets") or asrf.get("sse") or asrf.get("auth_hints") or asrf.get("internal_endpoints") or asrf.get("hash_routes"):
             ep_lines = [f"{e.get('method', 'GET')} {e.get('url', '')}" for e in asrf.get("endpoints", [])[:12]]
             ep_lines += [f"{w.get('kind', 'WS')} {w.get('url', '')}" for w in (asrf.get("websockets", []) + asrf.get("sse", []))[:8]]
+            ep_lines += [f"SPA route: #{r.get('route', '')}" for r in asrf.get("hash_routes", [])[:6]]
             ep_lines += [f"auth: {a.get('type', a)}" for a in asrf.get("auth_hints", [])[:4]]
             ep_lines += [f"internal: {e.get('method', 'GET')} {e.get('url', '')}" for e in asrf.get("internal_endpoints", [])[:4]]
             html.append(f"<div class=\"sec\" style=\"margin-top:14px\"><h4>Attack Surface</h4><ul>{items_html(ep_lines, 16)}</ul></div>")
@@ -1099,13 +1113,12 @@ def generate_csv_report(results, ai_summary=None, metadata=None):
 def generate_sarif_report(results, ai_summary=None, metadata=None):
     """Generate a SARIF 2.1.0 export of unified findings."""
     import json
-    import uuid
 
     model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
     findings = _all_unified_findings(model)
     rules_map = {}
     results_out = []
-    for i, f in enumerate(findings, 1):
+    for f in findings:
         rule_id = str(f.get("id") or f.get("type") or "unknown")
         if rule_id not in rules_map:
             rules_map[rule_id] = {
@@ -1162,6 +1175,11 @@ def generate_sarif_report(results, ai_summary=None, metadata=None):
                 "observation": bool(f.get("observation", False)),
             },
         }
+        # Findings recovered from a bundle's source map point at the ORIGINAL
+        # source file; say so explicitly so SARIF consumers can tell them
+        # apart from findings that were found in the shipped bundle itself.
+        if f.get("via"):
+            result["properties"]["via"] = str(f["via"])
         results_out.append(result)
     return json.dumps({
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
@@ -1343,6 +1361,8 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         page_url = ""
     script_inventory = build_script_intel(results, runtime_evidence, page_url)
     exfil_candidates = data_exfiltration_candidates(results, runtime_evidence, page_url)
+    # Cross-scan diff recorded by the job runner (None when disabled).
+    history_info = results.get("__history__") or None
 
     category_meta = [
         ("secrets", "Secrets & Credentials", "#ff4d6d", "shield"),
@@ -1379,7 +1399,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         diag["script_intel"] = intel_match or {}
         files.append(diag)
         overall += diag["score"]
-        for key, label, color, icon in category_meta:
+        for key, *_ in category_meta:
             totals[key] = totals.get(key, 0) + diag["counts"].get(key, 0)
         flow_count += len(diag["crypto_flows"])
         for finding in diag["findings"]:
@@ -1466,7 +1486,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
     priorities = top_priorities(all_findings, script_inventory, limit=6)
 
     radar_values = []
-    for key, label, color, icon in category_meta:
+    for key, *_ in category_meta:
         radar_values.append(min(100, (totals.get(key, 0) * 18)))
     radar_categories = [label for _, label, _, _ in category_meta]
     donut_labels = [label for key, label, _, _ in category_meta if totals.get(key, 0)]
@@ -1536,5 +1556,147 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         "exfil_candidates": deduplicate_findings(exfil_candidates),
         "scan_summary": scan_summary,
         "ai_summary": ai_summary or {},
+        # Cross-scan diff vs the previous scan of the same target (None on
+        # the first recorded scan). history_info is None when recording is
+        # disabled or the scan was not recorded.
+        "history": history_info,
     }
     return payload
+
+
+
+def generate_json_report(results, ai_summary=None, metadata=None):
+    """Complete machine-readable export: raw results + both report models."""
+    payload = {
+        "metadata": metadata or {},
+        "results": {key: value for key, value in (results or {}).items()
+                    if not str(key).startswith("__")},
+        "runtime_evidence": (results or {}).get("__runtime_evidence__"),
+        "runtime_findings": (results or {}).get("__runtime_findings__", []),
+        "report_model": build_report_model(results, ai_summary=ai_summary, metadata=metadata),
+        "dashboard": build_dashboard_payload(results, ai_summary=ai_summary, metadata=metadata),
+        "ai_summary": ai_summary or {},
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+
+
+def generate_openapi_report(results, metadata=None):
+    """Render the discovered API surface as an OpenAPI 3.1 document.
+
+    This is an *inventory*, not a schema: every path/operation was observed
+    in shipped JavaScript (fetch/xhr/axios/websocket/graphql patterns), so
+    descriptions say so and request/response schemas are intentionally
+    absent. The value is a starting point for security review and contract
+    tooling, exported from the same deduplicated attack-surface model the
+    dashboard uses.
+    """
+    model = build_report_model(results, metadata=metadata)
+    surface = model.get("attack_surface") or {}
+    metadata = metadata or {}
+    source = str(metadata.get("source") or "")
+
+    servers = {}
+    paths = {}
+    MAX_PATHS = 300
+
+    def _split_target(raw_url):
+        raw_url = str(raw_url or "").strip()
+        if not raw_url:
+            return "", ""
+        if raw_url.startswith(("http://", "https://", "ws://", "wss://")):
+            parsed = urlparse(raw_url)
+            scheme = {"ws": "http", "wss": "https"}.get(parsed.scheme, parsed.scheme)
+            server = f"{scheme}://{parsed.netloc}" if parsed.netloc else ""
+            path = parsed.path or "/"
+            return server, path
+        path = raw_url.split("?", 1)[0]
+        return "", path if path.startswith("/") else f"/{path}"
+
+    def _operation(endpoint, method):
+        origin = str(endpoint.get("origin") or endpoint.get("script") or "")
+        operation = {
+            "tags": ["discovered"],
+            "summary": f"Discovered {method.upper()} target",
+            "description": (
+                "Observed in shipped JavaScript by static analysis"
+                + (f" ({origin})" if origin else "")
+                + "; not a documented contract."
+            ),
+            "x-internal": bool(endpoint.get("internal")),
+        }
+        params = []
+        for name in (endpoint.get("params") or [])[:20]:
+            params.append({"name": str(name), "in": "query", "required": False,
+                           "schema": {"type": "string"}})
+        if params:
+            operation["parameters"] = params
+        if endpoint.get("body_fields"):
+            operation["x-body-fields"] = list(endpoint["body_fields"])[:20]
+        if endpoint.get("headers"):
+            operation["x-header-hints"] = sorted({str(h) for h in endpoint["headers"]})[:15]
+        if endpoint.get("auth"):
+            operation["x-auth-hints"] = [str(endpoint["auth"])]
+        return operation
+
+    for endpoint in surface.get("endpoints") or []:
+        if len(paths) >= MAX_PATHS:
+            break
+        if not isinstance(endpoint, dict):
+            continue
+        server, path = _split_target(endpoint.get("url"))
+        if not path or path.endswith((".js", ".mjs", ".css", ".png", ".jpg", ".svg", ".woff2")):
+            continue
+        if server:
+            servers.setdefault(server, True)
+        method = str(endpoint.get("method") or "get").lower()
+        if method not in ("get", "post", "put", "patch", "delete", "head", "options"):
+            method = "get"
+        entry = paths.setdefault(path, {})
+        if method not in entry:
+            entry[method] = _operation(endpoint, method)
+
+    document = {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "Discovered API surface" + (f" — {source}" if source else ""),
+            "summary": "Endpoints observed in shipped JavaScript by ScriptSentry static analysis.",
+            "description": (
+                "Generated from the analyzer's endpoint inventory (fetch/XHR/axios/"
+                "beacon patterns, WebSocket and SSE endpoints, GraphQL operations). "
+                "Paths are *observations*, not a documented contract; request and "
+                "response schemas are intentionally omitted."
+            ),
+            "version": ENGINE_VERSION,
+        },
+        "paths": dict(sorted(paths.items())),
+        "x-generated": {
+            "generator": f"ScriptSentry {ENGINE_VERSION}",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "endpoint_count": len(paths),
+        },
+    }
+    if servers:
+        document["servers"] = [{"url": server} for server in sorted(servers)[:20]]
+    if surface.get("websockets"):
+        document["x-websockets"] = [w.get("url") for w in surface["websockets"] if isinstance(w, dict)][:40]
+    if surface.get("sse"):
+        document["x-server-sent-events"] = [s.get("url") for s in surface["sse"] if isinstance(s, dict)][:40]
+    if surface.get("graphql"):
+        document["x-graphql"] = surface["graphql"]
+    if surface.get("auth_hints"):
+        document["x-auth-schemes"] = list({str(h.get("type") or h) for h in surface["auth_hints"] if isinstance(h, dict) or True})[:20]
+    if surface.get("hash_routes"):
+        # Client-side SPA routes live in the shipped bundle, not on the wire;
+        # they are a review hint, so they go under an extension, never "paths".
+        seen_routes = set()
+        x_routes = []
+        for route in surface["hash_routes"]:
+            if not isinstance(route, dict):
+                continue
+            name = str(route.get("route") or "")
+            if not name or name in seen_routes:
+                continue
+            seen_routes.add(name)
+            x_routes.append({"route": f"#{name}", "internal": bool(route.get("internal"))})
+        document["x-spa-hash-routes"] = x_routes[:100]
+    return json.dumps(document, indent=2, ensure_ascii=False, default=str)

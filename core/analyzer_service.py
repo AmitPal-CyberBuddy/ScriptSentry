@@ -1,12 +1,15 @@
 """High-level analysis orchestration used by the CLI and the Web dashboard."""
+import contextlib
 import hashlib
 import os
 import re
 import shutil
 import tempfile
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urljoin, urlparse, unquote
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, as_completed, wait
+from concurrent.futures.process import BrokenProcessPool
+from pickle import PicklingError
+from urllib.parse import urljoin, urlparse
 
 try:
     import requests
@@ -17,13 +20,14 @@ from config import BEAUTIFY_DIR, FILE_RULES, JS_DIR, SCAN_MAX_WORKERS
 from core.beautifier import beautify
 from core.crypto import extract_crypto_material
 from core.discovery import extract_inline_scripts, extract_js, extract_page_assets
-from core.downloader import download_js, download_file, get_safe_filename
+from core.discovery import sitemap_pages
+from core.downloader import download_js, get_safe_filename
 from core.url_policy import read_response_text, safe_get, validate_public_url
-from core.source_maps import inspect_source_map
+from core.source_maps import load_source_map
 from core.runtime_evidence import attach_runtime_evidence, capture_runtime_evidence, runtime_evidence_enabled
 from core.pipeline import ProgressModel, stage_plan
 from core.js_parser import clear_parse_cache
-from core.scanner import ScanCancelled, scan_file
+from core.scanner import HEARTBEAT_MIN_CHARS, ScanCancelled, scan_file
 
 # Compatibility references keep older integrations that patch the two legacy
 # discovery functions working, while normal scans use one cached page fetch.
@@ -45,7 +49,166 @@ def _check_cancel(cancel_check):
         raise ScanCancelled("Scan cancelled by user")
 
 
-def _scan_document(path, content, source_url="", cancel_check=None):
+def analyze_engine():
+    """Which engine runs the CPU-bound per-document analysis.
+
+    ``process`` (default): each document is analyzed in a worker process, so
+    the GIL no longer serializes tree-sitter parsing and the Python AST
+    walks -- a 6-worker scan gets ~6 cores instead of ~1. ``thread`` opts
+    back into the legacy in-process pool (also the automatic fallback when
+    process pools are unavailable).
+    """
+    return (os.environ.get("SCRIPTSENTRY_ANALYZE_ENGINE") or "process").strip().lower()
+
+
+# Source-map expansion: how much of a map's embedded original code we are
+# willing to analyze per document. Original sources are usually small, but a
+# hostile/oversized map must not triple the scan cost silently. All knobs are
+# environment-tunable and the whole feature has a kill switch.
+SOURCEMAP_MAX_SOURCES = 12       # per bundle
+SOURCEMAP_MAX_SOURCE_CHARS = 400_000   # per source file
+SOURCEMAP_TOTAL_CHAR_BUDGET = 3_000_000
+SOURCEMAP_MAX_MERGED_FINDINGS = 40     # per bundle
+
+
+def _sourcemap_analysis_enabled():
+    return os.environ.get("SCRIPTSENTRY_SOURCEMAP_ANALYSIS", "1").strip().lower() not in ("0", "false", "no")
+
+
+def _sourcemap_source_cap():
+    try:
+        return max(0, min(int(os.environ.get("SCRIPTSENTRY_SOURCEMAP_SOURCES", SOURCEMAP_MAX_SOURCES)), 50))
+    except (TypeError, ValueError):
+        return SOURCEMAP_MAX_SOURCES
+
+
+def _expand_source_map_sources(data, map_metadata, contents, source_url, cancel_check=None,
+                               progress_heartbeat=None):
+    """Analyze a bundle's embedded original sources and merge the evidence.
+
+    Original source analysis upgrades exactly what minification destroys:
+    findings keep the real file names (``src/auth/config.ts``), and taint /
+    secret evidence comes from code that was never mangled. Source findings
+    are appended to the bundle's unified finding list, tagged ``via`` so the
+    UI and exports can show where each one really lives; per-source records
+    land in ``data["source_map"]["sources_analyzed"]``.
+
+    Bounded by design: at most ``SOURCEMAP_MAX_SOURCES`` sources, each under
+    ``SOURCEMAP_MAX_SOURCE_CHARS``, within a total character budget, with
+    content-hash dedup against the bundle itself.
+    """
+    if not contents:
+        return
+    if not map_metadata.get("sources_content_count"):
+        map_metadata["analysis_note"] = "Map lists sources but embeds no contents (sourcesContent empty)."
+        return
+    if not _sourcemap_analysis_enabled():
+        map_metadata["analysis_note"] = "Source-map analysis disabled (SCRIPTSENTRY_SOURCEMAP_ANALYSIS=0)."
+        return
+
+    parent_hash = data.get("content_sha256", "")
+    seen_hashes = {parent_hash} if parent_hash else set()
+    budget = SOURCEMAP_TOTAL_CHAR_BUDGET
+    cap = _sourcemap_source_cap()
+    origin = str(source_url or data.get("url") or "")
+    origin_label = f"{origin} (via source map)" if origin else "via source map"
+
+    analyzed = []
+    skip_reasons = []
+    merged_findings = 0
+
+    for display_name, source_text in contents:
+        if len(analyzed) >= cap or merged_findings >= SOURCEMAP_MAX_MERGED_FINDINGS:
+            skip_reasons.append("source_cap_reached")
+            break
+        if progress_heartbeat is not None:
+            progress_heartbeat(f"source map: {os.path.basename(display_name)}")
+        _check_cancel(cancel_check)
+        if len(source_text) > SOURCEMAP_MAX_SOURCE_CHARS:
+            skip_reasons.append(f"oversized_source:{display_name}")
+            continue
+        digest = hashlib.sha256(source_text.encode("utf-8", errors="ignore")).hexdigest()
+        if digest in seen_hashes:
+            skip_reasons.append(f"duplicate_source:{display_name}")
+            continue
+        if budget - len(source_text) < 0:
+            skip_reasons.append("analysis_budget_exhausted")
+            break
+        budget -= len(source_text)
+        seen_hashes.add(digest)
+
+        source_data = scan_file(display_name, content=source_text, cancel_check=cancel_check)
+        source_data.pop("source_map", None)
+        severity_counts = {}
+        for finding in source_data.get("findings", []):
+            severity = str(finding.get("severity") or "MEDIUM").upper()
+            severity_counts[severity] = severity_counts.get(severity, 0) + 1
+        analyzed.append({
+            "name": display_name,
+            "bytes": len(source_text),
+            "findings": len(source_data.get("findings", []) or []),
+            "credible_secrets": len(source_data.get("credible_secrets", []) or []),
+            "severities": severity_counts,
+            "score": source_data.get("score", 0),
+        })
+
+        for finding in source_data.get("findings", []) or []:
+            if merged_findings >= SOURCEMAP_MAX_MERGED_FINDINGS:
+                break
+            record = dict(finding)
+            record["file"] = display_name
+            record["origin"] = origin_label
+            record["via"] = "source_map"
+            data["findings"].append(record)
+            merged_findings += 1
+
+    data["findings"] = data["findings"][:80 + SOURCEMAP_MAX_MERGED_FINDINGS]
+    map_metadata["sources_analyzed"] = analyzed
+    map_metadata["analyzed_sources"] = len(analyzed)
+    map_metadata["sources_findings"] = sum(entry["findings"] for entry in analyzed)
+    if skip_reasons:
+        map_metadata["analysis_skipped"] = skip_reasons[:20]
+
+
+def _scan_document_cpu(path, content, source_url="", cancel_check=None,
+                       progress_heartbeat=None):
+    """CPU-only half of _scan_document: scan_file + crypto fingerprinting.
+
+    Everything here is pure computation over the content string with plain
+    dict/list outputs, so it can run inside a process-pool worker (see
+    _analyze_document_worker). Network work (source maps) stays in the
+    caller's process.
+    """
+    content = content or ""
+    data = scan_file(path, content=content, cancel_check=cancel_check,
+                     progress_heartbeat=progress_heartbeat)
+    data["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+    data["url"] = str(source_url or "")
+    crypto = extract_crypto_material(content, filename=os.path.basename(path))
+    data.update(crypto)
+    data.setdefault("analysis_warnings", [])
+    return data
+
+
+def _expand_document_source_maps(data, content, source_url="", cancel_check=None,
+                                 progress_heartbeat=None):
+    """Fetch and analyze a bundle's source map when it references one (I/O)."""
+    if not data.get("source_map", {}).get("present"):
+        return
+    try:
+        map_metadata, map_contents = load_source_map(content, base_url=source_url, timeout=10)
+        data["source_map"] = map_metadata
+        if map_contents:
+            _expand_source_map_sources(
+                data, map_metadata, map_contents, source_url,
+                cancel_check=cancel_check, progress_heartbeat=progress_heartbeat)
+    except ScanCancelled:
+        raise
+    except Exception as exc:
+        data.setdefault("analysis_warnings", []).append(f"source_map: {exc}")
+
+
+def _scan_document(path, content, source_url="", cancel_check=None, progress_heartbeat=None):
     """Run all analyzers for one document and retain provenance.
 
     Provenance is essential for first/third-party classification and for
@@ -53,21 +216,43 @@ def _scan_document(path, content, source_url="", cancel_check=None):
     must never be used as a substitute for the script's actual origin.
     """
     content = content or ""
-    data = scan_file(path, content=content, cancel_check=cancel_check)
-    if data.get("source_map", {}).get("present"):
-        try:
-            data["source_map"] = inspect_source_map(content, source_url, timeout=10)
-        except Exception as exc:
-            data.setdefault("analysis_warnings", []).append(f"source_map: {exc}")
-    crypto = extract_crypto_material(content, filename=os.path.basename(path))
-    data.update(crypto)
-    data["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
-    data["url"] = str(source_url or "")
-    data.setdefault("analysis_warnings", [])
+    data = _scan_document_cpu(path, content, source_url=source_url,
+                              cancel_check=cancel_check,
+                              progress_heartbeat=progress_heartbeat)
+    _expand_document_source_maps(data, content, source_url=source_url,
+                                 cancel_check=cancel_check,
+                                 progress_heartbeat=progress_heartbeat)
     return data
 
 
-def _merge_into(results, path, content, seen_hashes=None, source_url="", cancel_check=None):
+def _analyze_document_worker(path, content, source_url="", heartbeat_queue=None, phase="analyze"):
+    """Process-pool entry point: analyze one document in a worker process.
+
+    Returns ``(data, script_refs)`` -- both plain picklable structures. The
+    tree-sitter parse, the taint/attack-surface walks and module-reference
+    discovery all share one parse *inside this process*, then the results
+    cross the process boundary once. Mid-file heartbeats for large bundles
+    travel back through ``heartbeat_queue`` as ``(phase, name, detail)``
+    tuples so the dashboard keeps moving during long analyses.
+    """
+    content = content or ""
+    heartbeat = None
+    if heartbeat_queue is not None and len(content) >= HEARTBEAT_MIN_CHARS:
+        name = os.path.basename(path) if path else "inline script"
+
+        def heartbeat(detail, _phase=phase, _name=name, _q=heartbeat_queue):
+            # A dead heartbeat queue must never take the scan down with it.
+            with contextlib.suppress(Exception):
+                _q.put((_phase, _name, str(detail)))
+
+    data = _scan_document_cpu(path, content, source_url=source_url,
+                              cancel_check=None, progress_heartbeat=heartbeat)
+    refs = extract_script_refs(content)
+    return data, refs
+
+
+def _merge_into(results, path, content, seen_hashes=None, source_url="", cancel_check=None,
+                progress_heartbeat=None):
     """Run the full scanner plus crypto extractor for a single JS document.
 
     ``seen_hashes`` lets a URL scan skip duplicate content (mirrored bundles,
@@ -86,7 +271,8 @@ def _merge_into(results, path, content, seen_hashes=None, source_url="", cancel_
         if digest in seen_hashes:
             return False
         seen_hashes.add(digest)
-    data = _scan_document(path, content, source_url=source_url, cancel_check=cancel_check)
+    data = _scan_document(path, content, source_url=source_url, cancel_check=cancel_check,
+                          progress_heartbeat=progress_heartbeat)
     results[path] = data
     return True
 
@@ -97,16 +283,25 @@ def analyze_content(code, filename="inline.js", progress_callback=None, cancel_c
     _check_cancel(cancel_check)
     progress = ProgressModel(stage_plan(mode="code"))
 
-    def notify(phase, message, current=None, total=None):
+    def notify(phase, message, current=None, total=None, total_bytes=None):
         progress.set_stage(phase, current=0 if current is None else current,
                            total=0 if total is None else total)
         _notify(progress_callback, phase=phase, stage=progress.stage,
                 stages=progress.stage_states(), current=progress.current,
-                total=progress.total, percent=progress.percent, message=message)
+                total=progress.total, percent=progress.percent,
+                total_bytes=total_bytes, message=message)
 
-    notify("analyze", "Analyzing pasted JavaScript", current=0, total=1)
+    notify("analyze", "Analyzing pasted JavaScript", current=0, total=1,
+           total_bytes=len(code.encode("utf-8", errors="ignore")))
+
+    def _heartbeat(detail):
+        # A very large paste can occupy the engine for a while; keep the
+        # dashboard's heartbeat and message moving during it.
+        notify("analyze", f"Analyzing pasted JavaScript - {detail}")
+
     results = {}
-    _merge_into(results, filename, code, cancel_check=cancel_check)
+    _merge_into(results, filename, code, cancel_check=cancel_check,
+                progress_heartbeat=_heartbeat)
     _check_cancel(cancel_check)
     notify("correlate", "Correlating findings", current=1, total=1)
     progress.complete_stage()
@@ -144,14 +339,18 @@ def analyze_files(files, progress_callback=None, cancel_check=None):
     _check_cancel(cancel_check)
     progress = ProgressModel(stage_plan(mode="files"))
 
-    def notify(phase, message, current=None, total=None):
+    def notify(phase, message, current=None, total=None, total_bytes=None):
         progress.set_stage(phase, current=0 if current is None else current,
                            total=0 if total is None else total)
         _notify(progress_callback, phase=phase, stage=progress.stage,
                 stages=progress.stage_states(), current=progress.current,
-                total=progress.total, percent=progress.percent, message=message)
+                total=progress.total, percent=progress.percent,
+                total_bytes=total_bytes, message=message)
 
-    notify("analyze", "Analyzing uploaded files", current=0, total=total)
+    total_bytes = sum(len((item.get("code") or "").encode("utf-8", errors="ignore"))
+                      for item in files if isinstance(item, dict))
+    notify("analyze", "Analyzing uploaded files", current=0, total=total,
+           total_bytes=total_bytes)
     results = {}
     seen_hashes = set()
     used_names = set()
@@ -169,7 +368,12 @@ def analyze_files(files, progress_callback=None, cancel_check=None):
             unique = f"{stem}-{n}{ext or '.js'}"
             n += 1
         used_names.add(unique)
-        _merge_into(results, unique, code, seen_hashes=seen_hashes, cancel_check=cancel_check)
+        heartbeat = None
+        if len(code) >= HEARTBEAT_MIN_CHARS:
+            def heartbeat(detail, _name=unique):
+                notify("analyze", f"Analyzing {_name} - {detail}")
+        _merge_into(results, unique, code, seen_hashes=seen_hashes, cancel_check=cancel_check,
+                    progress_heartbeat=heartbeat)
         notify("analyze", f"Analyzed {unique} ({index + 1}/{total})",
                current=index + 1, total=total)
     progress.complete_stage()
@@ -220,11 +424,8 @@ def _is_followable_ref(ref):
     ref = str(ref or "").strip().split("?")[0].split("#")[0]
     if not ref:
         return False
-    if re.search(r"\.(?:js|mjs)$", ref):
-        return True
-    if "chunk-" in ref or "/static/js/" in ref or "assets/" in ref:
-        return True
-    return False
+    return bool(re.search(r"\.(?:js|mjs)$", ref)
+                or "chunk-" in ref or "/static/js/" in ref or "assets/" in ref)
 
 
 def extract_script_refs(content):
@@ -388,10 +589,9 @@ def _walk_imports(
 
 def _notify(callback, **kwargs):
     if callback:
-        try:
+        # Listener faults are never the scan's business.
+        with contextlib.suppress(Exception):
             callback(**kwargs)
-        except Exception:
-            pass
 
 
 def _attach_runtime(results, url, timeout=15, max_files=50, progress_callback=None, cancel_check=None, progress=None):
@@ -554,6 +754,10 @@ def analyze_url(
         "workspace": workspace,
         "workspace_obj": workspace_obj,
         "local_by_url": {},
+        # Workload discovered so far (entry scripts + nested chunks), used by
+        # the ETA model. Grows as discovery finds more; never reported above
+        # the user's file cap.
+        "expected_files": 0,
     }
     lock = threading.Lock()
     seen_hashes = set()
@@ -580,6 +784,7 @@ def analyze_url(
             percent=progress.percent,
             scanned_bytes=scanned_bytes(),
             total_bytes=max(1, total_bytes),
+            expected_files=state.get("expected_files", 0),
             message=message,
         )
 
@@ -618,6 +823,26 @@ def analyze_url(
     # while discovery itself reuses its bounded page fetch cache.
     if extract_js is _DISCOVERY_EXTRACT_JS and extract_inline_scripts is _DISCOVERY_EXTRACT_INLINE:
         js_links, inline_scripts, page_metadata = extract_page_assets(url, timeout=timeout, cancel_check=cancel_check)
+        # Deeper discovery: pages the site declares in robots.txt/sitemap.xml
+        # often lead to lazy chunks the landing page never references.
+        # Strictly bounded (SCRIPTSENTRY_SITEMAP_DISCOVERY=0 disables).
+        if os.environ.get("SCRIPTSENTRY_SITEMAP_DISCOVERY", "1").strip().lower() not in ("0", "false", "no", "off"):
+            extra_pages, sitemap_meta = sitemap_pages(url, timeout=timeout, cancel_check=cancel_check)
+            page_metadata["sitemap"] = sitemap_meta
+            for page_url in extra_pages:
+                _check_cancel(cancel_check)
+                page_scripts, page_inline, _page_meta = extract_page_assets(
+                    page_url, timeout=timeout, cancel_check=cancel_check)
+                for script in page_scripts:
+                    if script not in js_links:
+                        js_links.append(script)
+                state["script_edges"].extend(
+                    {"from": page_url, "to": script, "kind": "sitemap_page", "depth": 0}
+                    for script in page_scripts[:10])
+                # A sitemap page's inline scripts are analyzed like the entry
+                # page's, but bounded so a huge sitemap cannot explode work.
+                if len(inline_scripts) < 12:
+                    inline_scripts.extend(page_inline[: 12 - len(inline_scripts)])
     else:
         # Backward-compatible seam for embedders/tests that provide their own
         # page discovery implementation.
@@ -661,6 +886,7 @@ def analyze_url(
             progress=progress,
         )
 
+    state["expected_files"] = min(max_files, len(discovered) + len(inline_scripts))
     state["script_urls"].extend(discovered[:max_files])
     if direct_script_body is not None:
         state["script_urls"].append(url)
@@ -753,32 +979,122 @@ def analyze_url(
     for path, _, _, _, _ in initial_tasks:
         known_paths.add(path)
 
-    def merge_document(path, base_url, content):
-        """Thread-safe merge. Returns a skip reason, or None when added."""
+    def _task_heartbeat(content, phase, path):
+        if len(content or "") < HEARTBEAT_MIN_CHARS:
+            # Announce progress *inside* a long single-file analysis. Without
+            # this a 2 MB bundle is silent from "Scanning x..." to "Analyzed
+            # x", which is the single longest quiet stretch of a scan.
+            return None
+        file_name = os.path.basename(path) if path else "inline script"
+
+        def heartbeat(detail, _phase=phase, _name=file_name):
+            scan_progress(_phase, f"Analyzing {_name} - {detail}")
+
+        return heartbeat
+
+    def _skip_message(phase, reason, name):
+        scan_progress(phase, f"Skipping {reason.replace('_', ' ')} {name} ({len(results)}/{max_files})")
+
+    def prepare_task(task):
+        """Parent-side pre-analysis: announce, read, size/dedupe checks.
+
+        Returns ``(path, base_url, content, phase, depth)`` or None when the
+        task was skipped (reason already recorded/announced).
+        """
         _check_cancel(cancel_check)
+        path, base_url, inline_content, phase, depth = task
+        name = os.path.basename(path) if path else "inline script"
+        if inline_content is None:
+            # Announce the work BEFORE it starts. The old code only spoke after
+            # a file finished, so a big bundle silently monopolized a worker
+            # for a minute or more while the UI showed nothing new -- the
+            # single most "is it stuck?" moment of a scan.
+            scan_progress(phase, f"Scanning {name}…")
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                record_skip("read_error")
+                scan_progress(phase, f"Could not read {name} — skipped")
+                return None
+        else:
+            content = inline_content
         content = content or ""
         if len(content.encode("utf-8", errors="ignore")) > FILE_RULES.get("max_js_size", 2_000_000):
             record_skip("oversized_script")
-            return "oversized_script"
+            _skip_message(phase, "oversized_script", name)
+            return None
         digest = hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()
         with lock:
             if digest in seen_hashes:
                 state["skipped_files"] += 1
                 state["skipped_reasons"].add("duplicate_content")
-                return "duplicate_content"
-            seen_hashes.add(digest)
-        data = _scan_document(path, content, source_url=base_url, cancel_check=cancel_check)
+                already_seen = True
+            else:
+                seen_hashes.add(digest)
+                already_seen = False
+        if already_seen:
+            _skip_message(phase, "duplicate_content", name)
+            return None
+        return path, base_url, content, phase, depth
+
+    def complete_task(prepared, data, refs):
+        """Parent-side post-analysis: source maps, merge, progress, discovery."""
+        path, base_url, content, phase, depth = prepared
+        name = os.path.basename(path) if path else "inline script"
+        _expand_document_source_maps(data, content, source_url=base_url,
+                                     cancel_check=cancel_check)
+        with lock:
+            results[path] = data
+            state["path_to_url"][path] = base_url
+            state["script_urls"].append(base_url)
+        scan_progress(phase, f"Analyzed {name} ({len(results)}/{max_files})")
+        return discover_tasks(refs, base_url, depth)
+
+    def analyze_inline(prepared):
+        """Thread-engine analysis of one prepared task (also the fallback)."""
+        path, base_url, content, phase, depth = prepared
+        data = _scan_document(path, content, source_url=base_url,
+                              cancel_check=cancel_check,
+                              progress_heartbeat=_task_heartbeat(content, phase, path))
+        return complete_task(prepared, data, extract_script_refs(content))
+
+    def merge_document(path, base_url, content, phase="analyze"):
+        """Thread-safe merge used by non-BFS callers. Returns a skip reason."""
+        reason = None
+        if len((content or "").encode("utf-8", errors="ignore")) > FILE_RULES.get("max_js_size", 2_000_000):
+            record_skip("oversized_script")
+            return "oversized_script"
+        digest = hashlib.md5((content or "").encode("utf-8", errors="ignore")).hexdigest()
+        with lock:
+            if digest in seen_hashes:
+                state["skipped_files"] += 1
+                state["skipped_reasons"].add("duplicate_content")
+                reason = "duplicate_content"
+            else:
+                seen_hashes.add(digest)
+        if reason:
+            return reason
+        data = _scan_document(path, content, source_url=base_url, cancel_check=cancel_check,
+                              progress_heartbeat=_task_heartbeat(content, phase, path))
         with lock:
             results[path] = data
             state["path_to_url"][path] = base_url
             state["script_urls"].append(base_url)
         return None
 
-    def discover_tasks(content, base_url, depth):
+    def discover_tasks(refs, base_url, depth):
+        """Resolve discovered module refs into follow-up scan tasks.
+
+        ``refs`` are the raw module/bundler references (extracted inside the
+        worker when the process engine is active, where the parse is already
+        cached); this parent-side half does the URL joining, dedupe and the
+        chunk downloads.
+        """
         if depth >= max_depth:
             return []
         new_tasks = []
-        for ref in extract_script_refs(content):
+        for ref in refs:
             with lock:
                 at_cap = len(results) >= max_files
             if at_cap:
@@ -804,54 +1120,157 @@ def analyze_url(
                 if next_path in known_paths or len(results) + len(new_tasks) >= max_files:
                     continue
                 known_paths.add(next_path)
+                state["expected_files"] = min(max_files, max(
+                    int(state.get("expected_files", 0)), len(known_paths)))
                 state["script_urls"].append(absolute_url)
             new_tasks.append((next_path, absolute_url, None, "recursive_scan", depth + 1))
             state["script_edges"].append({"from": base_url, "to": absolute_url, "kind": "module_reference", "depth": depth + 1})
         return new_tasks
 
     def process_task(task):
-        _check_cancel(cancel_check)
-        path, base_url, inline_content, phase, depth = task
-        name = os.path.basename(path) if path else "inline script"
-        if inline_content is None:
-            # Announce the work BEFORE it starts. The old code only spoke after
-            # a file finished, so a big bundle silently monopolized a worker
-            # for a minute or more while the UI showed nothing new -- the
-            # single most "is it stuck?" moment of a scan.
-            scan_progress(phase, f"Scanning {name}…")
-        if inline_content is not None:
-            content = inline_content
-        else:
-            try:
-                with open(path, encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-            except Exception:
-                record_skip("read_error")
-                scan_progress(phase, f"Could not read {name} — skipped")
-                return []
-        skipped = merge_document(path, base_url, content)
-        if skipped:
-            scan_progress(phase, f"Skipping {skipped.replace('_', ' ')} {name} ({len(results)}/{max_files})")
+        """Thread-engine round worker: prepare, analyze in-process, discover."""
+        prepared = prepare_task(task)
+        if prepared is None:
             return []
-        scan_progress(phase, f"Analyzed {name} ({len(results)}/{max_files})")
-        return discover_tasks(content, base_url, depth)
+        try:
+            return analyze_inline(prepared) or []
+        except ScanCancelled:
+            raise
+        except Exception:
+            record_skip("worker_error")
+            return []
 
     # Bounded-parallel BFS rounds. Each round scans current assets with a
     # worker pool, then hands discovered chunks to the next round.
+    #
+    # Engine: the per-document analysis is CPU-bound (tree-sitter parse +
+    # Python AST walks), so by default it runs in a PROCESS pool -- the GIL
+    # would otherwise serialize all workers onto one core. The parent keeps
+    # every I/O duty: file reads, dedupe, chunk downloads, source-map
+    # fetching and all progress reporting (worker heartbeats arrive via a
+    # queue and are re-emitted here). SCRIPTSENTRY_ANALYZE_ENGINE=thread
+    # opts back into the legacy in-process pool, and a broken process pool
+    # (e.g. spawn restrictions) degrades to it automatically.
     current_round = initial_tasks
-    while current_round and len(results) < max_files:
-        _check_cancel(cancel_check)
+    pool = None
+    heartbeat_queue = None
+    if analyze_engine() != "thread":
+        try:
+            import multiprocessing as _mp
+
+            _ctx = _mp.get_context("spawn")
+            _manager = _ctx.Manager()
+            heartbeat_queue = _manager.Queue()
+            pool = ProcessPoolExecutor(max_workers=workers, mp_context=_ctx)
+        except Exception:
+            pool = None
+            heartbeat_queue = None
+
+    def _drain_heartbeats():
+        if heartbeat_queue is None:
+            return
+        while True:
+            try:
+                phase, name, detail = heartbeat_queue.get_nowait()
+            except Exception:
+                break
+            scan_progress(phase, f"Analyzing {name} - {detail}")
+
+    def _shutdown_pool(force=False):
+        nonlocal pool
+        if pool is None:
+            return
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+            if force:
+                for proc in list(getattr(pool, "_processes", {}).values() or []):
+                    with contextlib.suppress(Exception):
+                        proc.terminate()
+        except Exception:
+            pass
+        pool = None
+
+    def run_round_via_processes(tasks):
+        """One BFS round on the process pool; returns the next round's tasks."""
         next_round = []
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_map = {executor.submit(process_task, task): task for task in current_round}
-            for future in as_completed(future_map):
+        submitted = {}
+        for task in tasks:
+            prepared = prepare_task(task)  # may raise ScanCancelled
+            if prepared is None:
+                continue
+            path, base_url, content, phase, depth = prepared
+            try:
+                future = pool.submit(_analyze_document_worker, path, content,
+                                     base_url, heartbeat_queue, phase)
+                submitted[future] = prepared
+            except Exception:
+                record_skip("worker_error")
+        pending = set(submitted)
+        while pending:
+            try:
+                _check_cancel(cancel_check)
+            except ScanCancelled:
+                _shutdown_pool(force=True)
+                raise
+            done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+            _drain_heartbeats()
+            for future in done:
+                prepared = submitted[future]
                 try:
-                    next_round.extend(future.result() or [])
+                    data, refs = future.result()
                 except ScanCancelled:
                     raise
                 except Exception:
+                    if isinstance(future.exception(), (BrokenProcessPool, PicklingError)):
+                        # Pool is unusable -- analyze this document in-process
+                        # and let the outer loop fall back to threads.
+                        _shutdown_pool(force=True)
+                        try:
+                            next_round.extend(analyze_inline(prepared) or [])
+                        except ScanCancelled:
+                            raise
+                        except Exception:
+                            record_skip("worker_error")
+                        continue
                     record_skip("worker_error")
-        current_round = next_round[: max(0, max_files - len(results))]
+                    continue
+                try:
+                    next_round.extend(complete_task(prepared, data, refs) or [])
+                except ScanCancelled:
+                    _shutdown_pool(force=True)
+                    raise
+                except Exception:
+                    record_skip("worker_error")
+        return next_round
+
+    try:
+        while current_round and len(results) < max_files:
+            _check_cancel(cancel_check)
+            next_round = []
+            if pool is not None:
+                try:
+                    next_round = run_round_via_processes(current_round)
+                except ScanCancelled:
+                    raise
+                except Exception:
+                    # Any other pool-level failure: degrade to threads.
+                    _shutdown_pool(force=True)
+                    record_skip("worker_error")
+            if pool is None:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    future_map = {executor.submit(process_task, task): task for task in current_round}
+                    for future in as_completed(future_map):
+                        try:
+                            next_round.extend(future.result() or [])
+                        except ScanCancelled:
+                            raise
+                        except Exception:
+                            record_skip("worker_error")
+            current_round = next_round[: max(0, max_files - len(results))]
+    except BaseException:
+        _shutdown_pool(force=True)
+        raise
+    _shutdown_pool(force=False)
 
     results["__scan_summary__"] = {
         "total_discovered": len(discovered) + len(inline_scripts),
@@ -952,15 +1371,11 @@ def _finish_scan(
     runtime_results["__scan_summary__"] = runtime_summary
     workspace_obj = state.get("workspace_obj")
     if workspace_obj is not None:
-        try:
+        with contextlib.suppress(Exception):
             workspace_obj.cleanup()
-        except Exception:
-            pass
     else:
         workspace = state.get("workspace")
         if workspace:
-            try:
+            with contextlib.suppress(Exception):
                 shutil.rmtree(workspace, ignore_errors=True)
-            except Exception:
-                pass
     return runtime_results
