@@ -31,6 +31,14 @@ release yet.
 - **Coverage reporting is configured** (`[tool.coverage]` in
   `pyproject.toml`): `python3 -m coverage run -m unittest discover -s tests`
   then `python3 -m coverage report`.
+- **The landing page tells the truth about 2.2.0.** New feature cards for
+  scan history & diffing and the local-AI triage notes; the secrets,
+  attack-surface and dependencies cards now mention provider-format
+  validation, SPA hash-route hints and known-vulnerability matching; the
+  workflow lists the JSON/OpenAPI exports; the shipped "build-over-build
+  diffing" teaser is replaced by the real feature; and the setup guide
+  gained pip/pipx and Docker install paths beside the launcher and git
+  clone.
 
 ### An ETA that knows what the scan costs — and a quieter, politer UI
 

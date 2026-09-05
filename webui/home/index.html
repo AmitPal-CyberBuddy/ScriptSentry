@@ -113,6 +113,8 @@
         <span class="badge">⚖️ Evidence-weighted scoring</span>
         <span class="badge">🔐 Crypto &amp; key hunts</span>
         <span class="badge">🌐 API surface mapping</span>
+        <span class="badge">🕘 Scan history &amp; diffing</span>
+        <span class="badge">🤖 Local-model AI notes</span>
       </div>
 
       <div class="notice-grid">
@@ -151,7 +153,7 @@
         <article class="feature-card">
           <div class="feature-ico">🔐</div>
           <h3>Secrets &amp; Credentials</h3>
-          <p>JWTs, API keys, auth headers, crypto keys and IVs — filtered so placeholders and template markers don't cry wolf.</p>
+          <p>JWTs, API keys, auth headers, crypto keys and IVs — filtered so placeholders and template markers don't cry wolf, and every candidate is validated against its provider's key format before it is graded.</p>
         </article>
         <article class="feature-card">
           <div class="feature-ico">🕳️</div>
@@ -166,12 +168,12 @@
         <article class="feature-card">
           <div class="feature-ico">🌐</div>
           <h3>Attack Surface</h3>
-          <p>Endpoints, HTTP methods, GraphQL, parameters, headers, body fields and internal or hidden routes.</p>
+          <p>Endpoints, HTTP methods, GraphQL, parameters, headers, body fields — plus internal routes and hidden SPA hash-route hints (<code>#/admin/...</code>) — exportable as an OpenAPI-shaped API map.</p>
         </article>
         <article class="feature-card">
           <div class="feature-ico">📦</div>
           <h3>Dependencies &amp; Tech Stack</h3>
-          <p>Frameworks and libraries, plus framework-specific risky APIs: React <code>dangerouslySetInnerHTML</code>, Angular <code>bypassSecurityTrust*</code>, Vue <code>v-html</code>, jQuery sinks.</p>
+          <p>Frameworks and libraries, plus framework-specific risky APIs: React <code>dangerouslySetInnerHTML</code>, Angular <code>bypassSecurityTrust*</code>, Vue <code>v-html</code>, jQuery sinks — and bundled packages matched against known-vulnerability intel.</p>
         </article>
         <article class="feature-card">
           <div class="feature-ico">💾</div>
@@ -184,9 +186,19 @@
           <p>Encoded and hidden strings, suspicious runtime calls, and minified or packed bundle detection.</p>
         </article>
         <article class="feature-card">
+          <div class="feature-ico">🗂️</div>
+          <h3>Scan History &amp; Diffing</h3>
+          <p>Every local scan is remembered. Read <em>“3 new, 2 resolved since your last scan”</em> at a glance, revisit any past report, and diff a bundle against its previous build.</p>
+        </article>
+        <article class="feature-card">
           <div class="feature-ico">🖥️</div>
           <h3>Runtime Evidence <span class="tag">Optional</span></h3>
           <p>A local headless browser watches the live page: network traffic, DOM sinks, <code>eval</code>, storage and scripts loaded only at runtime.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-ico">🤖</div>
+          <h3>Local AI Triage Notes <span class="tag">Optional</span></h3>
+          <p>Point <code>--ai</code> at a model on your own machine (Ollama, LM Studio, llama.cpp) for a written brief of the riskiest findings. Cloud providers are deliberately unsupported — the privacy contract holds.</p>
         </article>
       </div>
     </section>
@@ -213,12 +225,12 @@
         <li class="step-card">
           <span class="step-num">3</span>
           <h3>Follow the Data</h3>
-          <p>Taint analysis traces source→sink paths, ranks them by evidence strength, and states the limits of every conclusion.</p>
+          <p>Taint analysis traces source→sink paths, ranks them by evidence strength, and states the limits of every conclusion. If the app ships source maps, the analysis reads your original source instead of the minified blob.</p>
         </li>
         <li class="step-card">
           <span class="step-num">4</span>
           <h3>Triage, Then Export</h3>
-          <p>Mark findings open, needs review, confirmed, false positive or informational, then export HTML, TXT, CSV or SARIF.</p>
+          <p>Mark findings open, needs review, confirmed, false positive or informational, then export HTML, TXT, CSV, SARIF or raw JSON — and hand the discovered API surface to your proxy as an OpenAPI map.</p>
         </li>
       </ol>
     </section>
@@ -313,6 +325,23 @@ python3 server.py --port 8000</pre>
           </div>
           <p class="modal-note">⚠️ If you change the port, update <code>webui/config.js</code> to the same port.</p>
         </details>
+
+        <details class="setup-details">
+          <summary>Prefer a package install? (pip / pipx / Docker)</summary>
+          <ol class="setup-steps">
+            <li>Clone the repo, then <b>install it:</b> <code>pip install .</code> (or <code>pipx install .</code>).</li>
+            <li><b>Start the dashboard:</b> <code>scriptsentry-server --port 8000</code> — same pairing-token flow as above.</li>
+            <li><b>Or scan from the CLI:</b> <code>scriptsentry --help</code> — URL/file scans and every report format without the web UI.</li>
+          </ol>
+          <div class="code-box">
+            <pre id="setup-code-pip">git clone https://github.com/AmitPal-CyberBuddy/ScriptSentry.git
+cd ScriptSentry
+pip install .
+scriptsentry-server --port 8000</pre>
+            <button class="btn ghost" data-copy="setup-code-pip" type="button">📋 Copy</button>
+          </div>
+          <p class="modal-note">🐳 <b>Docker</b> (Playwright Chromium for runtime evidence preinstalled): <code>docker build -t scriptsentry . &amp;&amp; docker run --rm -p 8000:8000 scriptsentry</code></p>
+        </details>
       </div>
     </section>
 
@@ -346,10 +375,10 @@ python3 server.py --port 8000</pre>
             <a class="btn ghost" href="https://www.linkedin.com/in/amitpal-wb/" target="_blank" rel="noopener noreferrer">💼 LinkedIn</a>
           </div>
           <p class="connect-note">
-            <b>Next on my bench: build-over-build diffing.</b> Snapshot a bundle today, snapshot
-            it again after the next release, and see only what changed — new secrets, new sinks,
-            new third parties — with a CI gate that fails on newly confirmed findings. Ideas are
-            welcome while I design it.
+            <b>Built in: build-over-build diffing.</b> Snapshot a bundle today, rescan it after
+            the next release, and see only what changed — new secrets, new sinks, new third
+            parties. The dashboard keeps your recent local scans and diffs them for you; kick
+            the tires and tell me what the diff gets wrong.
           </p>
         </div>
       </div>
