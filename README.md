@@ -74,7 +74,7 @@ plus an **investigate-first** priority list.
 
 ## Quick start
 
-Requires Python 3.8+.
+Requires Python 3.10+.
 
 ### Option A — one file (no clone needed)
 

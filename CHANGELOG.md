@@ -11,6 +11,57 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Release hygiene: shipped artifacts, launcher safety, and honest note colors
+
+- **`pip install .` / `pipx install .` now ship a working dashboard — the
+  wheel was never runnable before.** Two separate packaging bugs: the
+  `api/` package was missing from `[tool.setuptools.packages.find]`, so the
+  installed `scriptsentry-server` died on `from api import …`; and
+  `[tool.setuptools.data-files]` contained only the five top-level `webui/`
+  files — worse, listing the page subdirectories under one destination key
+  makes setuptools flatten them onto `index.html` (last one wins), so an
+  installed server served the changelog at `/`. Each UI subdirectory now has
+  its own destination key, all three pages and the brand pack ship, the
+  LICENSE file travels with the wheel, and
+  `tests/test_release_metadata.py` fails if any runtime UI file or package
+  is dropped. Verified end to end: build, install into a clean venv, serve —
+  `/`, `/home/`, `/tool/`, `/changelog/`, assets and `/api/health` all 200.
+- **The Python-version story is one number: 3.10+.** README claimed 3.8+,
+  `release.json` said `>=3.8`, DEPLOYMENT said 3.11+, and `pyproject.toml`
+  pinned `>=3.10`. Everything now quotes the pyproject floor (3.10 — the
+  code uses no 3.11-only syntax), and a new metadata test keeps the four
+  places from drifting apart again (it also checks ruff's
+  `target-version`).
+- **The Docker image stops carrying the kitchen sink.** A `.dockerignore`
+  excluding `.git`, caches, venvs and generated output was missing, so
+  `COPY . .` pulled the repository history into the image.
+- **The one-file launcher can't be tricked by a crafted archive.** The
+  tarball extraction stripped the top-level `ScriptSentry-<ref>/` prefix
+  but never validated the remainder, so a member name containing `..` could
+  write outside the cache (and link targets could point anywhere).
+  Extraction now rejects absolute paths, `.`/`..` segments, NUL bytes and
+  escaping symlink/hardlink targets before unpacking, and Python 3.12+'s
+  safe `data` filter runs as a second layer; a 12-case test suite
+  (`tests/test_launcher.py`) pins the behavior.
+- **The launcher's fallback install includes the preferred AST parser.**
+  When `pip install -r requirements.txt` fails partway, the per-package
+  fallback now also installs `tree-sitter` (+ JS/TS grammars) next to
+  esprima, and the failure guidance names tree-sitter instead of sounding
+  like esprima is the only parser. Playwright stays out by design — the pip
+  package is useless without the ~350MB browser download, and the engine
+  honestly reports runtime evidence as unavailable.
+- **Setup-dialog notes read as info, not a wall of warnings.** `.modal-note`
+  was globally amber (`#fbbf24 !important`), so neutral explanatory copy —
+  and even the positive "your scan travels with that link" handoff — looked
+  like cautions, and it overrode the dedicated `.authorized-note` color.
+  Plain `.modal-note` is now muted; only real cautions use
+  `.modal-note.warning` (mixed-content handoff, authorized-testing rule).
+- **The CI matrix's fallback leg actually tests the fallback.** The
+  `no-ast-parser` job removed only esprima while `requirements.txt` still
+  installed tree-sitter, so it silently ran the full mode. It now removes
+  every AST engine the repo installs, and the ruff job pins its version as
+  `ruff.toml` says the rules already are.
+
 ### Data & storage: the local-first claim, now verifiable
 
 - **A "⚙ Data & storage" trust surface lives in the setup dialog.** The

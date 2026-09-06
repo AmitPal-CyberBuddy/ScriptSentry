@@ -748,6 +748,16 @@ body {
 
 .modal-note {
   font-size: 12px !important;
+  color: var(--muted) !important;
+}
+
+/* Amber is reserved for actual cautions (mixed-content handoff, authorized-
+   testing reminder). Plain .modal-note is neutral supporting copy — the
+   setup dialog is full of informational notes and should not read as a wall
+   of warnings. Declared after .modal-note so the !important tie resolves
+   here; .authorized-note keeps its amber left rule from above. */
+.modal-note.warning,
+.authorized-note {
   color: #fbbf24 !important;
 }
 

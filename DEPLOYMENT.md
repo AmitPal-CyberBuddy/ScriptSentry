@@ -98,7 +98,7 @@ either install a headless Chromium on the host or set `SCRIPTSENTRY_RUNTIME_EVID
 
 ### 1. Host the Python backend
 
-Any Python 3.11+ host works. Free options:
+Any Python 3.10+ host works (the project's supported floor; 3.11+ is fine and recommended — the Docker image already uses 3.12). Free options:
 
 - **Render** — free Web Service, deploy from this repo, start command `python3 server.py --port $PORT`
 - **Railway** — `python3 server.py --port $PORT`

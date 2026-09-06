@@ -283,7 +283,7 @@
     const note = document.createElement("div");
     note.className = "handoff-note";
     note.innerHTML =
-      `<p class="modal-note" style="margin:0 0 10px">` +
+      `<p class="modal-note warning" style="margin:0 0 10px">` +
       `Your browser blocks this <b>https://</b> page from calling the engine at ` +
       `<code>${escapeHtml(localDashboardUrl())}</code> (<b>mixed content</b>). That's a browser rule, ` +
       `not a token problem — pasting the pairing token here can't fix it.</p>` +

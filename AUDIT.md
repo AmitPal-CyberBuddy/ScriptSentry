@@ -191,9 +191,69 @@ longer part of the parsed tree). Nothing in the UI or tests consumed it.
 - The pairing token is process-scoped. A publicly hosted backend still needs
   TLS, firewall/platform access controls, and a private deployment; the token
   must not be committed to `config.js` or a public repository.
-- `server.py` deliberately stays a dependency-free stdlib file. When the API
-  surface grows further it is planned to split into a small `api/` package
-  (`auth.py`, `cors.py`, `handlers.py`, `analysis_routes.py`, `report_routes.py`);
-  the handlers are already factored into discrete methods to make that mechanical.
+- `server.py` is a thin stdlib bootstrap over the `api/` package
+  (`settings.py`, `auth.py`, `cors.py`, `http.py`, `handlers.py`,
+  `analysis_routes.py`, `report_routes.py`) — the 714-line monolith split is
+  complete. The embedder contract (`from server import DashboardHandler,
+  API_TOKEN, WEB_ROOT`) is unchanged and pinned by tests.
 - Findings are deterministic triage signals, not proof of exploitation; always
   validate with server-side behavior and manual review.
+
+## Packaging & release-hygiene review (2026-09-06)
+
+A full-project pass (wheel, docs metadata, Docker, one-file launcher, CI,
+UI note colors) found and fixed a set of issues that only appear *outside* a
+repo checkout:
+
+1. **The installed wheel was never runnable.** `[tool.setuptools.packages.find]`
+   did not include `api` (only `ai*`, `analyzers*`, `core*`), so
+   `pip install .` / `pipx install .` produced a wheel whose
+   `scriptsentry-server` died instantly on `from api import …`.
+2. **Even when importable, the wheel served a broken dashboard.**
+   `[tool.setuptools.data-files]` shipped only the five top-level `webui/`
+   files. Worse, setuptools data-files does *not* preserve source
+   subdirectories: listing `webui/home/index.html` etc. under one destination
+   key flattens them onto the top-level `index.html` and the last one wins —
+   an installed server served the changelog at `/`. Each UI subdirectory now
+   has its own destination key (`webui/home`, `webui/tool`,
+   `webui/changelog`, `webui/assets`), and a mapping test reconstructs the
+   installed layout from pyproject.toml. Verified by building, installing,
+   and serving the wheel: `/`, `/home/`, `/tool/`, `/changelog/`, assets,
+   styles, app.js and `/api/health` all return 200 with the right contents.
+3. **Python-floor claims ran 3.8 → 3.10 → 3.11 → 3.10.** README said 3.8+,
+   release.json `>=3.8`, DEPLOYMENT 3.11+, pyproject `>=3.10` (authoritative,
+   and ruff targets py310). All now quote `>=3.10`; a consistency test pins
+   pyproject, release.json, README, DEPLOYMENT and ruff together.
+4. **The Docker image carried the repo history.** No `.dockerignore`
+   existed; `.git`, `__pycache__` and `.ruff_cache` entered the context via
+   `COPY . .`. Added one excluding VCS/caches/venvs/build output.
+5. **The one-file launcher trusted the archive.** `extract_engine` stripped
+   the `ScriptSentry-<ref>/` prefix but accepted `..` segments and absolute
+   paths in the remainder, and never validated symlink/hardlink targets.
+   It now rejects all of them and applies Python 3.12+'s safe `data`
+   extraction filter as a second layer (`tests/test_launcher.py`, 12 cases).
+6. **The launcher's fallback dependency path could not reach the preferred
+   AST parser.** Its per-package fallback list had esprima but not
+   tree-sitter; it now installs tree-sitter + JS/TS grammars too, and the
+   failure guidance names tree-sitter. Playwright stays excluded by design
+   (pip package alone is useless; runtime evidence degrades honestly).
+7. **The CI fallback leg was a no-op.** The `no-ast-parser` matrix job
+   uninstalled only esprima while `requirements.txt` kept tree-sitter
+   installed, so it ran the full mode. It now removes every AST engine the
+   repo installs. The ruff job also pins its version (the rule set already
+   was, per ruff.toml).
+8. **Setup-dialog notes read as a wall of warnings.** `.modal-note` was
+   globally amber `!important`, coloring neutral info — and even the
+   positive "your scan travels with that link" handoff — as cautions, while
+   overriding the dedicated `.authorized-note` color. Plain `.modal-note` is
+   now muted; real cautions opt in with `.modal-note.warning`.
+9. **AUDIT.md's own limitation list was stale** — it described the `api/`
+   split as planned; it has shipped.
+
+Also re-verified: every `innerHTML` render path in `webui/src/app/*.js`
+escapes untrusted report values (16 dynamic insertions, all wrapped in
+`escapeHtml` or numeric/fixed constants); live API/security probes pass
+(path traversal → 404, unauth export → 401, malformed JSON → 400,
+text/plain → 415, oversized body → 400, unknown DELETE → 404). Full suite:
+**466 tests pass (65 skipped)** after the fixes; ruff clean;
+`node --check` and both `--check` builds pass.
