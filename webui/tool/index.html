@@ -118,6 +118,11 @@
           </div>
         </div>
 
+        <div class="console-caps" id="console-caps" role="status" aria-live="polite" hidden>
+          <span class="console-cap" id="cap-runtime" title="Automatic once the engine is paired: URL scans are watched by a local headless browser when Playwright + Chromium are installed; pasted/uploaded code is always static. No toggle needed."></span>
+          <span class="console-cap" id="cap-ai" title="The dashboard never calls a model and needs no API key. For a written triage brief, run main.py --ai ollama (or --ai openai for LM Studio / llama.cpp) against a local server; it falls back to the built-in summary when offline.">🧠 AI notes: CLI only · no key</span>
+        </div>
+
         <div class="transfer-note" id="transfer-note" role="status" aria-live="polite" hidden></div>
 
         <div class="console-body">

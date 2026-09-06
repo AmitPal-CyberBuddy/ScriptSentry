@@ -202,11 +202,15 @@
         if (health.auth_required && !apiToken()) {
           backendConnected = false;
           backendChecked = true;
+          lastHealth = null;
+          renderConsoleCaps();
           setEngineStatus("checking", "Engine online · pairing token required");
           return false;
         }
         backendConnected = true;
         backendChecked = true;
+        lastHealth = health;
+        renderConsoleCaps();
         setEngineStatus("online", "Local engine connected · private analysis ready");
         // A scan handed off from the hosted page can start as soon as the
         // engine answers (a token stored in this tab counts as paired).
@@ -217,10 +221,38 @@
     } catch {
       backendConnected = false;
       backendChecked = true;
+      lastHealth = null;
+      renderConsoleCaps();
       setEngineStatus("offline", "Local engine offline — view the setup guide");
       return false;
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  /* One short line, not another option: tells the visitor what the engine
+   * will do automatically so the optional features are never a surprise.
+   * The dashboard never calls an AI model, so that chip is static copy. */
+  function renderConsoleCaps() {
+    const strip = $("#console-caps");
+    if (!strip) return;
+    const cap = $("#cap-runtime");
+    if (!cap) return;
+    if (!backendConnected || !lastHealth) {
+      strip.hidden = true;
+      cap.textContent = "";
+      return;
+    }
+    strip.hidden = false;
+    const rt = lastHealth.runtime_evidence || {};
+    if (rt.enabled && rt.playwright) {
+      cap.textContent = "🖥️ Runtime: on for URL scans";
+      cap.classList.remove("is-off");
+      cap.title = "URL scans are watched by a local headless browser — network, DOM sinks, eval, storage keys, runtime-loaded scripts. Pasting or uploading code stays static. Enabled automatically; no toggle needed.";
+    } else {
+      cap.textContent = "🚫 Runtime: static only";
+      cap.classList.add("is-off");
+      cap.title = "Playwright/Chromium is not installed on this machine (or runtime evidence is disabled). URL scans still work; the Runtime tab will say why. Install with: python -m playwright install chromium";
     }
   }
 

@@ -11,6 +11,21 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### The console answers before you ask
+
+- **One-line capability strip under "New scan".** After pairing, two short
+  chips appear instead of more options: `🖥️ Runtime: on for URL scans` (or
+  `static only` when Playwright/Chromium is missing — taken from
+  `/api/health`, so it is always what this engine will actually do) and
+  `🧠 AI notes: CLI only · no key` (the dashboard never calls a model, and
+  no API key is ever requested from the user). Hover explains the "why" in
+  one sentence; the scan itself needs no new choices — runtime evidence is
+  automatic for URL scans, and pasted/uploaded code is always static.
+- **The Runtime tab explains code/file scans.** "No runtime pass was run"
+  now says *why*: code & file scans are static — runtime evidence needs a
+  live URL (URL scans get the engine's actual reason, e.g. Playwright not
+  installed).
+
 ### Responsive pass: every section of the tool
 
 - **The footer silently lost its phone layout to a cascade bug.** The

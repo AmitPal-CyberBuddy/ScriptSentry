@@ -67,6 +67,25 @@ eval(userInput);
         self.assertIn("timeline", payload)
         self.assertEqual(len(payload["files"]), 1)
 
+    def test_console_explains_optional_features_in_one_line(self):
+        """The console answers 'do I need to choose? / do I need a key?'
+        at a glance: a compact capability strip fed by /api/health, not
+        another set of options."""
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        tool_html = (root / "webui" / "tool" / "index.html").read_text(encoding="utf-8")
+        app_js = (root / "webui" / "app.js").read_text(encoding="utf-8")
+        for needle in ('id="console-caps"', 'id="cap-runtime"', 'id="cap-ai"',
+                       "AI notes: CLI only", "no key"):
+            self.assertIn(needle, tool_html, f"tool page is missing {needle}")
+        # The runtime chip is dynamic from health; the AI chip is honest and
+        # static because the dashboard never calls a model.
+        self.assertIn("renderConsoleCaps", app_js)
+        self.assertIn("Runtime: on for URL scans", app_js)
+        self.assertIn("Runtime: static only", app_js)
+        self.assertIn("needs a live URL", app_js,
+                      "the Runtime tab must say why code/file scans have no pass")
+
     def test_dependency_scan_recognizes_bundle_aliases(self):
         code = """
         CryptoJS.AES.encrypt(data, key, { iv });

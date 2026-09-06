@@ -107,6 +107,11 @@
       <section class="release" id="unreleased-2-2-0-dev">
         <h2>[Unreleased] — 2.2.0-dev</h2>
         <p>The 2.2.0 accuracy &amp; triage work below is in development and not a published release yet.</p>
+        <h3 id="the-console-answers-before-you-ask">The console answers before you ask</h3>
+        <ul>
+          <li><strong>One-line capability strip under "New scan".</strong> After pairing, two short chips appear instead of more options: <code>🖥️ Runtime: on for URL scans</code> (or <code>static only</code> when Playwright/Chromium is missing — taken from <code>/api/health</code>, so it is always what this engine will actually do) and <code>🧠 AI notes: CLI only · no key</code> (the dashboard never calls a model, and no API key is ever requested from the user). Hover explains the "why" in one sentence; the scan itself needs no new choices — runtime evidence is automatic for URL scans, and pasted/uploaded code is always static.</li>
+          <li><strong>The Runtime tab explains code/file scans.</strong> "No runtime pass was run" now says <em>why</em>: code &amp; file scans are static — runtime evidence needs a live URL (URL scans get the engine's actual reason, e.g. Playwright not installed).</li>
+        </ul>
         <h3 id="responsive-pass-every-section-of-the-tool">Responsive pass: every section of the tool</h3>
         <ul>
           <li><strong>The footer silently lost its phone layout to a cascade bug.</strong> The trailing collapsed-navigation block re-declared <code>.footer-inner</code> as two columns for the whole ≤1040px range; being later in the file it beat the earlier 640px one-column rule, so a phone got two cramped link lists all the way down to 320px. The override now sits after that block, and a test pins the 1-column/2-column behavior at 480px and 700px.</li>

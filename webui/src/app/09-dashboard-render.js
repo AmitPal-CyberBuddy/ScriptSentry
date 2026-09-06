@@ -213,7 +213,10 @@
     if (!panel) return;
 
     if (!evidence.status) {
-      panel.innerHTML = `<div class="finding-chip"><span class="chip-title">No runtime pass was run for this analysis.</span></div>`;
+      const why = (payload.meta || {}).analysis_mode === "url"
+        ? "No runtime pass ran for this URL scan."
+        : "Code & file scans are static — runtime evidence needs a live URL.";
+      panel.innerHTML = `<div class="finding-chip"><span class="chip-title">${why}</span></div>`;
       return;
     }
 
