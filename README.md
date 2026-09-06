@@ -192,19 +192,30 @@ Launch the dashboard directly from the CLI:
 python3 main.py --serve --port 8000
 ```
 
-Optional AI-style summary (not required for any core analysis). The default
-`--ai` mode is the built-in rule-based summary; `--ai ollama` calls a **local**
-Ollama server (privacy-first — code never leaves your machine) and falls back
-to the rule-based summary if Ollama is offline:
+Optional AI-style summary (not required for any core analysis). By default
+`--ai` is `disabled` — no model is called at all. `--ai ollama` calls a
+**local** Ollama server, and `--ai openai` calls any **local**
+OpenAI-compatible server (LM Studio, llama.cpp server, vLLM). Both are
+privacy-first — code never leaves your machine — and both fall back to the
+built-in rule-based summary if the model server is offline:
 
 ```bash
+# Ollama (default endpoint http://localhost:11434)
 python3 main.py https://example.com --ai ollama --model llama3.2
+
+# LM Studio (default endpoint http://localhost:1234/v1) or any
+# OpenAI-compatible local server (llama.cpp: http://localhost:8080/v1)
+python3 main.py https://example.com --ai openai --model your-model-name
 ```
 
-Flags: `--ai {disabled,ollama}` (default `disabled` — no summary at all),
-`--model NAME` (Ollama model, default `llama3.2`), `--ollama-url URL`
-(default `http://localhost:11434`). Only structured findings — never raw
-source code — are sent to Ollama.
+Flags: `--ai {disabled,ollama,openai}` (default `disabled` — no summary at all),
+`--model NAME` (default `llama3.2`), `--ollama-url URL` (default
+`http://localhost:11434`), `--openai-base-url URL` (default
+`http://localhost:1234/v1`, i.e. LM Studio), `--api-key TOKEN` (only for local
+servers that request one). Only structured findings — never raw source code —
+are sent to the model, and the summary is written into the CLI reports
+(TXT/HTML/JSON/CSV/SARIF); the dashboard itself stays model-free. Hosted cloud
+providers are deliberately unsupported.
 
 ---
 
@@ -296,8 +307,10 @@ keeps stays on the machine where the engine runs. Here is the full story:
     stored report payloads) — useful before deleting anything.
 - **Never stored at all:** cookie values, request bodies, localStorage values,
   form inputs, or the source of code you paste/upload outside the scan that
-  uses it. Scan content never leaves your machine — AI notes come from your
-  own local model and exist only inside your stored report.
+  uses it. Scan content never leaves your machine. The optional **Local AI
+  triage notes** exist only in the CLI reports (`--ai`) — a local model reads
+  structured findings, never your source, and the dashboard itself never
+  calls a model.
 
 ---
 
