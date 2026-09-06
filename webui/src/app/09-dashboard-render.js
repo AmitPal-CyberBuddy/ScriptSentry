@@ -29,7 +29,13 @@
     const results = $("#results");
     results.classList.add("show");
     renderEngineNotes();
-    $("#result-meta").textContent = `${payload.meta.engine} · ${payload.meta.analysis_mode === "url" ? "Remote URL" : "Source snippet"} · ${payload.meta.generated_at || ""}`;
+    // Tell the visitor what kind of run this was — "Uploaded files" is a
+    // friendlier label than a generic "Source snippet" for a multi-file scan.
+    const metaSource = String(payload.meta.source || "");
+    const modeLabel = payload.meta.analysis_mode === "url"
+      ? "Remote URL"
+      : /file\(s\)$/.test(metaSource) ? "Uploaded files" : "Source snippet";
+    $("#result-meta").textContent = `${payload.meta.engine} · ${modeLabel} · ${payload.meta.generated_at || ""}`;
     renderSummary();
     renderPriorities();
     renderRiskBreakdown();
@@ -213,7 +219,10 @@
     if (!panel) return;
 
     if (!evidence.status) {
-      panel.innerHTML = `<div class="finding-chip"><span class="chip-title">No runtime pass was run for this analysis.</span></div>`;
+      const why = (payload.meta || {}).analysis_mode === "url"
+        ? "No runtime pass ran for this URL scan."
+        : "Code & file scans are static — runtime evidence needs a live URL.";
+      panel.innerHTML = `<div class="finding-chip"><span class="chip-title">${why}</span></div>`;
       return;
     }
 

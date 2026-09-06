@@ -561,6 +561,15 @@ body {
   gap: 8px;
   margin: 14px 0 6px;
 }
+
+/* Three setup tabs ("Easiest: one file", "Clone the Repo", "pip / Docker")
+   in a row are ~90px each on a phone -- labels crush into three narrow
+   columns. Below 560px they stack full-width instead. */
+@media (max-width: 560px) {
+  .setup-toggle {
+    flex-direction: column;
+  }
+}
 .setup-tab {
   flex: 1;
   padding: 8px 12px;
@@ -748,6 +757,16 @@ body {
 
 .modal-note {
   font-size: 12px !important;
+  color: var(--muted) !important;
+}
+
+/* Amber is reserved for actual cautions (mixed-content handoff, authorized-
+   testing reminder). Plain .modal-note is neutral supporting copy — the
+   setup dialog is full of informational notes and should not read as a wall
+   of warnings. Declared after .modal-note so the !important tie resolves
+   here; .authorized-note keeps its amber left rule from above. */
+.modal-note.warning,
+.authorized-note {
   color: #fbbf24 !important;
 }
 
@@ -855,6 +874,44 @@ body {
 
 .tab:not(.active):hover {
   color: var(--text);
+}
+
+/* One-line engine capability strip: tells the visitor what will happen
+ * automatically (runtime evidence, no AI/key) instead of making them ask.
+ * Deliberately short — the full explanation lives in the title tooltip. */
+.console-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 6px var(--space-md);
+  border-bottom: 1px solid var(--panel-border);
+  background: rgba(4, 9, 22, 0.35);
+}
+
+.console-caps[hidden] {
+  display: none;
+}
+
+.console-cap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  background: rgba(52, 211, 153, 0.08);
+  color: #b8f5dd;
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.console-cap.is-off {
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.07);
+  color: #fde9b8;
 }
 
 .console-body {
@@ -984,6 +1041,9 @@ select {
   font-size: 14px;
   cursor: pointer;
   font-family: inherit;
+  /* .btn is used on <a> too (hero CTAs, header links). Without this the
+     browser's default underline shows under button-shaped links. */
+  text-decoration: none;
   transition: 0.25s ease;
   color: #04131c;
   background: linear-gradient(135deg, #67e8f9, #38bdf8);
@@ -1020,6 +1080,7 @@ select {
   display: none;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
   color: var(--muted);
   font-size: 14px;
   margin-top: 16px;
@@ -1039,7 +1100,10 @@ select {
 }
 
 .progress-wrap {
-  flex: 1;
+  /* flex-basis 240px (with .loading flex-wrap) lets the progress block
+     take its own row on a phone and wrap the Cancel button below it,
+     instead of squeezing the bar into a sliver next to the button. */
+  flex: 1 1 240px;
   display: grid;
   gap: 7px;
   min-width: 0;
@@ -1210,8 +1274,47 @@ select {
   border-color: transparent;
 }
 
-.view-group {
+/* View groups are toggled by class, never inline style: an inline
+   `display: ""` falls back to this rule and the group stays hidden.
+   `:not(.is-active)` outranks `.grid`, so inactive grid-based overview
+   panels are hidden too; `.is-active` brings the active panel back, and
+   the `.grid` variant keeps the overview's grid layout when shown. */
+.view-group:not(.is-active) {
   display: none;
+}
+
+.view-group.is-active {
+  display: block;
+}
+
+.view-group.is-active.grid {
+  display: grid;
+}
+
+/* Multi-panel views (Scripts / Findings / Intelligence / Runtime) are a
+   two-column card grid, not one long card: side-by-side panels use the
+   width instead of leaving long empty bands, and align-items:start stops
+   a shorter panel from being stretched to its taller sibling's height.
+   Single-panel views (Runtime) span the full row. */
+.view-group.is-active.view-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-sm);
+  align-items: start;
+}
+
+.view-cards > .card {
+  min-width: 0;
+}
+
+.view-cards > .card:only-child {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 760px) {
+  .view-group.is-active.view-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* triage status chips */
@@ -2037,6 +2140,10 @@ svg.chart {
    ragged rows of unequal buttons. Laid out as a 2x2 grid they become
    one deliberate group with a consistent target size, and the status
    line spans above them rather than being squeezed between buttons. */
+/* The export cluster carries seven buttons now (six exports plus the
+   Data & storage entry point). The 2x2 grid keeps them one deliberate
+   group; the last button spans the full row so nothing is left as a
+   single ragged cell. */
 @media (max-width: 560px) {
   .results-header .row {
     display: grid;
@@ -2051,6 +2158,10 @@ svg.chart {
   .results-header .row .btn {
     justify-content: center;
     text-align: center;
+  }
+
+  .results-header .row .btn:last-child {
+    grid-column: 1 / -1;
   }
 }
 
@@ -3235,6 +3346,8 @@ main.wrap {
   color: #fde68a;
   font-size: 12.5px;
   line-height: 1.65;
+  /* Notes name files/limitations with long paths; never push the page. */
+  overflow-wrap: anywhere;
 }
 
 .engine-note b {
@@ -3597,6 +3710,17 @@ main[id] {
   }
 }
 
+/* The collapsed-nav block above keeps the footer at two columns for the
+   whole ≤1040px range; on a phone two link columns are cramped. This
+   override MUST come after that block: same specificity, source order
+   decides, and the earlier 640px rule in the Landing Responsive section
+   silently lost the cascade to it. */
+@media (max-width: 640px) {
+  .footer-inner {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* ============================================================
    CHANGELOG PAGE
    ------------------------------------------------------------
@@ -3807,6 +3931,13 @@ main[id] {
   margin-top: 12px;
 }
 
+.history-diff-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .history-diff {
   padding: 8px 12px;
   margin-bottom: 8px;
@@ -3814,6 +3945,129 @@ main[id] {
   background: rgba(56, 189, 248, 0.12);
   border: 1px solid rgba(56, 189, 248, 0.35);
   font-size: 0.92em;
+}
+
+/* ---------------- Data & storage trust panel ---------------- */
+
+.storage-section {
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--hairline);
+}
+
+.storage-title {
+  margin-bottom: var(--space-2xs);
+}
+
+.storage-copy {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.storage-facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  margin: 0 0 12px;
+  font-size: 12px;
+}
+
+.storage-fact {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.06);
+}
+
+.storage-fact-label {
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.storage-fact-value {
+  color: #dbeafe;
+  text-align: right;
+  overflow-wrap: anywhere;
+  max-width: 60%;
+}
+
+.storage-unknown {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.storage-scan-list {
+  margin: 0 0 10px;
+}
+
+.storage-scan-head {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 2px;
+}
+
+.storage-scan-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.storage-scan-row .history-when {
+  min-width: 44px;
+}
+
+.storage-scan-row .history-target {
+  flex: 1 1 100px;
+}
+
+.storage-scan-row .meta {
+  flex: 1 1 100%;
+  font-size: 12px;
+}
+
+.storage-scan-row .btn {
+  padding: 2px 10px;
+  font-size: 0.85em;
+}
+
+.storage-scan-list + #storage-show-all {
+  margin-top: 8px;
+}
+
+.storage-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.storage-token-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.storage-status {
+  margin-top: 8px !important;
+}
+
+/* Neutral confirmation variant (e.g. "✅ Deleted …") — no danger styling. */
+.storage-status.is-neutral {
+  border-color: rgba(52, 211, 153, 0.35);
+  background: rgba(52, 211, 153, 0.1);
+  color: #a7f3d0 !important;
 }
 
 .history-row {

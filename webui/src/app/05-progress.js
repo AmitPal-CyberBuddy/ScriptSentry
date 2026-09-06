@@ -124,6 +124,8 @@
   const SCAN_BUSY_SELECTORS = [
     "#analyze-code", "#analyze-url", "#analyze-files",
     "#export-html", "#export-txt", "#export-csv", "#export-sarif", "#export-json", "#export-openapi",
+    // Data & storage controls: no destructive storage action may race a scan.
+    "#storage-delete-all", "#storage-clear-browser", "#storage-export",
   ];
 
   function setScanBusy(busy) {
@@ -132,7 +134,8 @@
       if (btn) btn.disabled = busy;
     });
     // Historical report views must not fight a live scan for the dashboard.
-    document.querySelectorAll(".history-view").forEach((btn) => { btn.disabled = busy; });
+    document.querySelectorAll(".history-view, .storage-scan-view").forEach((btn) => { btn.disabled = busy; });
+    document.querySelectorAll(".storage-scan-delete").forEach((btn) => { btn.disabled = busy; });
   }
 
   function showLoading(text) {

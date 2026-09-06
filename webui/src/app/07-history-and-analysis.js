@@ -1,11 +1,22 @@
   let viewedScanNote = "";
+  // Same list the storage panel renders, so deletions stay consistent with
+  // what the history card shows without fetching twice.
+  let lastHistoryScans = [];
+  // Storage panel list mode: the history card fetches the newest 12; the
+  // storage section can expand to the full retained history (server caps at
+  // the newest 200) so "what this machine keeps" is inspectable in one place.
+  let storageScansAll = false;
+  let storageScansAllData = null;
+  let lastStorageCount = 0;
 
   function renderHistoryChip() {
     const box = $("#history-diff");
     if (!box) return;
+    const link = $("#history-storage-link");
     const h = payload && payload.history;
     if (!h || !h.previous_scan_id) {
       box.hidden = true;
+      if (link) link.hidden = true;
       return;
     }
     const parts = [];
@@ -14,6 +25,7 @@
     parts.push(`${h.unchanged_count || 0} unchanged`);
     box.innerHTML = `vs previous scan of this target: ${parts.join(" · ")}`;
     box.hidden = false;
+    if (link) link.hidden = false;
   }
 
   async function refreshHistory() {
@@ -22,6 +34,7 @@
     if (!list || !card) return;
     const data = await getJSON("/api/history?limit=12");
     const scans = Array.from(data.scans || []);
+    lastHistoryScans = scans;
     if (!scans.length && !viewedScanNote) {
       card.hidden = true;
       return;
@@ -176,5 +189,217 @@
     }
   }
 
+
+  /* ---------------- Data & storage trust panel ----------------
+   *
+   * The inventory /api/storage reports plus the destructive actions over it:
+   * per-scan delete, delete-all, browser-data clearing and the JSON export.
+   * Everything runs through the token-gated DELETE/GET surface; the UI only
+   * ever asks for confirmation before touching anything.
+   */
+
+  function setStorageStatus(message) {
+    const node = $("#storage-status");
+    if (!node) return;
+    node.textContent = message || "";
+    node.hidden = !message;
+    node.classList.toggle("is-neutral", !message || message.startsWith("✅"));
+  }
+
+  async function refreshStoragePanel() {
+    const facts = $("#storage-facts");
+    if (!facts) return;
+    try {
+      const data = await getJSON("/api/storage");
+      renderStorageFacts(data.storage || {});
+    } catch {
+      facts.innerHTML = `<span class="storage-unknown">Engine not paired — storage facts appear once the engine is connected.</span>`;
+    }
+    renderStorageScans();
+  }
+
+  function renderStorageFacts(storage) {
+    const facts = $("#storage-facts");
+    if (!facts || !storage) return;
+    lastStorageCount = storage.scan_count || 0;
+    const row = (label, value) =>
+      `<div class="storage-fact"><span class="storage-fact-label">${escapeHtml(label)}</span>` +
+      `<span class="storage-fact-value">${value}</span></div>`;
+    const when = (ts) => ts ? new Date(ts * 1000).toLocaleString() : "—";
+    const disabled = storage.history_enabled === false;
+    facts.innerHTML = [
+      row("History", disabled ? "recording disabled" : "recording (SQLite, WAL)"),
+      row("Database", disabled ? "—" : escapeHtml(storage.db_path || "")),
+      row("DB size", formatBytes(storage.db_size_bytes)),
+      row("WAL size", formatBytes(storage.wal_size_bytes)),
+      row("Scans", String(storage.scan_count || 0)),
+      row("Findings", String(storage.finding_count || 0)),
+      row("Oldest", when(storage.oldest_scan_at)),
+      row("Newest", when(storage.newest_scan_at)),
+      row("Retention", `newest ${storage.retention_limit || 200} scans`),
+      row("Stored report payloads", formatBytes(storage.report_bytes_stored)),
+      row("ETA calibration", formatBytes(storage.eta_calibration_bytes)),
+    ].join("");
+  }
+
+  function renderStorageScans() {
+    const list = $("#storage-scan-list");
+    if (!list) return;
+    const scans = (storageScansAll ? storageScansAllData : null) || lastHistoryScans || [];
+    const count = storageScansAll ? storageScansAllData.length : (lastStorageCount || scans.length);
+    list.innerHTML = scans.length
+      ? `<div class="storage-scan-head">Scans (${storageScansAll ? scans.length : count}${storageScansAll ? " · all" : " · newest"})</div>`
+        + scans.map((s) => {
+          const when = s.created_at ? new Date(s.created_at * 1000).toLocaleString() : "";
+          return `<div class="storage-scan-row">` +
+            `<span class="history-when">#${s.scan_id}</span>` +
+            `<span class="history-target" title="${escapeHtml(s.target || "")}">${escapeHtml(s.target || s.mode || "")}</span>` +
+            `<span class="meta">${when} · ${s.findings_total || 0} finding(s)</span>` +
+            (s.report_stored
+              ? `<button class="btn ghost btn-sm storage-scan-view" data-storage-view="${s.scan_id}" type="button">View</button>`
+              : "") +
+            `<button class="btn ghost btn-sm storage-scan-delete" data-storage-delete="${s.scan_id}" type="button">Delete</button>` +
+            `</div>`;
+        }).join("")
+      : `<span class="storage-unknown">No scans stored.</span>`;
+    list.querySelectorAll(".storage-scan-view").forEach((btn) => {
+      btn.addEventListener("click", () => viewHistoryScan(btn.dataset.storageView, btn));
+    });
+    list.querySelectorAll(".storage-scan-delete").forEach((btn) => {
+      btn.addEventListener("click", () => deleteHistoryScan(btn.dataset.storageDelete, btn));
+    });
+    const toggle = $("#storage-show-all");
+    if (toggle) {
+      toggle.hidden = !(count > (storageScansAll ? 0 : scans.length));
+      toggle.textContent = storageScansAll
+        ? "Show recent only"
+        : `Show all scans (${count})`;
+    }
+  }
+
+  async function toggleStorageScanList() {
+    const toggle = $("#storage-show-all");
+    storageScansAll = !storageScansAll;
+    if (storageScansAll) {
+      const data = await getJSON("/api/history?limit=200");
+      storageScansAllData = Array.from(data.scans || []);
+    } else {
+      storageScansAllData = null;
+    }
+    renderStorageScans();
+    if (toggle) toggle.disabled = false;
+  }
+
+  async function deleteHistoryScan(scanId, btn) {
+    if (!scanId) return;
+    if (!confirm(`Delete scan #${scanId} and its findings from this machine's history? This cannot be undone.`)) return;
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch(apiUrl(`/api/history/${encodeURIComponent(scanId)}`), {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body.ok === false) throw new Error(body.error || "Delete failed.");
+      setStorageStatus(`✅ Deleted scan #${scanId}.`);
+      await refreshHistory();
+      // Keep the storage list in the mode the user chose (all vs recent).
+      if (storageScansAll) {
+        const full = await getJSON("/api/history?limit=200");
+        storageScansAllData = Array.from(full.scans || []);
+      }
+      await refreshStoragePanel();
+    } catch (err) {
+      setStorageStatus(err && err.message ? err.message : "Delete failed.");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function deleteAllHistory() {
+    if (!confirm(
+      "Delete ALL scan history (scans, findings and stored reports) from this machine? "
+      + "This cannot be undone. ETA timing stats are kept — they are anonymous, not your content.",
+    )) return;
+    try {
+      const res = await fetch(apiUrl("/api/history"), { method: "DELETE", headers: authHeaders() });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body.ok === false) throw new Error(body.error || "Delete failed.");
+      setStorageStatus(`✅ Deleted ${body.deleted_scans || 0} scan(s) and ${body.deleted_findings || 0} finding(s).`);
+      await refreshHistory();
+      await refreshStoragePanel();
+    } catch (err) {
+      setStorageStatus(err && err.message ? err.message : "Delete failed.");
+    }
+  }
+
+  function clearBrowserData() {
+    const tokenBox = $("#storage-clear-token");
+    const alsoToken = !!(tokenBox && tokenBox.checked);
+    let message = "Clear this browser's stored data? This removes triage statuses (localStorage) and the last report payload (sessionStorage).";
+    if (alsoToken) {
+      message += " The pairing token will be removed too, and this tab will be logged out until you re-pair.";
+    }
+    if (!confirm(message)) return;
+    try { localStorage.removeItem("scriptsentry-triage"); } catch { /* storage unavailable */ }
+    try { sessionStorage.removeItem("scriptsentry_last_result"); } catch { /* storage unavailable */ }
+    if (alsoToken) setApiToken("");
+    setStorageStatus("✅ Cleared this browser's stored data." + (alsoToken ? " Pairing token removed." : ""));
+    renderStorageScans();
+  }
+
+  async function downloadHistoryExport() {
+    try {
+      const res = await fetch(apiUrl("/api/history/export?include=payload"), {
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Export failed.");
+      }
+      const blob = await res.blob();
+      saveBlob(blob, "scriptsentry-history-export.json");
+      setStorageStatus("✅ Download started — scriptsentry-history-export.json");
+    } catch (err) {
+      setStorageStatus(err && err.message ? err.message : "Export failed.");
+    }
+  }
+
+  function initStorageControls() {
+    const link = $("#history-storage-link");
+    if (link) {
+      link.addEventListener("click", () => {
+        openPrivacyModal();
+        setTimeout(() => {
+          const section = $("#storage-section");
+          if (section) section.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 40);
+      });
+    }
+    const deleteAll = $("#storage-delete-all");
+    if (deleteAll) deleteAll.addEventListener("click", deleteAllHistory);
+    const clear = $("#storage-clear-browser");
+    if (clear) clear.addEventListener("click", clearBrowserData);
+    const exportBtn = $("#storage-export");
+    if (exportBtn) exportBtn.addEventListener("click", downloadHistoryExport);
+    const showAll = $("#storage-show-all");
+    if (showAll) showAll.addEventListener("click", () => {
+      showAll.disabled = true;
+      toggleStorageScanList().finally(() => { showAll.disabled = false; });
+    });
+    // Always-visible entry point in the results header: the storage panel is
+    // deliberately inside the setup dialog (not a sixth view), so
+    // discoverability comes from one button that opens it and scrolls there.
+    const headerLink = $("#storage-open");
+    if (headerLink) {
+      headerLink.addEventListener("click", () => {
+        openPrivacyModal();
+        setTimeout(() => {
+          const section = $("#storage-section");
+          if (section) section.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 40);
+      });
+    }
+  }
 
   /* ---------------- Local file upload ---------------- */

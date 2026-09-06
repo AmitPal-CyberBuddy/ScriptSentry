@@ -241,7 +241,7 @@
     (payload.files || []).forEach((f) => (f.analysis_warnings || []).forEach((w) => warnings.add(w)));
     warnings.forEach((w) => notes.push(escapeHtml(w)));
     node.innerHTML = notes.length
-      ? notes.map((n) => `<div class="engine-note">⚠️ ${n}</div>`).join("")
+      ? notes.map((n) => `<div class="engine-note">ℹ️ ${n}</div>`).join("")
       : "";
     node.hidden = !notes.length;
   }

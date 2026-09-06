@@ -27,6 +27,9 @@
   let lastJobId = null;
   let backendConnected = false;
   let backendChecked = false;
+  // Latest /api/health payload: what the engine advertises (AST parser,
+  // runtime evidence availability) is what the console capability chips show.
+  let lastHealth = null;
   // The most recent analysis the user asked for. When the hosted page cannot
   // reach the engine (browsers block https → http://127.0.0.1), this travels
   // inside the handoff link so the local dashboard can fill in every setting

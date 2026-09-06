@@ -62,7 +62,11 @@ jobs:
 
       - name: Remove the AST parser (fallback-mode matrix entry)
         if: matrix.mode == 'no-ast-parser'
-        run: python -m pip uninstall -y esprima
+        # requirements.txt installs BOTH engines (tree-sitter + esprima), so
+        # removing only esprima left tree-sitter available and the matrix ran
+        # the full mode by accident — the regex-fallback degradation was never
+        # exercised in CI. Remove every AST engine the repo installs.
+        run: python -m pip uninstall -y esprima tree-sitter tree-sitter-javascript tree-sitter-typescript
 
       - name: Show dependency state
         run: |
@@ -101,6 +105,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install ruff
-        run: python -m pip install ruff
+        run: python -m pip install "ruff==0.16.6"  # pinned; ruff.toml pins the rule set by design
       - name: Lint
         run: ruff check . --output-format concise

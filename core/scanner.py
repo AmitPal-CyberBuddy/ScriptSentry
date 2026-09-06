@@ -499,13 +499,17 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
     # =========================================
     _raise_if_cancelled(cancel_check)
     _beat("AST parse")
+    filename = results.get("loc_id", "inline.js")
     try:
-        results["ast_analysis"] = analyze_ast(content, filename=results.get("loc_id", "inline.js"))
+        results["ast_analysis"] = analyze_ast(content, filename=filename)
     except Exception as exc:
         results["ast_analysis"] = {"available": False, "parse_error": "ast_analyzer_failed"}
         results["analyzer_errors"].append({"analyzer": "ast", "error": str(exc)[:240]})
     if results.get("ast_analysis", {}).get("parse_error"):
-        results["analysis_warnings"].append("AST parser could not fully parse this dialect; conservative regex fallbacks were used.")
+        results["analysis_warnings"].append(
+            f"AST parsing skipped for {filename} (unparseable dialect or non-JS content); "
+            "it was analyzed with conservative regex patterns instead. Other files used full AST analysis."
+        )
 
     # =========================================
     # 📦 DEPENDENCY / ECOSYSTEM SCAN

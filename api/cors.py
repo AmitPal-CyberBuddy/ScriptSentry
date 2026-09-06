@@ -38,7 +38,7 @@ class CorsMixin:
         if origin and is_allowed_origin(origin):
             for name, value in self._cors_header_values(origin):
                 self.send_header(name, value)
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, X-ScriptSentry-Token")
         self.send_header("Access-Control-Max-Age", "300")
         self.end_headers()

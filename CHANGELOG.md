@@ -2,6 +2,9 @@
 
 All notable changes to ScriptSentry are listed here, newest first.
 
+> Note for 2.2.0-dev: release entries below are grouped by theme; the newest
+> one is always first.
+
 > 🚧 **Status: under active development.** ScriptSentry is still a pre-release
 > tool: it is already useful for triage, but features and detection rules keep
 > improving, and details may change between versions.
@@ -10,6 +13,201 @@ All notable changes to ScriptSentry are listed here, newest first.
 
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
+
+### Visitor-level review: the tool explains itself to a first-timer
+
+- **Button links are no longer underlined.** `.btn` is used on `<a>` elements
+  (hero "Open the Analyzer", header "Go to tool", connect buttons), and the
+  base rule never disabled the browser's default underline — only two scoped
+  rules happened to patch it. The base rule now sets `text-decoration: none`.
+- **"Optional" features say how you get them.** The landing cards for Runtime
+  Evidence and Local AI Triage Notes had an "Optional" tag but never said how
+  to enable them. Runtime now states it runs *automatically* for URL scans
+  after `python -m playwright install chromium`, and AI notes state they are
+  *CLI only* — the dashboard never calls a model and never asks for an API
+  key, so a visitor is never left searching for a setting that doesn't exist.
+- **Before pairing, the console says what to do.** Instead of hiding the
+  capability strip when the engine is offline, it shows a
+  `🔌 Start the engine first — see the 2-minute guide` chip that opens the
+  setup dialog on click — a first-time visitor no longer has to guess that
+  this page can't scan on its own.
+- **Export buttons explain themselves.** HTML/TXT/CSV/SARIF got one-line
+  tooltips, and the results header now labels a multi-file run
+  "Uploaded files" instead of the generic "Source snippet".
+- **The footer "view the setup guide" link pointed at the wrong section**
+  (How It Works instead of Setup). It now anchors to the actual Setup section
+  on the landing and changelog pages; on the tool page it still opens the
+  setup dialog (which is the guide there).
+
+### The console answers before you ask
+
+- **One-line capability strip under "New scan".** After pairing, two short
+  chips appear instead of more options: `🖥️ Runtime: on for URL scans` (or
+  `static only` when Playwright/Chromium is missing — taken from
+  `/api/health`, so it is always what this engine will actually do) and
+  `🧠 AI notes: CLI only · no key` (the dashboard never calls a model, and
+  no API key is ever requested from the user). Hover explains the "why" in
+  one sentence; the scan itself needs no new choices — runtime evidence is
+  automatic for URL scans, and pasted/uploaded code is always static.
+- **The Runtime tab explains code/file scans.** "No runtime pass was run"
+  now says *why*: code & file scans are static — runtime evidence needs a
+  live URL (URL scans get the engine's actual reason, e.g. Playwright not
+  installed).
+
+### Responsive pass: every section of the tool
+
+- **The footer silently lost its phone layout to a cascade bug.** The
+  trailing collapsed-navigation block re-declared `.footer-inner` as two
+  columns for the whole ≤1040px range; being later in the file it beat the
+  earlier 640px one-column rule, so a phone got two cramped link lists all
+  the way down to 320px. The override now sits after that block, and a test
+  pins the 1-column/2-column behavior at 480px and 700px.
+- **The export cluster no longer leaves a ragged cell.** It carries seven
+  buttons now (six exports + 💾 Data & storage); on a phone the 2×2 grid
+  left the seventh alone in a column. The last button spans the full row.
+- **Setup dialog install tabs stack on a phone.** "Easiest: one file",
+  "Clone the Repo" and "pip / Docker" were three ~90px columns at 320px,
+  crushing their labels; below 560px they stack full-width.
+- **The scan progress row wraps its Cancel button.** `.loading` now wraps
+  and the progress block gets a 240px basis, so on a phone the bar takes a
+  full row and Cancel drops underneath instead of squeezing it.
+- **Engine notes can never push the page sideways.** Notes name files and
+  limitations with long paths; they now `overflow-wrap: anywhere`.
+- Every fix is pinned by the new `ConsoleResponsiveTest` (31 responsive
+  contract tests total), which also re-verified the existing invariants:
+  card grids collapse, view tabs form a rectangular 2-column block, the
+  findings filter wraps, the metrics stay 4-up/2-up, tap targets hit 44px
+  on touch, and no container keeps a track wider than the viewport.
+
+### Release hygiene: shipped artifacts, launcher safety, and honest note colors
+
+- **`pip install .` / `pipx install .` now ship a working dashboard — the
+  wheel was never runnable before.** Two separate packaging bugs: the
+  `api/` package was missing from `[tool.setuptools.packages.find]`, so the
+  installed `scriptsentry-server` died on `from api import …`; and
+  `[tool.setuptools.data-files]` contained only the five top-level `webui/`
+  files — worse, listing the page subdirectories under one destination key
+  makes setuptools flatten them onto `index.html` (last one wins), so an
+  installed server served the changelog at `/`. Each UI subdirectory now has
+  its own destination key, all three pages and the brand pack ship, the
+  LICENSE file travels with the wheel, and
+  `tests/test_release_metadata.py` fails if any runtime UI file or package
+  is dropped. Verified end to end: build, install into a clean venv, serve —
+  `/`, `/home/`, `/tool/`, `/changelog/`, assets and `/api/health` all 200.
+- **The Python-version story is one number: 3.10+.** README claimed 3.8+,
+  `release.json` said `>=3.8`, DEPLOYMENT said 3.11+, and `pyproject.toml`
+  pinned `>=3.10`. Everything now quotes the pyproject floor (3.10 — the
+  code uses no 3.11-only syntax), and a new metadata test keeps the four
+  places from drifting apart again (it also checks ruff's
+  `target-version`).
+- **The Docker image stops carrying the kitchen sink.** A `.dockerignore`
+  excluding `.git`, caches, venvs and generated output was missing, so
+  `COPY . .` pulled the repository history into the image.
+- **The one-file launcher can't be tricked by a crafted archive.** The
+  tarball extraction stripped the top-level `ScriptSentry-<ref>/` prefix
+  but never validated the remainder, so a member name containing `..` could
+  write outside the cache (and link targets could point anywhere).
+  Extraction now rejects absolute paths, `.`/`..` segments, NUL bytes and
+  escaping symlink/hardlink targets before unpacking, and Python 3.12+'s
+  safe `data` filter runs as a second layer; a 12-case test suite
+  (`tests/test_launcher.py`) pins the behavior.
+- **The launcher's fallback install includes the preferred AST parser.**
+  When `pip install -r requirements.txt` fails partway, the per-package
+  fallback now also installs `tree-sitter` (+ JS/TS grammars) next to
+  esprima, and the failure guidance names tree-sitter instead of sounding
+  like esprima is the only parser. Playwright stays out by design — the pip
+  package is useless without the ~350MB browser download, and the engine
+  honestly reports runtime evidence as unavailable.
+- **Setup-dialog notes read as info, not a wall of warnings.** `.modal-note`
+  was globally amber (`#fbbf24 !important`), so neutral explanatory copy —
+  and even the positive "your scan travels with that link" handoff — looked
+  like cautions, and it overrode the dedicated `.authorized-note` color.
+  Plain `.modal-note` is now muted; only real cautions use
+  `.modal-note.warning` (mixed-content handoff, authorized-testing rule).
+- **The CI matrix's fallback leg actually tests the fallback.** The
+  `no-ast-parser` job removed only esprima while `requirements.txt` still
+  installed tree-sitter, so it silently ran the full mode. It now removes
+  every AST engine the repo installs, and the ruff job pins its version as
+  `ruff.toml` says the rules already are.
+
+### Data & storage: the local-first claim, now verifiable
+
+- **A "⚙ Data & storage" trust surface lives in the setup dialog.** The
+  aside column (the three-page architecture is unchanged) gains a section
+  backed by `GET /api/storage`: history enabled/disabled, the SQLite DB and
+  WAL file sizes, scan and finding counts, oldest/newest scan timestamps,
+  the retention limit, stored report-payload bytes, the ETA-calibration
+  file size, and which browser keys each piece uses (triage statuses in
+  `localStorage`; last report and pairing token in `sessionStorage`). A
+  small "where is this stored?" link next to the history diff chip after a
+  scan opens the same section.
+- **Deletion is a real wipe, not a row delete.** `DELETE
+  /api/history/<scan_id>` removes one scan and its findings;
+  `DELETE /api/history` closes the SQLite handle, deletes `history.db`,
+  `-wal` and `-shm` (row deletes aren't enough in WAL mode — a stale open
+  handle can resurrect deleted rows), and recreates an empty database from
+  the shared schema. Anonymous ETA timing stats in `eta_calibration.json`
+  are kept by default (they aren't user content) and only removed with the
+  explicit `include_calibration=true` flag.
+- **Destructive routes follow the same security model as analysis.**
+  They are DELETE-only, require the pairing token, and reject untrusted
+  origins; the UI confirms every destructive action and its controls are
+  disabled while a scan runs (the existing `setScanBusy` pattern).
+- **Your data can be browsed and downloaded.** The panel reuses the scan
+  list already fetched for the history card, each row with a delete button,
+  and `GET /api/history/export` downloads the entire history — scans,
+  findings and diffs — as JSON in the same attachment style as the report
+  exports, with stored report payloads included only behind
+  `include=payload`.
+- **The copy states the negatives.** Never stored: cookie values, request
+  bodies, localStorage values, form inputs. Scan content never leaves the
+  machine — AI notes come from the user's own local model and exist only
+  inside the stored report; URL downloads/uploads use a temporary
+  workspace deleted after the scan.
+- **Every stored scan is reachable from the panel.** The history card showed
+  only the newest 12, so with a full retained history (up to 200 scans by
+  default) older scans were invisible unless you exported everything. The
+  trust panel now has a **Show all scans** toggle (fetches the retained
+  history in one place), each row carries **View** (reopen the stored report
+  — same flow as the history card) alongside **Delete**, and a persistent
+  **💾 Data & storage** button in the results header opens the panel, so the
+  storage story is discoverable without adding a sixth view. Scan-busy
+  protection covers the new buttons too.
+- **The README now tells the visitor what happens to their data.**
+  A "Your data: history, inspection & deletion" section lists exactly what is
+  kept (SQLite history, WAL, report payloads, ETA timings, browser keys) and
+  where, the retention defaults and env switches, and every way to inspect,
+  export, or delete it. The "How it works" section explains the
+  discover → parse → model → verify → triage pipeline, and Quick start gained
+  the pip/pipx and Docker paths now that the installed wheel actually works
+  (see release hygiene below).
+
+### Dashboard fixes: panels that would not show, and notices that read as errors
+
+- **Findings / Scripts / Intelligence / Runtime panels now actually appear.**
+  `activateView()` used to reveal the selected tab by setting
+  `group.style.display = ""`, which removes the inline style and lets the
+  panel fall back to the stylesheet's `display: none`; only the Overview
+  panels ever surfaced, because they also carry `.grid` (which sets its own
+  display later in the file). Tabs now toggle an `.is-active` class instead,
+  with a stylesheet rule whose specificity wins over both `.view-group` and
+  `.grid` (and keeps the Overview grid layout when active). A new
+  source-contract test in `tests/test_responsive_ui.py` fails if inline-style
+  revealing is reintroduced.
+- **The AST fallback notice is honest instead of alarming.** When a file's
+  dialect cannot be parsed, the engine note now names that file and explains
+  that only that file fell back to conservative regex patterns while the rest
+  used full AST analysis. Engine notes render with a neutral `ℹ️` marker
+  (previously `⚠️`), so genuine warnings keep their warning signal and
+  informational degradation is not mistaken for an error.
+- **The analysis dashboard stops reading as one long card.** Findings,
+  Scripts, Intelligence and Runtime panels used to stack full-width cards,
+  leaving long empty bands below short panels. Each of those views is now a
+  single two-column card grid (one column on narrow screens), so panels sit
+  side by side, shorter panels are no longer stretched to fill gap, and a
+  view with one panel (Runtime) still spans the full row. A layout
+  source-contract test in `tests/test_responsive_ui.py` fails if a view
+  regresses to stacked full-width cards.
 
 ### The interface, recomposed
 

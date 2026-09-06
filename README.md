@@ -72,9 +72,37 @@ plus an **investigate-first** priority list.
 
 ---
 
+## How it works
+
+1. **Discover.** Point ScriptSentry at a URL and it walks the page like a
+   browser would: inline scripts, `<script src>` and module tags, preloads,
+   dynamic `import()` / `require()` edges, and bundler chunk references
+   (Webpack, Vite, Next, Parcel). Direct `.js`/`.mjs` links are analyzed as
+   the target themselves. Paste or upload code and you skip straight to step 2.
+2. **Parse every script with the best engine available.** A real JavaScript
+   AST (tree-sitter, falling back to esprima, then conservative line-based
+   patterns) turns each file into a behavior model — no string-only guessing.
+3. **Model behavior, not just suspicious strings.** Taint analysis follows
+   data from sources (`location`, `postMessage`, storage, cookies, forms,
+   network responses) to sinks (`innerHTML`, `eval`, redirects, `fetch`),
+   with alias/property tracking and sanitizer awareness. Secrets, crypto
+   misuse, dependencies, API surface and obfuscation become evidence the
+   model can reason about.
+4. **Verify what's provable.** Optionally rerun the page in a local headless
+   Chromium: live network calls, DOM sinks, `eval`, storage and cookie access,
+   and scripts that only load after execution. Each finding carries severity,
+   confidence, triage status and analysis quality — never an overclaim.
+5. **Explain and triage.** The dashboard renders an itemized 0–100 risk score,
+   an investigate-first priority list, Actionable Findings vs. Security
+   Observations, per-script inventory, and exports (HTML/TXT/CSV/SARIF/JSON).
+
+Everything above runs on your machine. The hosted page is only the interface.
+
+---
+
 ## Quick start
 
-Requires Python 3.8+.
+Requires Python 3.10+.
 
 ### Option A — one file (no clone needed)
 
@@ -90,7 +118,18 @@ You can also grab it straight from the hosted dashboard: the setup modal (shown
 when the local engine isn't running) has a **⬇️ Download scriptsentry.py**
 button.
 
-### Option B — clone the repo
+### Option B — install with pip (or pipx)
+
+```bash
+# Installs the engine and the `scriptsentry-server`/`scriptsentry` commands
+pip install .
+scriptsentry-server --port 8000
+```
+
+`pipx install .` works too and keeps the tool in its own isolated
+environment. The same package is what the Docker image runs.
+
+### Option C — clone the repo
 
 ```bash
 # 1. Get the project and install dependencies
@@ -105,6 +144,18 @@ python -m playwright install chromium
 # 3. Start the dashboard
 python3 server.py
 ```
+
+### Option D — Docker
+
+```bash
+docker build -t scriptsentry .
+docker run --rm -p 8000:8000 scriptsentry
+```
+
+The image preinstalls Playwright's Chromium, so the optional runtime-evidence
+pass works out of the box.
+
+### Pairing the dashboard
 
 Open the URL the server prints (default `http://127.0.0.1:8000`). Locally, `/`
 serves the **analysis console** (`webui/tool/index.html`) directly; the
@@ -141,19 +192,30 @@ Launch the dashboard directly from the CLI:
 python3 main.py --serve --port 8000
 ```
 
-Optional AI-style summary (not required for any core analysis). The default
-`--ai` mode is the built-in rule-based summary; `--ai ollama` calls a **local**
-Ollama server (privacy-first — code never leaves your machine) and falls back
-to the rule-based summary if Ollama is offline:
+Optional AI-style summary (not required for any core analysis). By default
+`--ai` is `disabled` — no model is called at all. `--ai ollama` calls a
+**local** Ollama server, and `--ai openai` calls any **local**
+OpenAI-compatible server (LM Studio, llama.cpp server, vLLM). Both are
+privacy-first — code never leaves your machine — and both fall back to the
+built-in rule-based summary if the model server is offline:
 
 ```bash
+# Ollama (default endpoint http://localhost:11434)
 python3 main.py https://example.com --ai ollama --model llama3.2
+
+# LM Studio (default endpoint http://localhost:1234/v1) or any
+# OpenAI-compatible local server (llama.cpp: http://localhost:8080/v1)
+python3 main.py https://example.com --ai openai --model your-model-name
 ```
 
-Flags: `--ai {disabled,ollama}` (default `disabled` — no summary at all),
-`--model NAME` (Ollama model, default `llama3.2`), `--ollama-url URL`
-(default `http://localhost:11434`). Only structured findings — never raw
-source code — are sent to Ollama.
+Flags: `--ai {disabled,ollama,openai}` (default `disabled` — no summary at all),
+`--model NAME` (default `llama3.2`), `--ollama-url URL` (default
+`http://localhost:11434`), `--openai-base-url URL` (default
+`http://localhost:1234/v1`, i.e. LM Studio), `--api-key TOKEN` (only for local
+servers that request one). Only structured findings — never raw source code —
+are sent to the model, and the summary is written into the CLI reports
+(TXT/HTML/JSON/CSV/SARIF); the dashboard itself stays model-free. Hosted cloud
+providers are deliberately unsupported.
 
 ---
 
@@ -208,6 +270,47 @@ pairing token for analysis, rejects credential-bearing or private/loopback
 target URLs, and pins each outbound hop to the public IPs it validated at scan
 time (DNS-rebinding resistant) so it can't be abused as an open proxy.
 Full hosting details are in [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
+---
+
+---
+
+## Your data: history, inspection & deletion
+
+ScriptSentry has **no accounts, no profiles, no cloud sync** — everything it
+keeps stays on the machine where the engine runs. Here is the full story:
+
+- **Scan history lives in a local SQLite database** (`history.db`, WAL mode) in
+  the engine's state directory
+  (`~/.cache/scriptsentry`, or `$SCRIPTSENTRY_STATE_DIR`). Each entry keeps
+  the target, when it was scanned, file/finding counts, a summary diff against
+  the previous scan of the same target, and the full report payload (capped at
+  16 MB per scan). Only the newest **200** scans are retained by default
+  (`SCRIPTSENTRY_HISTORY_MAX` overrides it; `SCRIPTSENTRY_HISTORY=0` disables
+  recording entirely).
+- **Anonymous timing stats** (`eta_calibration.json`) help the engine estimate
+  progress; they contain no scan content.
+- **In your browser:** triage status changes go to `localStorage`; the most
+  recent report and the pairing token for that tab go to `sessionStorage`
+  (cleared when the tab closes). Only keys are ever described — never values.
+- **Everything is inspectable and deletable.** The **💾 Data & storage** button
+  in the dashboard header opens the trust panel inside the setup dialog. It
+  shows live facts (history enabled/disabled, database and WAL sizes, scan and
+  finding counts, oldest/newest scan, retention, stored report bytes) and lists
+  your scans:
+  - **View** any stored scan to reopen its full report;
+  - **Delete** a single scan — or **🗑 Delete all history** (scans, findings,
+    stored reports; anonymous ETA stats stay unless you wipe them too);
+  - **🧹 Clear this browser's data** (triage statuses + last report, with an
+    opt-in checkbox to also remove the pairing token and log the tab out);
+  - **⬇️ Download all data** as one JSON export (scans, findings, diffs and
+    stored report payloads) — useful before deleting anything.
+- **Never stored at all:** cookie values, request bodies, localStorage values,
+  form inputs, or the source of code you paste/upload outside the scan that
+  uses it. Scan content never leaves your machine. The optional **Local AI
+  triage notes** exist only in the CLI reports (`--ai`) — a local model reads
+  structured findings, never your source, and the dashboard itself never
+  calls a model.
 
 ---
 

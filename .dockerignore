@@ -1,0 +1,18 @@
+# Keep the build context (and therefore the image) to runtime code only.
+.git
+.github
+.gitignore
+.gitattributes
+__pycache__
+*.py[cod]
+.venv
+venv
+.pytest_cache
+.ruff_cache
+.mypy_cache
+build
+dist
+output
+reports
+*.egg-info
+.DS_Store

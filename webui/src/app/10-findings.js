@@ -174,7 +174,7 @@
       t.tabIndex = on ? 0 : -1;
     });
     $$(".view-group").forEach((group) => {
-      group.style.display = group.dataset.view === view ? "" : "none";
+      group.classList.toggle("is-active", group.dataset.view === view);
     });
     window.__activeView = view;
   }

@@ -73,6 +73,7 @@
     $("#close-modal").addEventListener("click", closePrivacyModal);
     $("#retry-backend").addEventListener("click", retryBackend);
     $("#cancel-scan").addEventListener("click", cancelCurrentJob);
+    initStorageControls();
     const tokenField = $("#engine-token");
     if (tokenField) tokenField.value = apiToken();
     // Copy buttons in the setup modal (generic, per data-copy target).

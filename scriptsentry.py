@@ -49,7 +49,45 @@ REF = os.environ.get("SCRIPTSENTRY_REF", "main")
 CACHE_DIR = Path(os.environ.get("SCRIPTSENTRY_HOME", str(Path.home() / ".scriptsentry")))
 BOOTSTRAP_DIR = CACHE_DIR / "bootstrap"
 
-REQUIRED_PACKAGES = ["requests", "beautifulsoup4", "jsbeautifier", "esprima", "tqdm", "colorama"]
+# The launcher's minimal footprint. tree-sitter is included because it is the
+# engine's *preferred* AST parser (pip wheel, no compiler needed); esprima
+# stays as the portable second engine. Playwright is deliberately NOT here:
+# the module alone is useless without its ~350MB Chromium download, and the
+# engine honestly reports runtime evidence as unavailable instead.
+REQUIRED_PACKAGES = [
+    "requests",
+    "beautifulsoup4",
+    "jsbeautifier",
+    "tree-sitter",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "esprima",
+    "tqdm",
+    "colorama",
+]
+
+# Distribution name -> importable module name.
+IMPORT_NAMES = {
+    "beautifulsoup4": "bs4",
+    "tree-sitter-javascript": "tree_sitter_javascript",
+    "tree-sitter-typescript": "tree_sitter_typescript",
+}
+
+
+def _safe_archive_path(path: str) -> bool:
+    """True when a stripped archive path cannot escape the extraction dir."""
+    if not path or path.startswith(("/", "\\")) or "\x00" in path:
+        return False
+    parts = path.replace("\\", "/").split("/")
+    return all(part not in ("", ".", "..") for part in parts)
+
+
+def _safe_link_target(linkname: str) -> bool:
+    """True when a symlink/hardlink target stays inside the archive tree."""
+    if not linkname or linkname.startswith(("/", "\\")) or "\x00" in linkname:
+        return False
+    parts = linkname.replace("\\", "/").split("/")
+    return all(part not in ("", ".", "..") for part in parts)
 
 
 def engine_present(here: Path) -> bool:
@@ -89,9 +127,19 @@ def extract_engine(data: bytes) -> Path:
                 parts = m.name.split("/", 1)
                 if len(parts) != 2 or not parts[1]:
                     continue
-                m.name = parts[1]
+                stripped = parts[1]
+                # This is our own GitHub archive, but the launcher must stay
+                # safe even if the tag/ref is swapped in env or a compromised
+                # mirror is pointed at: never let a member path (or link
+                # target) escape the extraction directory.
+                if not _safe_archive_path(stripped) or (m.issym() or m.islnk()) and not _safe_link_target(m.linkname):
+                    raise RuntimeError(f"archive member has an unsafe path: {m.name!r}")
+                m.name = stripped
                 members.append(m)
-            tar.extractall(tmp_path, members=members)  # noqa: S202 (our own GitHub archive)
+            # Python 3.12+ applies a safe extraction filter as a second layer
+            # (also blocks symlink escapes); 3.10/3.11 rely on the checks above.
+            extract_kwargs = {"filter": "data"} if sys.version_info >= (3, 12) else {}
+            tar.extractall(tmp_path, members=members, **extract_kwargs)  # noqa: S202 (validated above)
 
         if not engine_present(tmp_path):
             raise RuntimeError("downloaded archive did not contain the expected engine files")
@@ -144,9 +192,8 @@ def install_dependencies(engine_dir: Path) -> None:
         return
     missing = []
     for pkg in REQUIRED_PACKAGES:
-        mod = "bs4" if pkg == "beautifulsoup4" else pkg
         try:
-            __import__(mod)
+            __import__(IMPORT_NAMES.get(pkg, pkg))
         except ImportError:
             missing.append(pkg)
     if not missing:
@@ -182,12 +229,14 @@ def install_dependencies(engine_dir: Path) -> None:
             # A generic "some packages failed" line led people to run scans
             # that silently used the weaker analyzer and then wonder why
             # findings looked thin.
-            if "esprima" in failed:
+            ast_pkgs = {"tree-sitter", "tree-sitter-javascript", "tree-sitter-typescript", "esprima"}
+            if ast_pkgs & set(failed):
                 print(
-                    "   ⚠  'esprima' is missing — this is the AST parser. Without it every scan "
-                    "falls back to line-based matching: source-to-sink flows are reported at "
-                    "'medium' confidence instead of 'high', and some are missed entirely. "
-                    "Installing it is the single biggest accuracy win.",
+                    "   ⚠  Some AST parsers could not be installed. Without both tree-sitter and "
+                    "esprima every scan falls back to line-based matching: source-to-sink flows "
+                    "are reported at 'medium' confidence instead of 'high', and some are missed "
+                    "entirely. Installing tree-sitter is the single biggest accuracy win:\n"
+                    f"     {sys.executable} -m pip install tree-sitter tree-sitter-javascript tree-sitter-typescript",
                     flush=True,
                 )
             if {"requests", "beautifulsoup4"} & set(failed):

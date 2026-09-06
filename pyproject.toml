@@ -50,20 +50,47 @@ scriptsentry-server = "server:main"
 Homepage = "https://amitpal-cyberbuddy.github.io/ScriptSentry/"
 
 [tool.setuptools]
-packages = { find = { include = ["ai*", "analyzers*", "core*"] } }
+# api/ was missing here once: the wheel installed but `scriptsentry-server`
+# died on ``from api import …``. Keep every runtime package in the list.
+packages = { find = { include = ["ai*", "analyzers*", "api*", "core*"] } }
 py-modules = ["main", "server", "config", "scriptsentry"]
 
 [tool.setuptools.dynamic]
 version = { attr = "core.version.__version__" }
 
 [tool.setuptools.data-files]
-# The dashboard is served from these directories; ship them with the wheel.
+# The dashboard is served from these directories; ship the runtime files
+# with the wheel. IMPORTANT: setuptools data-files does NOT preserve source
+# subdirectories — every source file is installed directly into the
+# destination directory, so each subdirectory gets its own destination key.
+# Listing everything under one key silently collapses `webui/home/index.html`
+# (and /tool/, /changelog/) into the top-level index.html — the last one wins
+# and an installed server serves the changelog at "/".
+# tests/test_release_metadata.py guards this mapping; keep it in sync.
 "share/scriptsentry/webui" = [
     "webui/app.js",
     "webui/styles.css",
     "webui/config.js",
     "webui/index.html",
     "webui/404.html",
+]
+"share/scriptsentry/webui/home" = [
+    "webui/home/index.html",
+]
+"share/scriptsentry/webui/tool" = [
+    "webui/tool/index.html",
+]
+"share/scriptsentry/webui/changelog" = [
+    "webui/changelog/index.html",
+]
+"share/scriptsentry/webui/assets" = [
+    "webui/assets/favicon.svg",
+    "webui/assets/favicon-32.png",
+    "webui/assets/apple-touch-icon.png",
+    "webui/assets/icon-192.png",
+    "webui/assets/icon-512.png",
+    "webui/assets/og-card.png",
+    "webui/assets/site.webmanifest",
 ]
 
 [tool.coverage.run]

@@ -202,11 +202,15 @@
         if (health.auth_required && !apiToken()) {
           backendConnected = false;
           backendChecked = true;
+          lastHealth = null;
+          renderConsoleCaps();
           setEngineStatus("checking", "Engine online · pairing token required");
           return false;
         }
         backendConnected = true;
         backendChecked = true;
+        lastHealth = health;
+        renderConsoleCaps();
         setEngineStatus("online", "Local engine connected · private analysis ready");
         // A scan handed off from the hosted page can start as soon as the
         // engine answers (a token stored in this tab counts as paired).
@@ -217,10 +221,48 @@
     } catch {
       backendConnected = false;
       backendChecked = true;
+      lastHealth = null;
+      renderConsoleCaps();
       setEngineStatus("offline", "Local engine offline — view the setup guide");
       return false;
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  /* One short line, not another option: tells the visitor what the engine
+   * will do automatically so the optional features are never a surprise.
+   * The dashboard never calls an AI model, so that chip is static copy.
+   * Before pairing, the strip says exactly what a first-time visitor needs
+   * to know and opens the setup guide on click. */
+  function renderConsoleCaps() {
+    const strip = $("#console-caps");
+    if (!strip) return;
+    const cap = $("#cap-runtime");
+    if (!cap) return;
+    if (!backendConnected || !lastHealth) {
+      strip.hidden = false;
+      cap.textContent = "🔌 Start the engine first — see the 2-minute guide";
+      cap.classList.add("is-off");
+      cap.title = "This page is only the interface. The actual scanner runs on YOUR machine. Click for the setup guide: download one file, run one command, paste the token it prints.";
+      if (!cap.dataset.wired) {
+        cap.dataset.wired = "1";
+        cap.addEventListener("click", () => {
+          if (!backendConnected) openPrivacyModal();
+        });
+      }
+      return;
+    }
+    strip.hidden = false;
+    const rt = lastHealth.runtime_evidence || {};
+    if (rt.enabled && rt.playwright) {
+      cap.textContent = "🖥️ Runtime: on for URL scans";
+      cap.classList.remove("is-off");
+      cap.title = "URL scans are watched by a local headless browser — network, DOM sinks, eval, storage keys, runtime-loaded scripts. Pasting or uploading code stays static. Enabled automatically; no toggle needed.";
+    } else {
+      cap.textContent = "🚫 Runtime: static only";
+      cap.classList.add("is-off");
+      cap.title = "Playwright/Chromium is not installed on this machine (or runtime evidence is disabled). URL scans still work; the Runtime tab will say why. Install with: python -m playwright install chromium";
     }
   }
 
@@ -283,7 +325,7 @@
     const note = document.createElement("div");
     note.className = "handoff-note";
     note.innerHTML =
-      `<p class="modal-note" style="margin:0 0 10px">` +
+      `<p class="modal-note warning" style="margin:0 0 10px">` +
       `Your browser blocks this <b>https://</b> page from calling the engine at ` +
       `<code>${escapeHtml(localDashboardUrl())}</code> (<b>mixed content</b>). That's a browser rule, ` +
       `not a token problem — pasting the pairing token here can't fix it.</p>` +
@@ -308,6 +350,9 @@
     if (!modal) return;
     modal.hidden = false;
     document.body.classList.add("modal-open");
+    // Live storage facts, refreshed every time the dialog opens (no-op on
+    // pages without the Data & storage panel).
+    refreshStoragePanel();
     if (isMixedContentBlocked()) {
       showHostedHandoff();
       const link = $("#open-local-dashboard");

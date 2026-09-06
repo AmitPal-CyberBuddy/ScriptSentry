@@ -225,12 +225,12 @@
           <article class="feature-card">
             <span class="feature-num">09</span>
             <h3>Runtime Evidence <span class="tag">Optional</span></h3>
-            <p>A local headless browser watches the live page: network traffic, DOM sinks, <code>eval</code>, storage and scripts loaded only at runtime.</p>
+            <p>A local headless browser watches the live page: network traffic, DOM sinks, <code>eval</code>, storage and scripts loaded only at runtime. It runs <b>automatically</b> for URL scans once Chromium is installed (<code>python -m playwright install chromium</code>) &mdash; no setting to toggle; pasted code stays static.</p>
           </article>
           <article class="feature-card">
             <span class="feature-num">10</span>
             <h3>Local AI Triage Notes <span class="tag">Optional</span></h3>
-            <p>Point <code>--ai</code> at a model on your own machine (Ollama, LM Studio, llama.cpp) for a written brief of the riskiest findings. Cloud providers are deliberately unsupported &mdash; the privacy contract holds.</p>
+            <p>Point <code>--ai</code> at a model on your own machine (Ollama, LM Studio, llama.cpp) for a written brief of the riskiest findings. <b>CLI only</b> &mdash; the dashboard never calls a model and never asks for an API key; cloud providers stay unsupported so the privacy contract holds.</p>
           </article>
         </div>
       </div>
@@ -475,7 +475,7 @@ scriptsentry-server --port 8000</pre>
       </p>
       <p class="footer-meta">
         ScriptSentry · JS Intelligence Studio · <strong>private &amp; free</strong> ·
-        <a class="js-open-setup" href="#how">view the setup guide</a> · no telemetry, no accounts, no cloud.
+        <a class="js-open-setup" href="#setup">view the setup guide</a> · no telemetry, no accounts, no cloud.
       </p>
     </div>
   </footer>

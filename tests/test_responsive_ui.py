@@ -21,6 +21,8 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEBUI = os.path.join(os.path.dirname(HERE), "webui")
 CSS_PATH = os.path.join(WEBUI, "styles.css")
+APP_JS_PATH = os.path.join(WEBUI, "app.js")
+TOOL_HTML_PATH = os.path.join(WEBUI, "tool", "index.html")
 
 with open(CSS_PATH, encoding="utf-8") as fh:
     CSS = fh.read()
@@ -429,6 +431,163 @@ class BreakpointTest(unittest.TestCase):
         self.assertIn("min-width: 1600px", CSS_NC,
                       "Past 1600px the content width must be capped so it does "
                       "not stretch across a 2560px monitor.")
+
+
+class ViewToggleTest(unittest.TestCase):
+    """Tabs must reveal view groups with a class toggle, not inline style.
+
+    The shipped stylesheet hides every `.view-group`; the old JS put
+    ``group.style.display = ""`` on the selected group, which removes the
+    inline style and lets the group fall back to the stylesheet's
+    ``display: none``. Overview panels only ever appeared because they also
+    carry `.grid` (which sets ``display: grid`` later in the file). A class
+    toggle must be the mechanism so the cascade can do its job.
+    """
+
+    def test_stylesheet_reveals_active_view_groups(self):
+        self.assertIn(
+            ".view-group.is-active",
+            CSS_NC,
+            "Add `.view-group.is-active { display: block; }` (plus a `.grid` "
+            "variant) so an active tab panel outranks `.view-group` / `.grid`.",
+        )
+        self.assertIn(
+            ".view-group:not(.is-active)",
+            CSS_NC,
+            "Inactive grid-based panels need `.view-group:not(.is-active)` so "
+            "`.grid` (which sets display later) cannot leak them back in.",
+        )
+
+    def test_activate_view_uses_class_toggle(self):
+        with open(APP_JS_PATH, encoding="utf-8") as fh:
+            app_js = fh.read()
+        self.assertIn(
+            'classList.toggle("is-active"',
+            app_js,
+            "activateView must reveal panels with classList.toggle('is-active', …).",
+        )
+        self.assertNotIn(
+            "group.style.display",
+            app_js,
+            "Do not reintroduce inline-style revealing: `display: \"\"` falls back "
+            "to the stylesheet's `display: none` and the panel stays invisible.",
+        )
+
+
+class ConsoleResponsiveTest(unittest.TestCase):
+    """Narrow-screen layout contracts for the console chrome.
+
+    Pins the phone layouts added for the full-console responsive pass:
+    the results-header cluster (six exports plus the Data & storage entry
+    point) stays a deliberate two-column grid with the last button
+    full-width instead of leaving a single ragged cell, the setup dialog's
+    three install tabs stack, the progress row wraps its Cancel button
+    below the bar instead of squeezing it, and engine notes can never push
+    the page sideways.
+    """
+
+    def test_export_cluster_is_two_columns_then_a_full_width_last_button(self):
+        for width in (320, 420, 560):
+            self.assertEqual(
+                2, track_count(resolve_at(".results-header .row",
+                                          "grid-template-columns", width)),
+                f"#{width}px: the exports/storage cluster must be a 2-column grid",
+            )
+        self.assertEqual(
+            "1 / -1",
+            resolve_at(".results-header .row .btn:last-child", "grid-column", 480),
+            "The last cluster button (Data & storage) must span the full row "
+            "so an odd count never leaves one ragged cell.",
+        )
+
+    def test_storage_entry_point_is_the_last_cluster_button(self):
+        with open(TOOL_HTML_PATH, encoding="utf-8") as fh:
+            tool = fh.read()
+        self.assertLess(
+            tool.index('id="export-openapi"'), tool.index('id="storage-open"'),
+            "storage-open must remain the last button in the export cluster",
+        )
+
+    def test_setup_tabs_stack_on_a_phone(self):
+        self.assertEqual(
+            "column",
+            resolve_at(".setup-toggle", "flex-direction", 500),
+            "three setup tabs at ~90px each crush their labels on a phone; "
+            "they must stack full-width below 560px",
+        )
+
+    def test_progress_row_wraps_its_cancel_button(self):
+        self.assertEqual(
+            "wrap", resolve_at(".loading", "flex-wrap", 400),
+            "the loading row must wrap so Cancel drops below the bar on a phone",
+        )
+        self.assertEqual(
+            "1 1 240px", resolve_at(".progress-wrap", "flex", 400),
+            "the progress block needs a 240px basis so it can take its own row",
+        )
+
+    def test_engine_notes_cannot_push_the_page(self):
+        self.assertEqual(
+            "anywhere", resolve_at(".engine-note", "overflow-wrap", 320),
+            "engine notes name files with long paths; they must wrap",
+        )
+
+    def test_footer_collapses_to_one_column_on_a_phone(self):
+        # The trailing collapsed-nav block re-declares the footer at two
+        # columns for the whole ≤1040px range; its same-specificity rule
+        # comes later in the file, so the earlier 640px one-column rule
+        # silently lost the cascade. The override must stay after it.
+        self.assertEqual(
+            "minmax(0, 1fr)",
+            resolve_at(".footer-inner", "grid-template-columns", 480),
+            "a phone must get one footer column, not two cramped link lists",
+        )
+        self.assertEqual(
+            "repeat(2, minmax(0, 1fr))",
+            resolve_at(".footer-inner", "grid-template-columns", 700),
+            "tablet keeps two footer columns",
+        )
+
+
+class DashboardLayoutTest(unittest.TestCase):
+    """The analysis dashboard is a compact card grid, not one long column.
+
+    Scripts / Findings / Intelligence / Runtime used to stack full-width
+    cards, which read as one long card with long empty bands. Each of those
+    views must now be a single two-column ``view-cards`` tabpanel whose
+    panels sit side by side (and collapse to one column on narrow screens).
+    """
+
+    def setUp(self):
+        with open(TOOL_HTML_PATH, encoding="utf-8") as fh:
+            self.tool = fh.read()
+
+    def test_non_overview_views_are_single_grid_panels(self):
+        for view in ("scripts", "findings", "intelligence", "runtime"):
+            with self.subTest(view=view):
+                panels = re.findall(
+                    r'<div class="view-group view-cards"[^>]*data-view="' + re.escape(view) + r'"',
+                    self.tool,
+                )
+                self.assertEqual(
+                    len(panels), 1,
+                    f"view {view!r} must have exactly one tabpanel grid",
+                )
+        self.assertNotIn(
+            'class="card view-group"',
+            self.tool,
+            "cards must sit inside the view grid, not be the tabpanel element",
+        )
+
+    def test_card_grid_is_two_columns_then_one(self):
+        columns = [value for selector, value in declarations("grid-template-columns")
+                   if selector == ".view-group.is-active.view-cards"]
+        self.assertIn("repeat(2, minmax(0, 1fr))", columns,
+                      "active card views must be a two-column grid")
+        self.assertIn("minmax(0, 1fr)", columns,
+                      "card views must collapse to one column on narrow screens")
+        self.assertIn("@media (max-width: 760px)", CSS_NC,
+                      "the card-view collapse breakpoint is missing")
 
 
 if __name__ == "__main__":
