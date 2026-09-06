@@ -29,8 +29,8 @@ import time
 from core.state import state_dir
 
 __all__ = [
-    "diff_scans", "enabled", "fingerprint", "get_scan", "list_scans",
-    "record_scan",
+    "delete_scan", "diff_scans", "enabled", "export_history", "fingerprint",
+    "get_scan", "list_scans", "record_scan", "storage_info", "wipe_history",
 ]
 
 #: Findings/observations stored per scan; beyond this we keep the counts.
@@ -70,7 +70,12 @@ CREATE INDEX IF NOT EXISTS idx_scans_target ON scans(target, id);
 """
 
 _LOCK = threading.Lock()
-_LOCAL = threading.local()
+# One shared connection guarded by ``_LOCK`` (``check_same_thread=False`` +
+# the lock let a wipe close the *only* handle, which is what makes "delete
+# ALL history" actually delete the WAL files instead of leaving a stale
+# open handle behind).
+_CONN = None
+_CONN_PATH = None
 
 
 def enabled():
@@ -82,24 +87,43 @@ def db_path():
     return os.path.join(state_dir(), "history.db")
 
 
+def _create_schema(conn):
+    """Create the tables/indexes an empty history DB needs.
+
+    Shared by ``_connect`` and :func:`wipe_history`: after the files are
+    deleted the DB must come back exactly as a fresh install would make it.
+    """
+    conn.executescript(_SCHEMA)
+
+
 def _connect():
-    conn = getattr(_LOCAL, "conn", None)
+    global _CONN, _CONN_PATH
     path = db_path()
-    if conn is not None and getattr(_LOCAL, "conn_path", None) != path:
+    if _CONN is not None and path != _CONN_PATH:
         # The state dir moved (tests, env change): drop the old handle.
         with contextlib.suppress(Exception):
-            conn.close()
-        conn = None
-    if conn is not None:
-        return conn
+            _CONN.close()
+        _CONN = None
+    if _CONN is not None:
+        return _CONN
     os.makedirs(state_dir(), exist_ok=True)
-    conn = sqlite3.connect(path, timeout=5.0)
+    conn = sqlite3.connect(path, timeout=5.0, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(_SCHEMA)
-    _LOCAL.conn = conn
-    _LOCAL.conn_path = path
+    _create_schema(conn)
+    _CONN = conn
+    _CONN_PATH = path
     return conn
+
+
+def _close_connection():
+    """Close the shared handle; must be called while holding ``_LOCK``."""
+    global _CONN, _CONN_PATH
+    if _CONN is not None:
+        with contextlib.suppress(Exception):
+            _CONN.close()
+    _CONN = None
+    _CONN_PATH = None
 
 
 def fingerprint(finding):
@@ -340,3 +364,203 @@ def diff_scans(from_id, to_id):
             }
         except Exception:
             return None
+
+
+# ---------------------------------------------------------------------------
+# Storage trust surface: inspect, delete and export what the engine keeps.
+# ---------------------------------------------------------------------------
+
+
+def _file_size(*parts):
+    try:
+        return os.path.getsize(os.path.join(*parts))
+    except OSError:
+        return 0
+
+
+def _retention_limit():
+    try:
+        return max(10, int(os.environ.get("SCRIPTSENTRY_HISTORY_MAX", "200")))
+    except (TypeError, ValueError):
+        return 200
+
+
+def storage_info():
+    """Facts for the "Data & storage" trust panel (never creates the DB).
+
+    Read-only by design: opening the panel must not manufacture a history
+    file where none exists. When the DB is absent (history disabled, or
+    nothing scanned yet) every count is zero and the timestamps are None.
+    """
+    path = db_path()
+    info = {
+        "history_enabled": enabled(),
+        "db_path": path,
+        "db_size_bytes": _file_size(path),
+        "wal_size_bytes": _file_size(path + "-wal"),
+        "scan_count": 0,
+        "finding_count": 0,
+        "oldest_scan_at": None,
+        "newest_scan_at": None,
+        "retention_limit": _retention_limit(),
+        "report_bytes_stored": 0,
+        "eta_calibration_bytes": 0,
+    }
+    if os.path.isfile(path):
+        with _LOCK:
+            try:
+                conn = _connect()
+                row = conn.execute(
+                    "SELECT COUNT(*), COALESCE(MIN(created_at), NULL),"
+                    " COALESCE(MAX(created_at), NULL),"
+                    " COALESCE(SUM(LENGTH(report_json)), 0)"
+                    " FROM scans WHERE report_stored = 1"
+                ).fetchone()
+                scan_row = conn.execute("SELECT COUNT(*), COALESCE(MIN(created_at), NULL),"
+                                        " COALESCE(MAX(created_at), NULL)"
+                                        " FROM scans").fetchone()
+                info["scan_count"] = int(scan_row[0])
+                info["oldest_scan_at"] = scan_row[1]
+                info["newest_scan_at"] = scan_row[2]
+                info["finding_count"] = int(conn.execute(
+                    "SELECT COUNT(*) FROM findings").fetchone()[0])
+                info["report_bytes_stored"] = int(row[3] or 0)
+            except Exception:
+                pass
+    try:
+        from core.eta_calibration import state_path as _eta_path
+        info["eta_calibration_bytes"] = _file_size(_eta_path())
+    except Exception:
+        pass
+    return info
+
+
+def delete_scan(scan_id):
+    """Delete one scan and its findings (returns True when a row existed)."""
+    try:
+        scan_id = int(scan_id)
+    except (TypeError, ValueError):
+        return False
+    with _LOCK:
+        try:
+            conn = _connect()
+            cur = conn.execute("SELECT 1 FROM scans WHERE id = ?", (scan_id,))
+            if cur.fetchone() is None:
+                return False
+            conn.execute("DELETE FROM findings WHERE scan_id = ?", (scan_id,))
+            conn.execute("DELETE FROM scans WHERE id = ?", (scan_id,))
+            conn.commit()
+            return True
+        except Exception:
+            return False
+
+
+def wipe_history(include_calibration=False):
+    """Delete EVERYTHING (files and all) and recreate a clean, empty DB.
+
+    Row-level deletes are not a wipe in WAL mode: the page content lives in
+    ``history.db``, ``-wal`` and ``-shm``, and an open connection could keep
+    writing to the unlinked file. So the shared handle is closed first, the
+    three files are removed, then ``_connect`` recreates the schema exactly
+    as a fresh install would. ``eta_calibration.json`` is anonymous ETA
+    statistics, not user content, so it survives unless explicitly requested
+    (``include_calibration=True``).
+    """
+    deleted_scans = 0
+    deleted_findings = 0
+    with _LOCK:
+        try:
+            conn = _connect()
+            deleted_scans = int(conn.execute("SELECT COUNT(*) FROM scans").fetchone()[0])
+            deleted_findings = int(conn.execute("SELECT COUNT(*) FROM findings").fetchone()[0])
+        except Exception:
+            pass
+        _close_connection()
+        path = db_path()
+        for suffix in ("", "-wal", "-shm"):
+            with contextlib.suppress(OSError):
+                os.remove(path + suffix)
+        calibration_deleted = False
+        if include_calibration:
+            try:
+                from core.eta_calibration import state_path as _eta_path
+                with contextlib.suppress(OSError):
+                    os.remove(_eta_path())
+                calibration_deleted = True
+            except Exception:
+                pass
+        recreated = False
+        with contextlib.suppress(Exception):
+            conn = _connect()
+            recreated = os.path.isfile(path)
+    return {
+        "deleted_scans": deleted_scans,
+        "deleted_findings": deleted_findings,
+        "recreated": recreated,
+        "calibration_deleted": calibration_deleted,
+    }
+
+
+def export_history(include_payload=False):
+    """The entire history as JSON: scans + findings + diffs.
+
+    Stored report payloads are omitted unless ``include_payload`` is set
+    (they can be up to 16 MB each). Never creates the DB: an empty export
+    is returned when no history file exists.
+    """
+    scans = []
+    if not os.path.isfile(db_path()):
+        return {"exported_at": int(time.time()), "scan_count": 0,
+                "finding_count": 0, "scans": scans}
+    with _LOCK:
+        try:
+            conn = _connect()
+            rows = conn.execute(
+                "SELECT id, created_at, target, mode, duration_ms, files_total,"
+                " bytes_total, findings_total, diff_json, report_json, report_stored"
+                " FROM scans ORDER BY id ASC"
+            ).fetchall()
+            finding_rows = conn.execute(
+                "SELECT scan_id, fingerprint, finding_id, severity, confidence,"
+                " title, file, detail, observation FROM findings ORDER BY scan_id,"
+                " rowid ASC"
+            ).fetchall()
+        except Exception:
+            return {"exported_at": int(time.time()), "scan_count": 0,
+                    "finding_count": 0, "scans": scans}
+    by_scan = {}
+    for row in finding_rows:
+        scan_id, fingerprint_v, finding_id, severity, confidence, title, file, detail, observation = row
+        by_scan.setdefault(scan_id, []).append({
+            "fingerprint": fingerprint_v,
+            "finding_id": finding_id,
+            "severity": severity,
+            "confidence": confidence,
+            "title": title,
+            "file": file,
+            "detail": detail,
+            "observation": bool(observation),
+        })
+    for row in rows:
+        entry = dict(zip((
+            "scan_id", "created_at", "target", "mode", "duration_ms",
+            "files_total", "bytes_total", "findings_total",
+        ), row[:8], strict=False))
+        try:
+            entry["diff"] = json.loads(row[8] or "null")
+        except Exception:
+            entry["diff"] = None
+        entry["report_stored"] = bool(row[10])
+        if include_payload and row[10]:
+            try:
+                entry["report"] = json.loads(row[9] or "null")
+            except Exception:
+                entry["report"] = None
+        entry["findings"] = by_scan.get(row[0], [])
+        scans.append(entry)
+    return {
+        "exported_at": int(time.time()),
+        "scan_count": len(scans),
+        "finding_count": sum(len(s["findings"]) for s in scans),
+        "scans": scans,
+    }

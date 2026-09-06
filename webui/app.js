@@ -363,6 +363,9 @@
     if (!modal) return;
     modal.hidden = false;
     document.body.classList.add("modal-open");
+    // Live storage facts, refreshed every time the dialog opens (no-op on
+    // pages without the Data & storage panel).
+    refreshStoragePanel();
     if (isMixedContentBlocked()) {
       showHostedHandoff();
       const link = $("#open-local-dashboard");
@@ -1172,6 +1175,8 @@
   const SCAN_BUSY_SELECTORS = [
     "#analyze-code", "#analyze-url", "#analyze-files",
     "#export-html", "#export-txt", "#export-csv", "#export-sarif", "#export-json", "#export-openapi",
+    // Data & storage controls: no destructive storage action may race a scan.
+    "#storage-delete-all", "#storage-clear-browser", "#storage-export",
   ];
 
   function setScanBusy(busy) {
@@ -1181,6 +1186,7 @@
     });
     // Historical report views must not fight a live scan for the dashboard.
     document.querySelectorAll(".history-view").forEach((btn) => { btn.disabled = busy; });
+    document.querySelectorAll(".storage-scan-delete").forEach((btn) => { btn.disabled = busy; });
   }
 
   function showLoading(text) {
@@ -1539,13 +1545,18 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
   // ---------------- Scan history (local SQLite) ----------------
 
   let viewedScanNote = "";
+  // Same list the storage panel renders, so deletions stay consistent with
+  // what the history card shows without fetching twice.
+  let lastHistoryScans = [];
 
   function renderHistoryChip() {
     const box = $("#history-diff");
     if (!box) return;
+    const link = $("#history-storage-link");
     const h = payload && payload.history;
     if (!h || !h.previous_scan_id) {
       box.hidden = true;
+      if (link) link.hidden = true;
       return;
     }
     const parts = [];
@@ -1554,6 +1565,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     parts.push(`${h.unchanged_count || 0} unchanged`);
     box.innerHTML = `vs previous scan of this target: ${parts.join(" · ")}`;
     box.hidden = false;
+    if (link) link.hidden = false;
   }
 
   async function refreshHistory() {
@@ -1562,6 +1574,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     if (!list || !card) return;
     const data = await getJSON("/api/history?limit=12");
     const scans = Array.from(data.scans || []);
+    lastHistoryScans = scans;
     if (!scans.length && !viewedScanNote) {
       card.hidden = true;
       return;
@@ -1716,6 +1729,166 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     }
   }
 
+
+  /* ---------------- Data & storage trust panel ----------------
+   *
+   * The inventory /api/storage reports plus the destructive actions over it:
+   * per-scan delete, delete-all, browser-data clearing and the JSON export.
+   * Everything runs through the token-gated DELETE/GET surface; the UI only
+   * ever asks for confirmation before touching anything.
+   */
+
+  function setStorageStatus(message) {
+    const node = $("#storage-status");
+    if (!node) return;
+    node.textContent = message || "";
+    node.hidden = !message;
+    node.classList.toggle("is-neutral", !message || message.startsWith("✅"));
+  }
+
+  async function refreshStoragePanel() {
+    const facts = $("#storage-facts");
+    if (!facts) return;
+    try {
+      const data = await getJSON("/api/storage");
+      renderStorageFacts(data.storage || {});
+    } catch {
+      facts.innerHTML = `<span class="storage-unknown">Engine not paired — storage facts appear once the engine is connected.</span>`;
+    }
+    renderStorageScans();
+  }
+
+  function renderStorageFacts(storage) {
+    const facts = $("#storage-facts");
+    if (!facts || !storage) return;
+    const row = (label, value) =>
+      `<div class="storage-fact"><span class="storage-fact-label">${escapeHtml(label)}</span>` +
+      `<span class="storage-fact-value">${value}</span></div>`;
+    const when = (ts) => ts ? new Date(ts * 1000).toLocaleString() : "—";
+    const disabled = storage.history_enabled === false;
+    facts.innerHTML = [
+      row("History", disabled ? "recording disabled" : "recording (SQLite, WAL)"),
+      row("Database", disabled ? "—" : escapeHtml(storage.db_path || "")),
+      row("DB size", formatBytes(storage.db_size_bytes)),
+      row("WAL size", formatBytes(storage.wal_size_bytes)),
+      row("Scans", String(storage.scan_count || 0)),
+      row("Findings", String(storage.finding_count || 0)),
+      row("Oldest", when(storage.oldest_scan_at)),
+      row("Newest", when(storage.newest_scan_at)),
+      row("Retention", `newest ${storage.retention_limit || 200} scans`),
+      row("Stored report payloads", formatBytes(storage.report_bytes_stored)),
+      row("ETA calibration", formatBytes(storage.eta_calibration_bytes)),
+    ].join("");
+  }
+
+  function renderStorageScans() {
+    const list = $("#storage-scan-list");
+    if (!list) return;
+    const scans = lastHistoryScans || [];
+    list.innerHTML = scans.length
+      ? `<div class="storage-scan-head">Scans</div>` + scans.map((s) => {
+          const when = s.created_at ? new Date(s.created_at * 1000).toLocaleString() : "";
+          return `<div class="storage-scan-row">` +
+            `<span class="history-when">#${s.scan_id}</span>` +
+            `<span class="history-target" title="${escapeHtml(s.target || "")}">${escapeHtml(s.target || s.mode || "")}</span>` +
+            `<span class="meta">${when} · ${s.findings_total || 0} finding(s)</span>` +
+            `<button class="btn ghost btn-sm storage-scan-delete" data-storage-delete="${s.scan_id}" type="button">Delete</button>` +
+            `</div>`;
+        }).join("")
+      : `<span class="storage-unknown">No scans stored.</span>`;
+    list.querySelectorAll(".storage-scan-delete").forEach((btn) => {
+      btn.addEventListener("click", () => deleteHistoryScan(btn.dataset.storageDelete, btn));
+    });
+  }
+
+  async function deleteHistoryScan(scanId, btn) {
+    if (!scanId) return;
+    if (!confirm(`Delete scan #${scanId} and its findings from this machine's history? This cannot be undone.`)) return;
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch(apiUrl(`/api/history/${encodeURIComponent(scanId)}`), {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body.ok === false) throw new Error(body.error || "Delete failed.");
+      setStorageStatus(`✅ Deleted scan #${scanId}.`);
+      await refreshHistory();
+      await refreshStoragePanel();
+    } catch (err) {
+      setStorageStatus(err && err.message ? err.message : "Delete failed.");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function deleteAllHistory() {
+    if (!confirm(
+      "Delete ALL scan history (scans, findings and stored reports) from this machine? "
+      + "This cannot be undone. ETA timing stats are kept — they are anonymous, not your content.",
+    )) return;
+    try {
+      const res = await fetch(apiUrl("/api/history"), { method: "DELETE", headers: authHeaders() });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body.ok === false) throw new Error(body.error || "Delete failed.");
+      setStorageStatus(`✅ Deleted ${body.deleted_scans || 0} scan(s) and ${body.deleted_findings || 0} finding(s).`);
+      await refreshHistory();
+      await refreshStoragePanel();
+    } catch (err) {
+      setStorageStatus(err && err.message ? err.message : "Delete failed.");
+    }
+  }
+
+  function clearBrowserData() {
+    const tokenBox = $("#storage-clear-token");
+    const alsoToken = !!(tokenBox && tokenBox.checked);
+    let message = "Clear this browser's stored data? This removes triage statuses (localStorage) and the last report payload (sessionStorage).";
+    if (alsoToken) {
+      message += " The pairing token will be removed too, and this tab will be logged out until you re-pair.";
+    }
+    if (!confirm(message)) return;
+    try { localStorage.removeItem("scriptsentry-triage"); } catch { /* storage unavailable */ }
+    try { sessionStorage.removeItem("scriptsentry_last_result"); } catch { /* storage unavailable */ }
+    if (alsoToken) setApiToken("");
+    setStorageStatus("✅ Cleared this browser's stored data." + (alsoToken ? " Pairing token removed." : ""));
+    renderStorageScans();
+  }
+
+  async function downloadHistoryExport() {
+    try {
+      const res = await fetch(apiUrl("/api/history/export?include=payload"), {
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Export failed.");
+      }
+      const blob = await res.blob();
+      saveBlob(blob, "scriptsentry-history-export.json");
+      setStorageStatus("✅ Download started — scriptsentry-history-export.json");
+    } catch (err) {
+      setStorageStatus(err && err.message ? err.message : "Export failed.");
+    }
+  }
+
+  function initStorageControls() {
+    const link = $("#history-storage-link");
+    if (link) {
+      link.addEventListener("click", () => {
+        openPrivacyModal();
+        setTimeout(() => {
+          const section = $("#storage-section");
+          if (section) section.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 40);
+      });
+    }
+    const deleteAll = $("#storage-delete-all");
+    if (deleteAll) deleteAll.addEventListener("click", deleteAllHistory);
+    const clear = $("#storage-clear-browser");
+    if (clear) clear.addEventListener("click", clearBrowserData);
+    const exportBtn = $("#storage-export");
+    if (exportBtn) exportBtn.addEventListener("click", downloadHistoryExport);
+  }
 
   /* ---------------- Local file upload ---------------- */
 
@@ -3019,6 +3192,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     $("#close-modal").addEventListener("click", closePrivacyModal);
     $("#retry-backend").addEventListener("click", retryBackend);
     $("#cancel-scan").addEventListener("click", cancelCurrentJob);
+    initStorageControls();
     const tokenField = $("#engine-token");
     if (tokenField) tokenField.value = apiToken();
     // Copy buttons in the setup modal (generic, per data-copy target).

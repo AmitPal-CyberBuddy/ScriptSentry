@@ -105,3 +105,36 @@ opinions.
   modules.
 - [x] Widen the ruff selection (bugbear, simplicity) and add coverage
   reporting once Phase 1's gate has bedded in.
+
+## Phase 6 — Trust & transparency
+
+*Local-first should be verifiable, not a slogan. No accounts, no identity —
+just an honest inventory of what the engine keeps and what the user can
+see, delete and export.*
+
+- [x] **A "Data & storage" trust surface.** A new ⚙ section inside the
+  setup dialog's aside column (the three-page architecture is unchanged)
+  lives off `GET /api/storage`: history-enabled, DB/WAL file sizes, scan
+  and finding counts, oldest/newest timestamps, retention limit, stored
+  report bytes, ETA-calibration size, plus the browser keys used per
+  origin (triage statuses in `localStorage`, last result and pairing token
+  in `sessionStorage`).
+- [x] **Real deletion, not row deletion.** `DELETE /api/history/<scan_id>`
+  removes one scan and its findings; `DELETE /api/history` closes the SQLite
+  handle, removes `history.db` + `-wal` + `-shm` (WAL can resurrect deleted
+  rows through an open handle) and recreates an empty DB from the shared
+  schema helper. `eta_calibration.json` is anonymous ETA statistics, not
+  user content, so it survives unless `include_calibration=true` says
+  otherwise. Every destructive route is DELETE-only, pairing-token-gated
+  and rejects untrusted origins; the UI confirms before acting and disables
+  the controls while a scan runs.
+- [x] **Browse and export your data.** The panel lists the scans already
+  fetched by the history card, each with its own delete button, and
+  `GET /api/history/export` downloads the entire history (scans + findings
+  + diffs) as JSON in the same attachment style as the report exports —
+  stored report payloads opt-in via `include=payload`.
+- [x] **Honest "never stored" copy.** Cookie values, request bodies,
+  localStorage values and form inputs are never kept; scan content never
+  leaves the machine (AI notes come from the user's own local model and
+  exist only inside the stored report). URL downloads/uploads live in a
+  temporary workspace deleted after the scan.

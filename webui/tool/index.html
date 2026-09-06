@@ -251,7 +251,10 @@
           <h3 style="margin:0">🕘 Scan history</h3>
           <span class="meta" id="history-note"></span>
         </div>
-        <div class="history-diff" id="history-diff" hidden></div>
+        <div class="history-diff-row">
+          <div class="history-diff" id="history-diff" hidden></div>
+          <button class="btn ghost btn-sm history-storage-link" id="history-storage-link" type="button" hidden>💾 Where is this stored?</button>
+        </div>
         <div id="history-list"></div>
       </div>
 
@@ -560,6 +563,36 @@ scriptsentry-server --port 8000</pre>
             <button class="btn secondary" id="close-modal">Got it</button>
             <button class="btn" id="retry-backend">🔄 Retry Connection</button>
           </div>
+
+          <section class="storage-section" id="storage-section" aria-labelledby="storage-title">
+            <h3 class="aside-title storage-title" id="storage-title">⚙ Data &amp; storage</h3>
+            <p class="modal-note storage-copy" style="margin:0 0 10px">
+              What this machine keeps: the scan history below in
+              <code>history.db</code> (SQLite, WAL — up to ~200 scans, report payloads
+              capped at 16 MB each) and anonymous ETA timing stats in
+              <code>eta_calibration.json</code>. URL downloads/uploads live in a
+              temporary workspace that is deleted after the scan.
+            </p>
+            <p class="modal-note storage-copy" style="margin:0 0 12px">
+              <b>Never stored:</b> cookie values, request bodies, localStorage values,
+              form inputs. Scan content never leaves your machine — AI notes come from
+              your own local model and exist only inside your stored report.
+            </p>
+            <div class="storage-facts" id="storage-facts" role="status" aria-live="polite">
+              <span class="storage-unknown">Loading…</span>
+            </div>
+            <div class="storage-scan-list" id="storage-scan-list"></div>
+            <p class="error-note storage-status" id="storage-status" hidden></p>
+            <div class="storage-actions">
+              <button class="btn ghost btn-sm" id="storage-delete-all" type="button">🗑 Delete all history</button>
+              <button class="btn ghost btn-sm" id="storage-clear-browser" type="button">🧹 Clear this browser's data</button>
+              <button class="btn ghost btn-sm" id="storage-export" type="button">⬇️ Download all data</button>
+              <label class="storage-token-opt">
+                <input type="checkbox" id="storage-clear-token" />
+                Also remove the pairing token (this tab will be logged out)
+              </label>
+            </div>
+          </section>
         </div>
       </div>
     </div>

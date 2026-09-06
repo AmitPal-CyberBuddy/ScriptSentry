@@ -73,6 +73,26 @@ class DashboardHandler(AuthMixin, CorsMixin, ReportRoutesMixin, AnalysisRoutesMi
             return
         self._send_error_json("Unknown endpoint", 404)
 
+    def do_DELETE(self):
+        """Destructive API routes (history deletion).
+
+        The same gates POST uses — untrusted-origin rejection first, then the
+        pairing token — so a cross-site page cannot delete local history even
+        if it guesses a URL, and a missing/invalid token is refused before any
+        file is touched.
+        """
+        parsed = urlparse(self.path)
+        if self._reject_untrusted_origin():
+            return
+        if not parsed.path.startswith("/api/"):
+            self._send_error_json("Unknown endpoint", 404)
+            return
+        if not self._require_api_auth():
+            return
+        if self._handle_api_delete(parsed):
+            return
+        self._send_error_json("Unknown endpoint", 404)
+
 
 def _engine_version():
     from core.version import __version__

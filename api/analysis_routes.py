@@ -1,9 +1,12 @@
 """Analysis routes: /api/health, /api/status, /api/result, /api/history*,
-/api/cancel and /api/analyze.
+/api/storage, /api/cancel and /api/analyze.
 
 Every API route (health included) answers JSON. Routes other than health
 require the pairing token and are dispatched from :mod:`api.handlers`.
+Destructive history routes arrive as DELETE and are dispatched from
+``do_DELETE`` after the same origin/token gates.
 """
+import json
 import os
 from datetime import datetime, timezone
 
@@ -15,9 +18,13 @@ from api.settings import (
 )
 from config import DEFAULT_PROFILE, SCAN_MAX_WORKERS, SCAN_PROFILES
 from core.analyzer_service import analyze_content, analyze_files, analyze_url
+from core.history import delete_scan as history_delete_scan
 from core.history import diff_scans as history_diff
+from core.history import export_history as history_export
 from core.history import get_scan as history_get
 from core.history import list_scans as history_list
+from core.history import storage_info as history_storage_info
+from core.history import wipe_history as history_wipe
 from core.jobs import jobs
 from core.js_parser import parser_status
 from core.runtime_evidence import playwright_available, runtime_evidence_enabled
@@ -80,6 +87,16 @@ class AnalysisRoutesMixin:
             payload = self._payload(raw, metadata={"mode": job.mode, "source": job.source})
             self._send_json({"ok": True, "job": job.snapshot(), "ready": True, "payload": payload})
             return True
+        if parsed.path == "/api/storage":
+            info = history_storage_info()
+            # The browser half of the inventory: what this page keeps where.
+            info["browser_notes"] = {
+                "triage": "localStorage",
+                "last_result": "sessionStorage",
+                "token": "sessionStorage",
+            }
+            self._send_json({"ok": True, "storage": info})
+            return True
         if parsed.path == "/api/history":
             limit = self._query_param(parsed, "limit", "50")
             target = self._query_param(parsed, "target", "")
@@ -95,6 +112,17 @@ class AnalysisRoutesMixin:
                 self._send_error_json("Provide from= and to= scan ids", 400)
                 return True
             self._send_json({"ok": True, "diff": diff})
+            return True
+        if parsed.path == "/api/history/export":
+            # Must be checked before the generic /api/history/<scan_id> branch
+            # below, which would otherwise read "export" as a scan id.
+            include_payload = self._query_param(parsed, "include", "") == "payload"
+            data = history_export(include_payload=include_payload)
+            self._send_download(
+                json.dumps(data, ensure_ascii=False, default=str).encode("utf-8"),
+                "application/json; charset=utf-8",
+                "scriptsentry-history-export.json",
+            )
             return True
         if parsed.path.startswith("/api/history/"):
             scan_id = parsed.path.rsplit("/", 1)[-1]
@@ -137,6 +165,29 @@ class AnalysisRoutesMixin:
             return True
         self._handle_async_analysis(body, mode)
         return True
+
+    def _handle_api_delete(self, parsed):
+        """Serve every DELETE-able API route (destructive history ops).
+
+        Called after the origin and pairing-token gates in ``do_DELETE``:
+        a destructive route must never be reachable without an explicit token
+        or from an origin the engine does not trust.
+        """
+        if parsed.path == "/api/history":
+            include_calibration = (
+                self._query_param(parsed, "include_calibration", "").lower() == "true"
+            )
+            wiped = history_wipe(include_calibration=include_calibration)
+            self._send_json({"ok": True, **wiped})
+            return True
+        if parsed.path.startswith("/api/history/"):
+            scan_id = parsed.path.rsplit("/", 1)[-1]
+            if not history_delete_scan(scan_id):
+                self._send_error_json("Unknown scan id", 404)
+                return True
+            self._send_json({"ok": True, "deleted": True, "scan_id": int(scan_id)})
+            return True
+        return False
 
     @staticmethod
     def _extract_uploads(body):

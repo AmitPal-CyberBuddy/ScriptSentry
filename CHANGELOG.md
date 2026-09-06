@@ -11,6 +11,41 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Data & storage: the local-first claim, now verifiable
+
+- **A "⚙ Data & storage" trust surface lives in the setup dialog.** The
+  aside column (the three-page architecture is unchanged) gains a section
+  backed by `GET /api/storage`: history enabled/disabled, the SQLite DB and
+  WAL file sizes, scan and finding counts, oldest/newest scan timestamps,
+  the retention limit, stored report-payload bytes, the ETA-calibration
+  file size, and which browser keys each piece uses (triage statuses in
+  `localStorage`; last report and pairing token in `sessionStorage`). A
+  small "where is this stored?" link next to the history diff chip after a
+  scan opens the same section.
+- **Deletion is a real wipe, not a row delete.** `DELETE
+  /api/history/<scan_id>` removes one scan and its findings;
+  `DELETE /api/history` closes the SQLite handle, deletes `history.db`,
+  `-wal` and `-shm` (row deletes aren't enough in WAL mode — a stale open
+  handle can resurrect deleted rows), and recreates an empty database from
+  the shared schema. Anonymous ETA timing stats in `eta_calibration.json`
+  are kept by default (they aren't user content) and only removed with the
+  explicit `include_calibration=true` flag.
+- **Destructive routes follow the same security model as analysis.**
+  They are DELETE-only, require the pairing token, and reject untrusted
+  origins; the UI confirms every destructive action and its controls are
+  disabled while a scan runs (the existing `setScanBusy` pattern).
+- **Your data can be browsed and downloaded.** The panel reuses the scan
+  list already fetched for the history card, each row with a delete button,
+  and `GET /api/history/export` downloads the entire history — scans,
+  findings and diffs — as JSON in the same attachment style as the report
+  exports, with stored report payloads included only behind
+  `include=payload`.
+- **The copy states the negatives.** Never stored: cookie values, request
+  bodies, localStorage values, form inputs. Scan content never leaves the
+  machine — AI notes come from the user's own local model and exist only
+  inside the stored report; URL downloads/uploads use a temporary
+  workspace deleted after the scan.
+
 ### Dashboard fixes: panels that would not show, and notices that read as errors
 
 - **Findings / Scripts / Intelligence / Runtime panels now actually appear.**

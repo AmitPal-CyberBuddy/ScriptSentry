@@ -308,6 +308,9 @@
     if (!modal) return;
     modal.hidden = false;
     document.body.classList.add("modal-open");
+    // Live storage facts, refreshed every time the dialog opens (no-op on
+    // pages without the Data & storage panel).
+    refreshStoragePanel();
     if (isMixedContentBlocked()) {
       showHostedHandoff();
       const link = $("#open-local-dashboard");

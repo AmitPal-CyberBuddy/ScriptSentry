@@ -3820,6 +3820,13 @@ main[id] {
   margin-top: 12px;
 }
 
+.history-diff-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .history-diff {
   padding: 8px 12px;
   margin-bottom: 8px;
@@ -3827,6 +3834,125 @@ main[id] {
   background: rgba(56, 189, 248, 0.12);
   border: 1px solid rgba(56, 189, 248, 0.35);
   font-size: 0.92em;
+}
+
+/* ---------------- Data & storage trust panel ---------------- */
+
+.storage-section {
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--hairline);
+}
+
+.storage-title {
+  margin-bottom: var(--space-2xs);
+}
+
+.storage-copy {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.storage-facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  margin: 0 0 12px;
+  font-size: 12px;
+}
+
+.storage-fact {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.06);
+}
+
+.storage-fact-label {
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.storage-fact-value {
+  color: #dbeafe;
+  text-align: right;
+  overflow-wrap: anywhere;
+  max-width: 60%;
+}
+
+.storage-unknown {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.storage-scan-list {
+  margin: 0 0 10px;
+}
+
+.storage-scan-head {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 2px;
+}
+
+.storage-scan-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.storage-scan-row .history-when {
+  min-width: 44px;
+}
+
+.storage-scan-row .history-target {
+  flex: 1 1 100px;
+}
+
+.storage-scan-row .meta {
+  flex: 1 1 100%;
+  font-size: 12px;
+}
+
+.storage-scan-row .btn {
+  padding: 2px 10px;
+  font-size: 0.85em;
+}
+
+.storage-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.storage-token-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.storage-status {
+  margin-top: 8px !important;
+}
+
+/* Neutral confirmation variant (e.g. "✅ Deleted …") — no danger styling. */
+.storage-status.is-neutral {
+  border-color: rgba(52, 211, 153, 0.35);
+  background: rgba(52, 211, 153, 0.1);
+  color: #a7f3d0 !important;
 }
 
 .history-row {
