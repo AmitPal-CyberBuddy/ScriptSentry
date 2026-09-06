@@ -303,8 +303,17 @@ class StorageUiContractTest(unittest.TestCase):
             'id="storage-scan-list"', 'id="storage-delete-all"',
             'id="storage-clear-browser"', 'id="storage-export"',
             'id="storage-clear-token"', 'id="history-storage-link"',
+            'id="storage-show-all"', 'id="storage-open"',
         ):
             self.assertIn(needle, self.tool, f"tool page is missing {needle}")
+
+    def test_storage_entry_point_lives_next_to_the_results(self):
+        # The panel itself stays inside the modal aside; a persistent header
+        # button makes it discoverable without adding a sixth view.
+        header_at = self.tool.index('id="storage-open"')
+        modal_at = self.tool.index('id="storage-section"')
+        self.assertLess(header_at, modal_at,
+                        "the results-header entry point must exist and open the panel")
 
     def test_never_stored_copy_states_the_negatives(self):
         for needle in (
@@ -319,6 +328,9 @@ class StorageUiContractTest(unittest.TestCase):
             '"/api/storage"', '"/api/history/export?include=payload"',
             'method: "DELETE"', "data-storage-delete", 'scriptsentry-triage',
             "scriptsentry_last_result", "storage-clear-token", "confirm(",
+            # The full retained history is inspectable from the panel, and each
+            # stored scan can be reopened or deleted there.
+            '\"/api/history?limit=200\"', "data-storage-view",
         ):
             self.assertIn(needle, self.app, f"app.js is missing {needle}")
 
@@ -327,6 +339,8 @@ class StorageUiContractTest(unittest.TestCase):
                       "delete-all must be disabled while a scan runs")
         self.assertIn('querySelectorAll(".storage-scan-delete")', self.app,
                       "per-scan delete buttons must be disabled while a scan runs")
+        self.assertIn('.storage-scan-view', self.app,
+                      "reopening a stored scan must also be disabled while a scan runs")
         self.assertIn("refreshStoragePanel", self.app)
         self.assertIn("openPrivacyModal", self.app)
 

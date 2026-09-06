@@ -3964,6 +3964,10 @@ main[id] {
   font-size: 0.85em;
 }
 
+.storage-scan-list + #storage-show-all {
+  margin-top: 8px;
+}
+
 .storage-actions {
   display: flex;
   flex-direction: column;

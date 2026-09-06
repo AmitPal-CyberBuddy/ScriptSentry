@@ -96,6 +96,23 @@ release yet.
   machine — AI notes come from the user's own local model and exist only
   inside the stored report; URL downloads/uploads use a temporary
   workspace deleted after the scan.
+- **Every stored scan is reachable from the panel.** The history card showed
+  only the newest 12, so with a full retained history (up to 200 scans by
+  default) older scans were invisible unless you exported everything. The
+  trust panel now has a **Show all scans** toggle (fetches the retained
+  history in one place), each row carries **View** (reopen the stored report
+  — same flow as the history card) alongside **Delete**, and a persistent
+  **💾 Data & storage** button in the results header opens the panel, so the
+  storage story is discoverable without adding a sixth view. Scan-busy
+  protection covers the new buttons too.
+- **The README now tells the visitor what happens to their data.**
+  A "Your data: history, inspection & deletion" section lists exactly what is
+  kept (SQLite history, WAL, report payloads, ETA timings, browser keys) and
+  where, the retention defaults and env switches, and every way to inspect,
+  export, or delete it. The "How it works" section explains the
+  discover → parse → model → verify → triage pipeline, and Quick start gained
+  the pip/pipx and Docker paths now that the installed wheel actually works
+  (see release hygiene below).
 
 ### Dashboard fixes: panels that would not show, and notices that read as errors
 

@@ -241,6 +241,7 @@
             <button class="btn ghost" id="export-sarif">🧾 SARIF</button>
             <button class="btn ghost" id="export-json" title="Raw JSON report (same shape as --format json)">🧱 JSON</button>
             <button class="btn ghost" id="export-openapi" title="OpenAPI 3.1-shaped map of the discovered API surface">🧭 API map</button>
+            <button class="btn ghost" id="storage-open" title="See what this machine keeps: scan history, stored reports, browser data — and delete it">💾 Data &amp; storage</button>
           </div>
         </div>
 
@@ -590,6 +591,7 @@ scriptsentry-server --port 8000</pre>
               <span class="storage-unknown">Loading…</span>
             </div>
             <div class="storage-scan-list" id="storage-scan-list"></div>
+            <button class="btn ghost btn-sm" id="storage-show-all" type="button" hidden></button>
             <p class="error-note storage-status" id="storage-status" hidden></p>
             <div class="storage-actions">
               <button class="btn ghost btn-sm" id="storage-delete-all" type="button">🗑 Delete all history</button>

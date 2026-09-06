@@ -134,7 +134,7 @@
       if (btn) btn.disabled = busy;
     });
     // Historical report views must not fight a live scan for the dashboard.
-    document.querySelectorAll(".history-view").forEach((btn) => { btn.disabled = busy; });
+    document.querySelectorAll(".history-view, .storage-scan-view").forEach((btn) => { btn.disabled = busy; });
     document.querySelectorAll(".storage-scan-delete").forEach((btn) => { btn.disabled = busy; });
   }
 

@@ -2,6 +2,12 @@
   // Same list the storage panel renders, so deletions stay consistent with
   // what the history card shows without fetching twice.
   let lastHistoryScans = [];
+  // Storage panel list mode: the history card fetches the newest 12; the
+  // storage section can expand to the full retained history (server caps at
+  // the newest 200) so "what this machine keeps" is inspectable in one place.
+  let storageScansAll = false;
+  let storageScansAllData = null;
+  let lastStorageCount = 0;
 
   function renderHistoryChip() {
     const box = $("#history-diff");
@@ -215,6 +221,7 @@
   function renderStorageFacts(storage) {
     const facts = $("#storage-facts");
     if (!facts || !storage) return;
+    lastStorageCount = storage.scan_count || 0;
     const row = (label, value) =>
       `<div class="storage-fact"><span class="storage-fact-label">${escapeHtml(label)}</span>` +
       `<span class="storage-fact-value">${value}</span></div>`;
@@ -238,21 +245,49 @@
   function renderStorageScans() {
     const list = $("#storage-scan-list");
     if (!list) return;
-    const scans = lastHistoryScans || [];
+    const scans = (storageScansAll ? storageScansAllData : null) || lastHistoryScans || [];
+    const count = storageScansAll ? storageScansAllData.length : (lastStorageCount || scans.length);
     list.innerHTML = scans.length
-      ? `<div class="storage-scan-head">Scans</div>` + scans.map((s) => {
+      ? `<div class="storage-scan-head">Scans (${storageScansAll ? scans.length : count}${storageScansAll ? " · all" : " · newest"})</div>`
+        + scans.map((s) => {
           const when = s.created_at ? new Date(s.created_at * 1000).toLocaleString() : "";
           return `<div class="storage-scan-row">` +
             `<span class="history-when">#${s.scan_id}</span>` +
             `<span class="history-target" title="${escapeHtml(s.target || "")}">${escapeHtml(s.target || s.mode || "")}</span>` +
             `<span class="meta">${when} · ${s.findings_total || 0} finding(s)</span>` +
+            (s.report_stored
+              ? `<button class="btn ghost btn-sm storage-scan-view" data-storage-view="${s.scan_id}" type="button">View</button>`
+              : "") +
             `<button class="btn ghost btn-sm storage-scan-delete" data-storage-delete="${s.scan_id}" type="button">Delete</button>` +
             `</div>`;
         }).join("")
       : `<span class="storage-unknown">No scans stored.</span>`;
+    list.querySelectorAll(".storage-scan-view").forEach((btn) => {
+      btn.addEventListener("click", () => viewHistoryScan(btn.dataset.storageView, btn));
+    });
     list.querySelectorAll(".storage-scan-delete").forEach((btn) => {
       btn.addEventListener("click", () => deleteHistoryScan(btn.dataset.storageDelete, btn));
     });
+    const toggle = $("#storage-show-all");
+    if (toggle) {
+      toggle.hidden = !(count > (storageScansAll ? 0 : scans.length));
+      toggle.textContent = storageScansAll
+        ? "Show recent only"
+        : `Show all scans (${count})`;
+    }
+  }
+
+  async function toggleStorageScanList() {
+    const toggle = $("#storage-show-all");
+    storageScansAll = !storageScansAll;
+    if (storageScansAll) {
+      const data = await getJSON("/api/history?limit=200");
+      storageScansAllData = Array.from(data.scans || []);
+    } else {
+      storageScansAllData = null;
+    }
+    renderStorageScans();
+    if (toggle) toggle.disabled = false;
   }
 
   async function deleteHistoryScan(scanId, btn) {
@@ -268,6 +303,11 @@
       if (!res.ok || body.ok === false) throw new Error(body.error || "Delete failed.");
       setStorageStatus(`✅ Deleted scan #${scanId}.`);
       await refreshHistory();
+      // Keep the storage list in the mode the user chose (all vs recent).
+      if (storageScansAll) {
+        const full = await getJSON("/api/history?limit=200");
+        storageScansAllData = Array.from(full.scans || []);
+      }
       await refreshStoragePanel();
     } catch (err) {
       setStorageStatus(err && err.message ? err.message : "Delete failed.");
@@ -342,6 +382,24 @@
     if (clear) clear.addEventListener("click", clearBrowserData);
     const exportBtn = $("#storage-export");
     if (exportBtn) exportBtn.addEventListener("click", downloadHistoryExport);
+    const showAll = $("#storage-show-all");
+    if (showAll) showAll.addEventListener("click", () => {
+      showAll.disabled = true;
+      toggleStorageScanList().finally(() => { showAll.disabled = false; });
+    });
+    // Always-visible entry point in the results header: the storage panel is
+    // deliberately inside the setup dialog (not a sixth view), so
+    // discoverability comes from one button that opens it and scrolls there.
+    const headerLink = $("#storage-open");
+    if (headerLink) {
+      headerLink.addEventListener("click", () => {
+        openPrivacyModal();
+        setTimeout(() => {
+          const section = $("#storage-section");
+          if (section) section.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 40);
+      });
+    }
   }
 
   /* ---------------- Local file upload ---------------- */
