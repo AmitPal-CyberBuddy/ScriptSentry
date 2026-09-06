@@ -21,6 +21,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEBUI = os.path.join(os.path.dirname(HERE), "webui")
 CSS_PATH = os.path.join(WEBUI, "styles.css")
+APP_JS_PATH = os.path.join(WEBUI, "app.js")
 
 with open(CSS_PATH, encoding="utf-8") as fh:
     CSS = fh.read()
@@ -429,6 +430,47 @@ class BreakpointTest(unittest.TestCase):
         self.assertIn("min-width: 1600px", CSS_NC,
                       "Past 1600px the content width must be capped so it does "
                       "not stretch across a 2560px monitor.")
+
+
+class ViewToggleTest(unittest.TestCase):
+    """Tabs must reveal view groups with a class toggle, not inline style.
+
+    The shipped stylesheet hides every `.view-group`; the old JS put
+    ``group.style.display = ""`` on the selected group, which removes the
+    inline style and lets the group fall back to the stylesheet's
+    ``display: none``. Overview panels only ever appeared because they also
+    carry `.grid` (which sets ``display: grid`` later in the file). A class
+    toggle must be the mechanism so the cascade can do its job.
+    """
+
+    def test_stylesheet_reveals_active_view_groups(self):
+        self.assertIn(
+            ".view-group.is-active",
+            CSS_NC,
+            "Add `.view-group.is-active { display: block; }` (plus a `.grid` "
+            "variant) so an active tab panel outranks `.view-group` / `.grid`.",
+        )
+        self.assertIn(
+            ".view-group:not(.is-active)",
+            CSS_NC,
+            "Inactive grid-based panels need `.view-group:not(.is-active)` so "
+            "`.grid` (which sets display later) cannot leak them back in.",
+        )
+
+    def test_activate_view_uses_class_toggle(self):
+        with open(APP_JS_PATH, encoding="utf-8") as fh:
+            app_js = fh.read()
+        self.assertIn(
+            'classList.toggle("is-active"',
+            app_js,
+            "activateView must reveal panels with classList.toggle('is-active', …).",
+        )
+        self.assertNotIn(
+            "group.style.display",
+            app_js,
+            "Do not reintroduce inline-style revealing: `display: \"\"` falls back "
+            "to the stylesheet's `display: none` and the panel stays invisible.",
+        )
 
 
 if __name__ == "__main__":

@@ -1210,8 +1210,21 @@ select {
   border-color: transparent;
 }
 
-.view-group {
+/* View groups are toggled by class, never inline style: an inline
+   `display: ""` falls back to this rule and the group stays hidden.
+   `:not(.is-active)` outranks `.grid`, so inactive grid-based overview
+   panels are hidden too; `.is-active` brings the active panel back, and
+   the `.grid` variant keeps the overview's grid layout when shown. */
+.view-group:not(.is-active) {
   display: none;
+}
+
+.view-group.is-active {
+  display: block;
+}
+
+.view-group.is-active.grid {
+  display: grid;
 }
 
 /* triage status chips */

@@ -1962,7 +1962,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     (payload.files || []).forEach((f) => (f.analysis_warnings || []).forEach((w) => warnings.add(w)));
     warnings.forEach((w) => notes.push(escapeHtml(w)));
     node.innerHTML = notes.length
-      ? notes.map((n) => `<div class="engine-note">⚠️ ${n}</div>`).join("")
+      ? notes.map((n) => `<div class="engine-note">ℹ️ ${n}</div>`).join("")
       : "";
     node.hidden = !notes.length;
   }
@@ -2509,7 +2509,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       t.tabIndex = on ? 0 : -1;
     });
     $$(".view-group").forEach((group) => {
-      group.style.display = group.dataset.view === view ? "" : "none";
+      group.classList.toggle("is-active", group.dataset.view === view);
     });
     window.__activeView = view;
   }

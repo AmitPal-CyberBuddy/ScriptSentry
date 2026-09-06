@@ -107,6 +107,11 @@
       <section class="release" id="unreleased-2-2-0-dev">
         <h2>[Unreleased] — 2.2.0-dev</h2>
         <p>The 2.2.0 accuracy &amp; triage work below is in development and not a published release yet.</p>
+        <h3 id="dashboard-fixes-panels-that-would-not-show-and-notices-that-read-as-errors">Dashboard fixes: panels that would not show, and notices that read as errors</h3>
+        <ul>
+          <li><strong>Findings / Scripts / Intelligence / Runtime panels now actually appear.</strong> <code>activateView()</code> used to reveal the selected tab by setting <code>group.style.display = ""</code>, which removes the inline style and lets the panel fall back to the stylesheet's <code>display: none</code>; only the Overview panels ever surfaced, because they also carry <code>.grid</code> (which sets its own display later in the file). Tabs now toggle an <code>.is-active</code> class instead, with a stylesheet rule whose specificity wins over both <code>.view-group</code> and <code>.grid</code> (and keeps the Overview grid layout when active). A new source-contract test in <code>tests/test_responsive_ui.py</code> fails if inline-style revealing is reintroduced.</li>
+          <li><strong>The AST fallback notice is honest instead of alarming.</strong> When a file's dialect cannot be parsed, the engine note now names that file and explains that only that file fell back to conservative regex patterns while the rest used full AST analysis. Engine notes render with a neutral <code>ℹ️</code> marker (previously <code>⚠️</code>), so genuine warnings keep their warning signal and informational degradation is not mistaken for an error.</li>
+        </ul>
         <h3 id="the-interface-recomposed">The interface, recomposed</h3>
         <ul>
           <li><strong>The landing page is an editorial document now, not a stack of cards.</strong> The hero is an asymmetric split — the statement on the left, a static "live signal" instrument card on the right that speaks the report's own language (verdict, severity bars, finding lines). The ten capabilities are a numbered index with hairline dividers instead of ten identical cards; the workflow is one full-width band with oversized numerals; the trust argument is set as type; the setup guide separates the one recommended path from the alternatives.</li>

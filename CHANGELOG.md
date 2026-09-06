@@ -11,6 +11,25 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Dashboard fixes: panels that would not show, and notices that read as errors
+
+- **Findings / Scripts / Intelligence / Runtime panels now actually appear.**
+  `activateView()` used to reveal the selected tab by setting
+  `group.style.display = ""`, which removes the inline style and lets the
+  panel fall back to the stylesheet's `display: none`; only the Overview
+  panels ever surfaced, because they also carry `.grid` (which sets its own
+  display later in the file). Tabs now toggle an `.is-active` class instead,
+  with a stylesheet rule whose specificity wins over both `.view-group` and
+  `.grid` (and keeps the Overview grid layout when active). A new
+  source-contract test in `tests/test_responsive_ui.py` fails if inline-style
+  revealing is reintroduced.
+- **The AST fallback notice is honest instead of alarming.** When a file's
+  dialect cannot be parsed, the engine note now names that file and explains
+  that only that file fell back to conservative regex patterns while the rest
+  used full AST analysis. Engine notes render with a neutral `ℹ️` marker
+  (previously `⚠️`), so genuine warnings keep their warning signal and
+  informational degradation is not mistaken for an error.
+
 ### The interface, recomposed
 
 - **The landing page is an editorial document now, not a stack of cards.**
