@@ -2,6 +2,9 @@
 
 All notable changes to ScriptSentry are listed here, newest first.
 
+> Note for 2.2.0-dev: release entries below are grouped by theme; the newest
+> one is always first.
+
 > 🚧 **Status: under active development.** ScriptSentry is still a pre-release
 > tool: it is already useful for triage, but features and detection rules keep
 > improving, and details may change between versions.
@@ -10,6 +13,31 @@ All notable changes to ScriptSentry are listed here, newest first.
 
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
+
+### Visitor-level review: the tool explains itself to a first-timer
+
+- **Button links are no longer underlined.** `.btn` is used on `<a>` elements
+  (hero "Open the Analyzer", header "Go to tool", connect buttons), and the
+  base rule never disabled the browser's default underline — only two scoped
+  rules happened to patch it. The base rule now sets `text-decoration: none`.
+- **"Optional" features say how you get them.** The landing cards for Runtime
+  Evidence and Local AI Triage Notes had an "Optional" tag but never said how
+  to enable them. Runtime now states it runs *automatically* for URL scans
+  after `python -m playwright install chromium`, and AI notes state they are
+  *CLI only* — the dashboard never calls a model and never asks for an API
+  key, so a visitor is never left searching for a setting that doesn't exist.
+- **Before pairing, the console says what to do.** Instead of hiding the
+  capability strip when the engine is offline, it shows a
+  `🔌 Start the engine first — see the 2-minute guide` chip that opens the
+  setup dialog on click — a first-time visitor no longer has to guess that
+  this page can't scan on its own.
+- **Export buttons explain themselves.** HTML/TXT/CSV/SARIF got one-line
+  tooltips, and the results header now labels a multi-file run
+  "Uploaded files" instead of the generic "Source snippet".
+- **The footer "view the setup guide" link pointed at the wrong section**
+  (How It Works instead of Setup). It now anchors to the actual Setup section
+  on the landing and changelog pages; on the tool page it still opens the
+  setup dialog (which is the guide there).
 
 ### The console answers before you ask
 

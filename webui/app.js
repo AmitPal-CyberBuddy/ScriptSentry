@@ -290,15 +290,25 @@
 
   /* One short line, not another option: tells the visitor what the engine
    * will do automatically so the optional features are never a surprise.
-   * The dashboard never calls an AI model, so that chip is static copy. */
+   * The dashboard never calls an AI model, so that chip is static copy.
+   * Before pairing, the strip says exactly what a first-time visitor needs
+   * to know and opens the setup guide on click. */
   function renderConsoleCaps() {
     const strip = $("#console-caps");
     if (!strip) return;
     const cap = $("#cap-runtime");
     if (!cap) return;
     if (!backendConnected || !lastHealth) {
-      strip.hidden = true;
-      cap.textContent = "";
+      strip.hidden = false;
+      cap.textContent = "🔌 Start the engine first — see the 2-minute guide";
+      cap.classList.add("is-off");
+      cap.title = "This page is only the interface. The actual scanner runs on YOUR machine. Click for the setup guide: download one file, run one command, paste the token it prints.";
+      if (!cap.dataset.wired) {
+        cap.dataset.wired = "1";
+        cap.addEventListener("click", () => {
+          if (!backendConnected) openPrivacyModal();
+        });
+      }
       return;
     }
     strip.hidden = false;
@@ -2266,7 +2276,13 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     const results = $("#results");
     results.classList.add("show");
     renderEngineNotes();
-    $("#result-meta").textContent = `${payload.meta.engine} · ${payload.meta.analysis_mode === "url" ? "Remote URL" : "Source snippet"} · ${payload.meta.generated_at || ""}`;
+    // Tell the visitor what kind of run this was — "Uploaded files" is a
+    // friendlier label than a generic "Source snippet" for a multi-file scan.
+    const metaSource = String(payload.meta.source || "");
+    const modeLabel = payload.meta.analysis_mode === "url"
+      ? "Remote URL"
+      : /file\(s\)$/.test(metaSource) ? "Uploaded files" : "Source snippet";
+    $("#result-meta").textContent = `${payload.meta.engine} · ${modeLabel} · ${payload.meta.generated_at || ""}`;
     renderSummary();
     renderPriorities();
     renderRiskBreakdown();

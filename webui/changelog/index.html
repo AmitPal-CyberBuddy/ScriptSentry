@@ -103,10 +103,19 @@
 
     <div class="changelog">
         <p>All notable changes to ScriptSentry are listed here, newest first.</p>
+        <blockquote>Note for 2.2.0-dev: release entries below are grouped by theme; the newest one is always first.</blockquote>
         <blockquote>🚧 <strong>Status: under active development.</strong> ScriptSentry is still a pre-release tool: it is already useful for triage, but features and detection rules keep improving, and details may change between versions.</blockquote>
       <section class="release" id="unreleased-2-2-0-dev">
         <h2>[Unreleased] — 2.2.0-dev</h2>
         <p>The 2.2.0 accuracy &amp; triage work below is in development and not a published release yet.</p>
+        <h3 id="visitor-level-review-the-tool-explains-itself-to-a-first-timer">Visitor-level review: the tool explains itself to a first-timer</h3>
+        <ul>
+          <li><strong>Button links are no longer underlined.</strong> <code>.btn</code> is used on <code>&lt;a&gt;</code> elements (hero "Open the Analyzer", header "Go to tool", connect buttons), and the base rule never disabled the browser's default underline — only two scoped rules happened to patch it. The base rule now sets <code>text-decoration: none</code>.</li>
+          <li><strong>"Optional" features say how you get them.</strong> The landing cards for Runtime Evidence and Local AI Triage Notes had an "Optional" tag but never said how to enable them. Runtime now states it runs <em>automatically</em> for URL scans after <code>python -m playwright install chromium</code>, and AI notes state they are <em>CLI only</em> — the dashboard never calls a model and never asks for an API key, so a visitor is never left searching for a setting that doesn't exist.</li>
+          <li><strong>Before pairing, the console says what to do.</strong> Instead of hiding the capability strip when the engine is offline, it shows a <code>🔌 Start the engine first — see the 2-minute guide</code> chip that opens the setup dialog on click — a first-time visitor no longer has to guess that this page can't scan on its own.</li>
+          <li><strong>Export buttons explain themselves.</strong> HTML/TXT/CSV/SARIF got one-line tooltips, and the results header now labels a multi-file run "Uploaded files" instead of the generic "Source snippet".</li>
+          <li><strong>The footer "view the setup guide" link pointed at the wrong section</strong> (How It Works instead of Setup). It now anchors to the actual Setup section on the landing and changelog pages; on the tool page it still opens the setup dialog (which is the guide there).</li>
+        </ul>
         <h3 id="the-console-answers-before-you-ask">The console answers before you ask</h3>
         <ul>
           <li><strong>One-line capability strip under "New scan".</strong> After pairing, two short chips appear instead of more options: <code>🖥️ Runtime: on for URL scans</code> (or <code>static only</code> when Playwright/Chromium is missing — taken from <code>/api/health</code>, so it is always what this engine will actually do) and <code>🧠 AI notes: CLI only · no key</code> (the dashboard never calls a model, and no API key is ever requested from the user). Hover explains the "why" in one sentence; the scan itself needs no new choices — runtime evidence is automatic for URL scans, and pasted/uploaded code is always static.</li>
@@ -452,7 +461,7 @@
       </p>
       <p class="footer-meta">
         ScriptSentry · JS Intelligence Studio · <strong>private &amp; free</strong> ·
-        <a class="js-open-setup" href="../home/#how">view the setup guide</a> · no telemetry, no accounts, no cloud.
+        <a class="js-open-setup" href="../home/#setup">view the setup guide</a> · no telemetry, no accounts, no cloud.
       </p>
     </div>
   </footer>

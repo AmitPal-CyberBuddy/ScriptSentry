@@ -1041,6 +1041,9 @@ select {
   font-size: 14px;
   cursor: pointer;
   font-family: inherit;
+  /* .btn is used on <a> too (hero CTAs, header links). Without this the
+     browser's default underline shows under button-shaped links. */
+  text-decoration: none;
   transition: 0.25s ease;
   color: #04131c;
   background: linear-gradient(135deg, #67e8f9, #38bdf8);

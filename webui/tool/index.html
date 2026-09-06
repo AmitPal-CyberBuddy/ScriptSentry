@@ -240,10 +240,10 @@
           <h2>📊 Analysis Dashboard</h2>
           <div class="row" style="margin:0">
             <div class="meta" id="result-meta"></div>
-            <button class="btn ghost" id="export-html">📄 HTML</button>
-            <button class="btn ghost" id="export-txt">📝 TXT</button>
-            <button class="btn ghost" id="export-csv">📊 CSV</button>
-            <button class="btn ghost" id="export-sarif">🧾 SARIF</button>
+            <button class="btn ghost" id="export-html" title="Polished, shareable report">📄 HTML</button>
+            <button class="btn ghost" id="export-txt" title="Plain-text triage report">📝 TXT</button>
+            <button class="btn ghost" id="export-csv" title="Spreadsheet of findings — severity, confidence, status, source→sink">📊 CSV</button>
+            <button class="btn ghost" id="export-sarif" title="SARIF 2.1.0 — import into GitHub code scanning or your CI">🧾 SARIF</button>
             <button class="btn ghost" id="export-json" title="Raw JSON report (same shape as --format json)">🧱 JSON</button>
             <button class="btn ghost" id="export-openapi" title="OpenAPI 3.1-shaped map of the discovered API surface">🧭 API map</button>
             <button class="btn ghost" id="storage-open" title="See what this machine keeps: scan history, stored reports, browser data — and delete it">💾 Data &amp; storage</button>
@@ -452,7 +452,7 @@
       </p>
       <p class="footer-meta">
         ScriptSentry · JS Intelligence Studio · <strong>private &amp; free</strong> ·
-        <a class="js-open-setup" href="../home/#how">view the setup guide</a> · no telemetry, no accounts, no cloud.
+        <a class="js-open-setup" href="../home/#setup">view the setup guide</a> · no telemetry, no accounts, no cloud.
       </p>
     </div>
   </footer>
