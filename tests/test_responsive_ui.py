@@ -22,6 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WEBUI = os.path.join(os.path.dirname(HERE), "webui")
 CSS_PATH = os.path.join(WEBUI, "styles.css")
 APP_JS_PATH = os.path.join(WEBUI, "app.js")
+TOOL_HTML_PATH = os.path.join(WEBUI, "tool", "index.html")
 
 with open(CSS_PATH, encoding="utf-8") as fh:
     CSS = fh.read()
@@ -471,6 +472,47 @@ class ViewToggleTest(unittest.TestCase):
             "Do not reintroduce inline-style revealing: `display: \"\"` falls back "
             "to the stylesheet's `display: none` and the panel stays invisible.",
         )
+
+
+class DashboardLayoutTest(unittest.TestCase):
+    """The analysis dashboard is a compact card grid, not one long column.
+
+    Scripts / Findings / Intelligence / Runtime used to stack full-width
+    cards, which read as one long card with long empty bands. Each of those
+    views must now be a single two-column ``view-cards`` tabpanel whose
+    panels sit side by side (and collapse to one column on narrow screens).
+    """
+
+    def setUp(self):
+        with open(TOOL_HTML_PATH, encoding="utf-8") as fh:
+            self.tool = fh.read()
+
+    def test_non_overview_views_are_single_grid_panels(self):
+        for view in ("scripts", "findings", "intelligence", "runtime"):
+            with self.subTest(view=view):
+                panels = re.findall(
+                    r'<div class="view-group view-cards"[^>]*data-view="' + re.escape(view) + r'"',
+                    self.tool,
+                )
+                self.assertEqual(
+                    len(panels), 1,
+                    f"view {view!r} must have exactly one tabpanel grid",
+                )
+        self.assertNotIn(
+            'class="card view-group"',
+            self.tool,
+            "cards must sit inside the view grid, not be the tabpanel element",
+        )
+
+    def test_card_grid_is_two_columns_then_one(self):
+        columns = [value for selector, value in declarations("grid-template-columns")
+                   if selector == ".view-group.is-active.view-cards"]
+        self.assertIn("repeat(2, minmax(0, 1fr))", columns,
+                      "active card views must be a two-column grid")
+        self.assertIn("minmax(0, 1fr)", columns,
+                      "card views must collapse to one column on narrow screens")
+        self.assertIn("@media (max-width: 760px)", CSS_NC,
+                      "the card-view collapse breakpoint is missing")
 
 
 if __name__ == "__main__":

@@ -64,6 +64,14 @@ release yet.
   used full AST analysis. Engine notes render with a neutral `ℹ️` marker
   (previously `⚠️`), so genuine warnings keep their warning signal and
   informational degradation is not mistaken for an error.
+- **The analysis dashboard stops reading as one long card.** Findings,
+  Scripts, Intelligence and Runtime panels used to stack full-width cards,
+  leaving long empty bands below short panels. Each of those views is now a
+  single two-column card grid (one column on narrow screens), so panels sit
+  side by side, shorter panels are no longer stretched to fill gap, and a
+  view with one panel (Runtime) still spans the full row. A layout
+  source-contract test in `tests/test_responsive_ui.py` fails if a view
+  regresses to stacked full-width cards.
 
 ### The interface, recomposed
 

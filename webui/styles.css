@@ -1227,6 +1227,32 @@ select {
   display: grid;
 }
 
+/* Multi-panel views (Scripts / Findings / Intelligence / Runtime) are a
+   two-column card grid, not one long card: side-by-side panels use the
+   width instead of leaving long empty bands, and align-items:start stops
+   a shorter panel from being stretched to its taller sibling's height.
+   Single-panel views (Runtime) span the full row. */
+.view-group.is-active.view-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-sm);
+  align-items: start;
+}
+
+.view-cards > .card {
+  min-width: 0;
+}
+
+.view-cards > .card:only-child {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 760px) {
+  .view-group.is-active.view-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* triage status chips */
 .status-chip {
   display: inline-block;
