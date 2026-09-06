@@ -561,6 +561,15 @@ body {
   gap: 8px;
   margin: 14px 0 6px;
 }
+
+/* Three setup tabs ("Easiest: one file", "Clone the Repo", "pip / Docker")
+   in a row are ~90px each on a phone -- labels crush into three narrow
+   columns. Below 560px they stack full-width instead. */
+@media (max-width: 560px) {
+  .setup-toggle {
+    flex-direction: column;
+  }
+}
 .setup-tab {
   flex: 1;
   padding: 8px 12px;
@@ -1030,6 +1039,7 @@ select {
   display: none;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
   color: var(--muted);
   font-size: 14px;
   margin-top: 16px;
@@ -1049,7 +1059,10 @@ select {
 }
 
 .progress-wrap {
-  flex: 1;
+  /* flex-basis 240px (with .loading flex-wrap) lets the progress block
+     take its own row on a phone and wrap the Cancel button below it,
+     instead of squeezing the bar into a sliver next to the button. */
+  flex: 1 1 240px;
   display: grid;
   gap: 7px;
   min-width: 0;
@@ -2086,6 +2099,10 @@ svg.chart {
    ragged rows of unequal buttons. Laid out as a 2x2 grid they become
    one deliberate group with a consistent target size, and the status
    line spans above them rather than being squeezed between buttons. */
+/* The export cluster carries seven buttons now (six exports plus the
+   Data & storage entry point). The 2x2 grid keeps them one deliberate
+   group; the last button spans the full row so nothing is left as a
+   single ragged cell. */
 @media (max-width: 560px) {
   .results-header .row {
     display: grid;
@@ -2100,6 +2117,10 @@ svg.chart {
   .results-header .row .btn {
     justify-content: center;
     text-align: center;
+  }
+
+  .results-header .row .btn:last-child {
+    grid-column: 1 / -1;
   }
 }
 
@@ -3284,6 +3305,8 @@ main.wrap {
   color: #fde68a;
   font-size: 12.5px;
   line-height: 1.65;
+  /* Notes name files/limitations with long paths; never push the page. */
+  overflow-wrap: anywhere;
 }
 
 .engine-note b {
@@ -3643,6 +3666,17 @@ main[id] {
 
   .footer-inner {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* The collapsed-nav block above keeps the footer at two columns for the
+   whole ≤1040px range; on a phone two link columns are cramped. This
+   override MUST come after that block: same specificity, source order
+   decides, and the earlier 640px rule in the Landing Responsive section
+   silently lost the cascade to it. */
+@media (max-width: 640px) {
+  .footer-inner {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

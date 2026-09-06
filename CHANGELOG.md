@@ -11,6 +11,31 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Responsive pass: every section of the tool
+
+- **The footer silently lost its phone layout to a cascade bug.** The
+  trailing collapsed-navigation block re-declared `.footer-inner` as two
+  columns for the whole ≤1040px range; being later in the file it beat the
+  earlier 640px one-column rule, so a phone got two cramped link lists all
+  the way down to 320px. The override now sits after that block, and a test
+  pins the 1-column/2-column behavior at 480px and 700px.
+- **The export cluster no longer leaves a ragged cell.** It carries seven
+  buttons now (six exports + 💾 Data & storage); on a phone the 2×2 grid
+  left the seventh alone in a column. The last button spans the full row.
+- **Setup dialog install tabs stack on a phone.** "Easiest: one file",
+  "Clone the Repo" and "pip / Docker" were three ~90px columns at 320px,
+  crushing their labels; below 560px they stack full-width.
+- **The scan progress row wraps its Cancel button.** `.loading` now wraps
+  and the progress block gets a 240px basis, so on a phone the bar takes a
+  full row and Cancel drops underneath instead of squeezing it.
+- **Engine notes can never push the page sideways.** Notes name files and
+  limitations with long paths; they now `overflow-wrap: anywhere`.
+- Every fix is pinned by the new `ConsoleResponsiveTest` (31 responsive
+  contract tests total), which also re-verified the existing invariants:
+  card grids collapse, view tabs form a rectangular 2-column block, the
+  findings filter wraps, the metrics stay 4-up/2-up, tap targets hit 44px
+  on touch, and no container keeps a track wider than the viewport.
+
 ### Release hygiene: shipped artifacts, launcher safety, and honest note colors
 
 - **`pip install .` / `pipx install .` now ship a working dashboard — the
