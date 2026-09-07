@@ -14,6 +14,29 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Credential discovery: canonical formats, concat folding, line numbers
+
+- **A value that matches a canonical credential shape is now believed.**
+  `_credible_secret` consults the provider validator, so a well-formed AWS
+  (`AKIA…`, plus the `ASIA/ABIA/ACCA` temp prefixes), GitHub, Slack, Stripe,
+  SendGrid, Twilio or npm key — or a JWT/PEM that actually decodes — is
+  reported even when its variable name says nothing and when the key's random
+  characters happen to contain "example"/"xxx"-like substrings that the
+  fixture-marker heuristic would reject (the canonical AWS docs example key
+  is shape-identical to a live one; statically they are indistinguishable).
+  Public-by-design client keys (`AIza…`, `pk_live_…`, `GOCSPX…`) remain
+  excluded — that check deliberately runs first.
+- **Credentials split across a string concatenation are discovered.**
+  `"AKIA" + "IOSFODNN7EXAMPLE"` was invisible to every pattern; literal chains
+  are now folded into synthetic candidates that run through the same
+  dedup/credibility pipeline, keep the assignment name when one exists, and
+  carry the chain's line number. Verified fast on pathological inputs and
+  300 KB single-line minified bundles.
+- **Secret findings finally carry a line number.** The `hardcoded_secret`
+  signal points at the first credible secret (or chain), so the dashboard,
+  CSV and SARIF exports no longer show line 0 / the top of the file.
+- New regression suite `tests/test_credential_discovery.py` (13 tests).
+
 ### Review pass: scoring, reporting, accuracy & reliability (3 bugs fixed)
 
 - **CSV exports no longer execute as spreadsheet formulas.** Evidence,

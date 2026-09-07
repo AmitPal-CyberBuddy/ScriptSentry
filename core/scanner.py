@@ -15,6 +15,7 @@ from core.decoder import decode_candidate_strings, extract_hidden_values
 from core.framework_rules import analyze_framework
 from core.taint import analyze_taint
 from core.source_maps import source_map_reference
+from core.secret_validation import validate as _validate_secret_value
 from core.dependency_intel import check_dependencies
 
 
@@ -103,6 +104,66 @@ def _secret_context(content, secret, before=120, after=180):
     return ""
 
 
+# Two or more string literals joined by '+', e.g. "AKIA" + "IOSFODNN7EXAMPLE".
+# Minified and defensively-written bundles really do split credentials across
+# a concatenation, and every name- and value-based pattern is blind to that.
+_CONCAT_CHAIN_RE = re.compile(
+    r"""(?P<chain>(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*")
+        (?:\s*\+\s*(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"))+)""",
+    re.VERBOSE,
+)
+# An assignment target immediately left of a chain, so `apiKey = "a" + "b"`
+# can be re-synthesized as the candidate `apiKey = "ab"`.
+_ASSIGN_BEFORE_RE = re.compile(r"([A-Za-z_$][\w$.\]['\"]{0,60})\s*[:=]\s*$")
+
+
+def _folded_concat_candidates(content, limit=200):
+    """Re-synthesize candidates from string-literal concatenation chains.
+
+    Returns ``(candidate, line)`` pairs in content order, where ``line`` is
+    where the chain starts (the folded value itself never appears contiguously
+    in the file, so position must be carried explicitly). The candidate text
+    is ``value`` or ``name = "value"`` when the chain is the right-hand side
+    of an assignment, and flows through the same dedup/credibility pipeline
+    as literally-present values.
+    """
+    out = []
+    for m in _CONCAT_CHAIN_RE.finditer(content or ""):
+        if len(out) >= limit:
+            break
+        chain = m.group("chain")
+        parts = re.findall(r"'((?:[^'\\\n]|\\.)*)'|\"((?:[^\"\\\n]|\\.)*)\"", chain)
+        folded = "".join(a or b for a, b in parts)
+        if len(folded) < 8:
+            continue
+        line = (content or "").count("\n", 0, m.start()) + 1
+        # If the chain is the right-hand side of an assignment, say which
+        # name it was assigned to so name-based credibility applies too.
+        prefix = content[max(0, m.start() - 120):m.start()]
+        assign = _ASSIGN_BEFORE_RE.search(prefix)
+        if assign:
+            out.append((f'{assign.group(1).strip()} = "{folded}"', line))
+        else:
+            out.append((f'"{folded}"', line))
+    return out
+
+
+def _line_of(content, needle):
+    """1-based line of ``needle`` in ``content`` (0 when not found)."""
+    if not needle:
+        return 0
+    idx = (content or "").find(str(needle))
+    if idx < 0:
+        # Fall back to the extracted value (candidates are often normalized).
+        for value in re.findall(r"""['"]([^'"]{4,})['"]""", str(needle)):
+            idx = (content or "").find(value)
+            if idx >= 0:
+                break
+        else:
+            return 0
+    return (content or "").count("\n", 0, idx) + 1
+
+
 def _credible_secret(candidate):
     """Filter obvious fixtures/labels before raising a secret risk signal."""
     text = str(candidate or "")
@@ -116,8 +177,20 @@ def _credible_secret(candidate):
     value_lower = value.lower()
 
     # Public-by-design client identifiers are inventory, not credentials.
+    # This check intentionally runs BEFORE the canonical-format bypass below:
+    # GOCSPX-… is a documented Google OAuth client secret shape, but it is
+    # public-by-design in a browser bundle, so it stays inventory.
     if PUBLIC_CLIENT_KEY_RE.search(_secret_value(text)):
         return False
+    # A value that matches a canonical provider format (AWS/GitHub/Slack/
+    # Stripe/SendGrid/Twilio/npm shape, or a JWT/PEM that actually decodes)
+    # is stronger evidence than any heuristic below, and it overrides the
+    # fixture-marker filter: a real 20-char AWS key can legitimately contain
+    # "xxx" or "todo" as a substring, and the canonical docs example key
+    # (AKIA…EXAMPLE) is shape-identical to a live key -- statically they are
+    # indistinguishable, so both must be reported.
+    if _validate_secret_value(value):
+        return True
     if any(marker in value_lower for marker in (
         "example", "sample", "placeholder", "changeme", "dummy", "test123",
         "your_", "_here", "xxx", "todo", "fixme", "redact", "lorem",
@@ -272,7 +345,10 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
         r'(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}',
         r'\bgh[pousr]_[A-Za-z0-9]{20,}',
         r'\bxox[baprs]-[A-Za-z0-9-]{10,}',
-        r'\bAKIA[0-9A-Z]{16}\b',
+        r'\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b',
+        r'\bSG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}\b',
+        r'\bSK[0-9a-fA-F]{32}\b',
+        r'\bnpm_[A-Za-z0-9]{36}\b',
         r'https://hooks\.slack\.com/services/[A-Za-z0-9/_]+',
         r'https://discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_\-]+',
     ]
@@ -285,6 +361,16 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
         # single huge file, not only the gaps between files.
         _raise_if_cancelled(cancel_check)
         raw_secrets.extend(re.findall(pattern, content, re.I))
+    # Credentials split across a string concatenation ("AKIA" + "…") are
+    # invisible to every pattern above; fold the literals and run the folded
+    # values through the same dedup/credibility pipeline. Keep each chain's
+    # line so findings can still point at real source positions.
+    folded_secret_lines = {}
+    for folded_candidate, folded_line in _folded_concat_candidates(content):
+        raw_secrets.append(folded_candidate)
+        folded_secret_lines.setdefault(
+            re.sub(r"\s+", "", _secret_value(folded_candidate).lower()), folded_line
+        )
 
     # Deduplicate on the *assigned value* rather than the matched text: three
     # overlapping patterns can match different slices of one assignment
@@ -667,7 +753,7 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
     # as observations so the dashboard can present "interesting behavior"
     # separately from "actionable findings".
     risk_signals = []
-    def _signal(sig_id, severity, title, evidence, confidence="medium", observation=None):
+    def _signal(sig_id, severity, title, evidence, confidence="medium", observation=None, line=0):
         sev = str(severity).upper()
         if observation is None:
             observation = sev not in ("CRITICAL", "HIGH")
@@ -679,6 +765,7 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
             "confidence": confidence,
             "evidence_type": "static_pattern",
             "observation": bool(observation),
+            "line": line,
         })
 
     # Known-vulnerability matching for identified libraries: annotate the
@@ -692,16 +779,31 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
         # Slack/GitHub/AWS/... shape) is stronger evidence than entropy alone
         # can provide -- say so instead of capping every static guess at
         # medium.
-        from core.secret_validation import validate as _validate_secret
         verdicts = [
             verdict for verdict in
-            (_validate_secret(candidate) for candidate in results["credible_secrets"])
+            (_validate_secret_value(candidate) for candidate in results["credible_secrets"])
             if verdict
         ]
+        # Point the analyst at the first credible secret in the file; every
+        # export (CSV/SARIF/dashboard) used to show line 0. Folded (concat)
+        # values never appear contiguously, so their line comes from the
+        # chain map built during collection.
+        def _secret_line(candidate):
+            line = _line_of(content, candidate)
+            if not line:
+                line = folded_secret_lines.get(
+                    re.sub(r"\s+", "", _secret_value(candidate).lower()), 0)
+            return line
+
+        secret_line = min(
+            (ln for ln in map(_secret_line, results["credible_secrets"]) if ln),
+            default=0,
+        )
         _signal(
             "hardcoded_secret", "HIGH", "Hardcoded secret candidate",
             results["credible_secrets"][:3],
             confidence="high" if verdicts else "medium", observation=False,
+            line=secret_line,
         )
         if verdicts:
             risk_signals[-1]["validated"] = verdicts[:3]

@@ -29,7 +29,7 @@ Evidence, sources, sinks and file names are strings from the **scanned (untruste
 
 **Fix:** markers now apply to the extracted secret **value** only. The whole accuracy corpus (including every fixture/placeholder false-positive case — which all carry markers in the value) still passes, and the previously-missed case is now detected end-to-end.
 
-New regression suite: `tests/test_export_hardening.py` (13 tests) pins all three contracts.
+New regression suite: `tests/test_export_hardening.py` (13 tests) pins all three contracts. The P1 accuracy items are pinned by `tests/test_credential_discovery.py` (13 tests): canonical-format discovery, concat folding, line numbers into CSV/SARIF, and the public-key/placeholder exclusions.
 
 ---
 
@@ -49,11 +49,12 @@ New regression suite: `tests/test_export_hardening.py` (13 tests) pins all three
 
 ## Open findings & improvement areas (prioritized, not fixed)
 
-### P1 — Accuracy
+### P1 — Accuracy — ✅ implemented 2026-09-07 (see below)
 
-1. **Value-pattern credential discovery is missing.** `core/secret_validation.py` knows the canonical shapes of Slack (`xox…`), GitHub, Stripe, AWS, JWT, PEM… but is only used to *upgrade* candidates found by **name-based** regexes (`api_key =`, `password =` …). A bare `AKIA…`, `ghp_…` or `sk_live_…` in an object property, array or string concatenation is never discovered. Fix: run `PROVIDER_PATTERNS` over string literals as a second discovery pass (tiered as `format` confidence by the existing validator).
-2. **No string-concatenation constant folding.** `"AKIA" + "IOSFODNN7EXAMPLE"` is invisible. Minified and defensive bundles really do split keys. An AST pass folding `Literal + Literal` before secret detection would close it (tree-sitter is already the preferred engine).
-3. **Secret findings carry no line number** (`line: 0` in every export; SARIF locations point at the file top). The scanner knows the match offset — plumb `content.count("\n", 0, idx) + 1` through.
+1. ~~**Value-pattern credential discovery is missing.**~~ **Fixed.** `_credible_secret` now consults `secret_validation.validate()`: a value matching a canonical provider shape (AWS `AKIA/ASIA/ABIA/ACCA`, GitHub, Slack, Stripe, SendGrid, Twilio, npm — or a JWT/PEM that decodes) bypasses the fixture-marker/entropy heuristics, because a documented credential shape is stronger evidence than any heuristic (a real key can legitimately contain "example"/"xxx" substrings). The scanner's discovery regexes were extended with the providers that had drifted (SendGrid, Twilio, npm, AWS temp-key prefixes). Public-by-design client keys (`AIza…`, `pk_live_…`, `GOCSPX…`) are still excluded — deliberately checked *before* the format bypass.
+2. ~~**No string-concatenation constant folding.**~~ **Fixed.** `_folded_concat_candidates` folds `"AKIA" + "IOSFODNN7EXAMPLE"` chains (single-line, ≥8 folded chars, capped at 200/file) into synthetic candidates that flow through the exact same dedup/credibility pipeline; an assignment target left of the chain is preserved so name-based credibility applies too. The chain's line number is carried through to the finding. Verified fast on pathological inputs (100k `a+` runs: 0.02s) and 300KB single-line minified bundles.
+3. ~~**Secret findings carry no line number.**~~ **Fixed.** The `hardcoded_secret` signal now carries the line of the first credible secret (literal match, or the concat-chain map for folded values); `_signal` grew a `line` parameter. CSV/SARIF/dashboard all point at real positions (SARIF 0-indexed).
+4. **(Remaining) deeper constant propagation** — folding covers literal chains, not `Buffer.concat`, `[...].join("")`, `atob("…")` before the secret check, or cross-statement propagation. The decoded-strings pass already covers some `atob` shapes; generalizing it is the natural next step.
 
 ### P2 — Risk-model calibration (design review recommended)
 

@@ -108,6 +108,13 @@
       <section class="release" id="unreleased-2-2-0-dev">
         <h2>[Unreleased] — 2.2.0-dev</h2>
         <p>The 2.2.0 accuracy &amp; triage work below is in development and not a published release yet.</p>
+        <h3 id="credential-discovery-canonical-formats-concat-folding-line-numbers">Credential discovery: canonical formats, concat folding, line numbers</h3>
+        <ul>
+          <li><strong>A value that matches a canonical credential shape is now believed.</strong> <code>_credible_secret</code> consults the provider validator, so a well-formed AWS (<code>AKIA…</code>, plus the <code>ASIA/ABIA/ACCA</code> temp prefixes), GitHub, Slack, Stripe, SendGrid, Twilio or npm key — or a JWT/PEM that actually decodes — is reported even when its variable name says nothing and when the key's random characters happen to contain "example"/"xxx"-like substrings that the fixture-marker heuristic would reject (the canonical AWS docs example key is shape-identical to a live one; statically they are indistinguishable). Public-by-design client keys (<code>AIza…</code>, <code>pk_live_…</code>, <code>GOCSPX…</code>) remain excluded — that check deliberately runs first.</li>
+          <li><strong>Credentials split across a string concatenation are discovered.</strong> <code>"AKIA" + "IOSFODNN7EXAMPLE"</code> was invisible to every pattern; literal chains are now folded into synthetic candidates that run through the same dedup/credibility pipeline, keep the assignment name when one exists, and carry the chain's line number. Verified fast on pathological inputs and 300 KB single-line minified bundles.</li>
+          <li><strong>Secret findings finally carry a line number.</strong> The <code>hardcoded_secret</code> signal points at the first credible secret (or chain), so the dashboard, CSV and SARIF exports no longer show line 0 / the top of the file.</li>
+          <li>New regression suite <code>tests/test_credential_discovery.py</code> (13 tests).</li>
+        </ul>
         <h3 id="review-pass-scoring-reporting-accuracy-reliability-3-bugs-fixed">Review pass: scoring, reporting, accuracy &amp; reliability (3 bugs fixed)</h3>
         <ul>
           <li><strong>CSV exports no longer execute as spreadsheet formulas.</strong> Evidence, sources, sinks and file names are strings from the <em>scanned</em> code, and a paste could name its file <code>=HYPERLINK(...)-1.js</code>; cells starting with <code>= + - @</code> or a tab/CR are now prefixed with an apostrophe (OWASP mitigation) and caller-supplied filenames get control characters stripped at the API boundary. Verified end-to-end against the live server.</li>
