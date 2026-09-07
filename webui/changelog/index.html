@@ -108,6 +108,11 @@
       <section class="release" id="unreleased-2-2-0-dev">
         <h2>[Unreleased] — 2.2.0-dev</h2>
         <p>The 2.2.0 accuracy &amp; triage work below is in development and not a published release yet.</p>
+        <h3 id="launcher-update-escapes-the-stale-engine-cache">Launcher: <code>--update</code> escapes the stale-engine cache</h3>
+        <ul>
+          <li><strong>The one-file launcher now has a refresh switch.</strong> It downloads the engine once into <code>~/.scriptsentry/bootstrap/</code> and then reuses that cache on every later run — forever. Fixes pushed to the repository therefore never arrived on a machine that had already bootstrapped, which looked exactly like "my fix doesn't work". <code>python3 scriptsentry.py --update</code> now discards the cache and fetches the current engine from GitHub before starting (a locked or unwritable cache fails loudly with the reason instead of quietly rescanning stale code). Running the launcher from inside a checkout tells you to <code>git pull</code> instead, since there is no cache to refresh there.</li>
+          <li><strong>The startup banner says which build you are on.</strong> When the cached engine is used, the launcher prints when it was downloaded (recorded in <code>.launcher-meta.json</code> inside the cache), so a stale engine is visible at a glance. The README's quick start now documents the cache and <code>--update</code>.</li>
+        </ul>
         <h3 id="visitor-level-review-the-tool-explains-itself-to-a-first-timer">Visitor-level review: the tool explains itself to a first-timer</h3>
         <ul>
           <li><strong>Button links are no longer underlined.</strong> <code>.btn</code> is used on <code>&lt;a&gt;</code> elements (hero "Open the Analyzer", header "Go to tool", connect buttons), and the base rule never disabled the browser's default underline — only two scoped rules happened to patch it. The base rule now sets <code>text-decoration: none</code>.</li>

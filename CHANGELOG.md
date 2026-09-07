@@ -14,6 +14,22 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Launcher: `--update` escapes the stale-engine cache
+
+- **The one-file launcher now has a refresh switch.** It downloads the engine
+  once into `~/.scriptsentry/bootstrap/` and then reuses that cache on every
+  later run — forever. Fixes pushed to the repository therefore never arrived
+  on a machine that had already bootstrapped, which looked exactly like "my
+  fix doesn't work". `python3 scriptsentry.py --update` now discards the cache
+  and fetches the current engine from GitHub before starting (a locked or
+  unwritable cache fails loudly with the reason instead of quietly rescanning
+  stale code). Running the launcher from inside a checkout tells you to
+  `git pull` instead, since there is no cache to refresh there.
+- **The startup banner says which build you are on.** When the cached engine
+  is used, the launcher prints when it was downloaded (recorded in
+  `.launcher-meta.json` inside the cache), so a stale engine is visible at a
+  glance. The README's quick start now documents the cache and `--update`.
+
 ### Visitor-level review: the tool explains itself to a first-timer
 
 - **Button links are no longer underlined.** `.btn` is used on `<a>` elements

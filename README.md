@@ -114,6 +114,14 @@ starts — everything stays local:
 python3 scriptsentry.py --port 8000
 ```
 
+The engine is cached under `~/.scriptsentry/bootstrap/` and reused on every
+later run — the launcher never re-downloads it on its own. After fixes land in
+the repository, refresh your local copy with:
+
+```bash
+python3 scriptsentry.py --update
+```
+
 You can also grab it straight from the hosted dashboard: the setup modal (shown
 when the local engine isn't running) has a **⬇️ Download scriptsentry.py**
 button.
