@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from core.js_parser import parser_status
-from core.analysis_model import deduplicate_findings, split_findings
+from core.analysis_model import coerce_line, deduplicate_findings, split_findings
 from core.risk_model import file_risk, overall_risk, top_priorities
 from core.script_intel import build_script_intel, data_exfiltration_candidates
 from core.version import ENGINE_NAME, RELEASE_STATUS, SARIF_TOOL_VERSION, __version__ as ENGINE_VERSION, is_dev_build
@@ -1064,6 +1064,23 @@ def _all_unified_findings(model):
     return deduplicate_findings(list(findings) + list(flows))
 
 
+def _csv_safe(value):
+    """Neutralize spreadsheet formula injection in one CSV cell.
+
+    Evidence, sources, sinks and file names come from the *scanned* (untrusted)
+    code: a bundle can deliberately ship a value like ``=HYPERLINK(...)`` or
+    ``=2+5|cmd|...`` and a paste can name its file ``=cmd|' /C calc'!A0.js``.
+    Excel, Google Sheets and LibreOffice execute a cell that starts with
+    ``=``, ``+``, ``-``, ``@`` or a tab/CR as a formula when the export is
+    opened -- the standard OWASP mitigation is to prefix such cells with an
+    apostrophe so they render as text.
+    """
+    text = str(value)
+    if text[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + text
+    return text
+
+
 def generate_csv_report(results, ai_summary=None, metadata=None):
     """Generate a CSV export of unified findings."""
     import csv
@@ -1088,23 +1105,23 @@ def generate_csv_report(results, ai_summary=None, metadata=None):
         if isinstance(evidence, (list, tuple)):
             evidence = " | ".join(str(x) for x in evidence)
         writer.writerow({
-            "id": f.get("id", ""),
-            "type": f.get("type", ""),
-            "severity": f.get("severity", ""),
-            "confidence": f.get("confidence", ""),
-            "status": f.get("status", ""),
-            "origin": f.get("origin", "") or f.get("file", ""),
-            "file": f.get("file", ""),
+            "id": _csv_safe(f.get("id", "")),
+            "type": _csv_safe(f.get("type", "")),
+            "severity": _csv_safe(f.get("severity", "")),
+            "confidence": _csv_safe(f.get("confidence", "")),
+            "status": _csv_safe(f.get("status", "")),
+            "origin": _csv_safe(f.get("origin", "") or f.get("file", "")),
+            "file": _csv_safe(f.get("file", "")),
             "line": f.get("line", 0),
-            "source": f.get("source", ""),
-            "sink": f.get("sink", ""),
-            "flow": flow,
-            "evidence": evidence,
+            "source": _csv_safe(f.get("source", "")),
+            "sink": _csv_safe(f.get("sink", "")),
+            "flow": _csv_safe(flow),
+            "evidence": _csv_safe(evidence),
             "sanitization_detected": f.get("sanitization_detected", False),
-            "framework": f.get("framework", ""),
-            "evidence_type": f.get("evidence_type", ""),
-            "analysis_quality": f.get("analysis_quality", ""),
-            "limitations": limitations,
+            "framework": _csv_safe(f.get("framework", "")),
+            "evidence_type": _csv_safe(f.get("evidence_type", "")),
+            "analysis_quality": _csv_safe(f.get("analysis_quality", "")),
+            "limitations": _csv_safe(limitations),
             "observation": f.get("observation", False),
         })
     return buf.getvalue()
@@ -1134,7 +1151,7 @@ def generate_sarif_report(results, ai_summary=None, metadata=None):
                 },
             }
         # line numbers are typically 1-indexed in ESTree; SARIF expects 0-indexed.
-        start_line = max(0, int(f.get("line", 1) or 1) - 1)
+        start_line = max(0, coerce_line(f.get("line", 1)) - 1)
         message = f.get("sink") or f.get("evidence") or f.get("type", rule_id)
         if f.get("source"):
             message = f"{f.get('source')} -> {message}"

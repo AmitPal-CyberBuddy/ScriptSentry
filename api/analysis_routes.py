@@ -32,6 +32,20 @@ from core.url_policy import validate_public_url
 from core.version import ENGINE_NAME, RELEASE_STATUS, is_dev_build
 
 
+def _clean_display_filename(name):
+    """Strip control characters and cap a caller-supplied display filename.
+
+    Returns possibly-empty text; callers apply their own default. The name
+    flows into reports (TXT line structure, CSV cells, SARIF URIs), so a
+    newline or tab smuggled in via ``filename`` corrupts exports, and control
+    characters are part of the spreadsheet-formula smuggling family.
+    Formula-leading characters themselves are neutralized at the export
+    boundary (``reporter._csv_safe``); names stay human-readable here.
+    """
+    cleaned = "".join(ch for ch in str(name).replace("\\x00", "") if ch.isprintable())
+    return cleaned.strip()[:240]
+
+
 class AnalysisRoutesMixin:
     """Job-oriented API endpoints mixed into the dashboard handler."""
 
@@ -217,6 +231,7 @@ class AnalysisRoutesMixin:
             # Keep a JS-ish extension; unknown uploads are still analyzed as JS.
             if name and not name.lower().endswith(ALLOWED_UPLOAD_EXT):
                 raise ValueError(f"Unsupported file type: {name}")
+            name = _clean_display_filename(name)
             cleaned.append({"filename": name or f"upload-{len(cleaned)+1}.js", "code": code})
         if not cleaned:
             raise ValueError("Uploaded files were empty")
@@ -249,7 +264,7 @@ class AnalysisRoutesMixin:
         if not isinstance(code, str) or not code.strip():
             raise ValueError("Paste some JavaScript to analyze")
         filename = str(body.get("filename", "inline.js")).strip() or "inline.js"
-        return analyze_content(code, filename=filename)
+        return analyze_content(code, filename=_clean_display_filename(filename) or "inline.js")
 
     def _handle_async_analysis(self, body, mode):
         if mode == "url":
@@ -319,7 +334,7 @@ class AnalysisRoutesMixin:
                     self._send_error_json(f"JavaScript input is limited to {MAX_FILE_BYTES // (1024*1024)} MB", 413)
                     return
                 filename = str(body.get("filename", "inline.js")).strip() or "inline.js"
-                filename = filename.replace("\\x00", "")[:240]
+                filename = _clean_display_filename(filename) or "inline.js"
                 try:
                     job = jobs.create(mode="code", source=filename, max_files=1,
                                       max_workers=SCAN_MAX_WORKERS)

@@ -107,24 +107,29 @@ def _credible_secret(candidate):
     """Filter obvious fixtures/labels before raising a secret risk signal."""
     text = str(candidate or "")
     lower = text.lower()
+    # Fixture markers apply to the secret VALUE, not the whole candidate line.
+    # The old whole-text check let a real credential on a line that merely
+    # mentioned "example.com", a "sample_rate" field or a "your_..." label
+    # silently vanish -- a false negative with no diagnostic.
+    match = re.search(r"[\"']([^\"']+)[\"']", text)
+    value = match.group(1) if match else text
+    value_lower = value.lower()
 
     # Public-by-design client identifiers are inventory, not credentials.
     if PUBLIC_CLIENT_KEY_RE.search(_secret_value(text)):
         return False
-    if any(marker in lower for marker in (
+    if any(marker in value_lower for marker in (
         "example", "sample", "placeholder", "changeme", "dummy", "test123",
         "your_", "_here", "xxx", "todo", "fixme", "redact", "lorem",
         "api_token", "token_here", "<your", "replace_", "00000000",
     )):
         return False
     # Template placeholders like ${TOKEN}, <token>, [key] are not secrets.
-    if re.search(r"[\$%]?\{[^}]*\}|<[^>]+>|\[\w+\]", text):
+    if re.search(r"[\$%]?\{[^}]*\}|<[^>]+>|\[\w+\]", value):
         return False
-    if "-----begin " in lower or re.search(r"eyj[\w-]+\.[\w-]+\.[\w-]+", text, re.I):
+    if "-----begin " in lower or re.search(r"eyj[\w-]+\.[\w-]+\.[\w-]+", value, re.I):
         return True
-    match = re.search(r"[\"']([^\"']+)[\"']", text)
-    value = match.group(1) if match else text
-    if len(value) < 10 or value.lower() in {"password", "secret", "token", "abc123", "abc"}:
+    if len(value) < 10 or value_lower in {"password", "secret", "token", "abc123", "abc"}:
         return False
     # Real credentials generally have mixed character classes or high entropy;
     # natural-language strings should not become high-severity findings.  The

@@ -14,6 +14,34 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Review pass: scoring, reporting, accuracy & reliability (3 bugs fixed)
+
+- **CSV exports no longer execute as spreadsheet formulas.** Evidence,
+  sources, sinks and file names are strings from the *scanned* code, and a
+  paste could name its file `=HYPERLINK(...)-1.js`; cells starting with
+  `= + - @` or a tab/CR are now prefixed with an apostrophe (OWASP
+  mitigation) and caller-supplied filenames get control characters stripped
+  at the API boundary. Verified end-to-end against the live server.
+- **One malformed finding can no longer kill every export.** A finding whose
+  `line` was a non-numeric string raised `ValueError` inside the shared
+  correlation layer, taking CSV, SARIF, HTML, TXT *and* the dashboard payload
+  down with it; line numbers are now safely coerced (digits salvaged or 0)
+  and the finding survives.
+- **Real secrets survive fixture markers on neighboring text.** The
+  credibility filter applied "example/sample/your_…" markers to the whole
+  candidate line, so a real high-entropy key next to an `api.example.com` URL
+  (or a `sample_rate` field) silently vanished; markers now apply to the
+  secret value only. The full fixture/placeholder false-positive corpus still
+  passes.
+- **New regression suite** (`tests/test_export_hardening.py`, 13 tests) pins
+  all three contracts, plus a written review
+  (`REVIEW_SCORING_REPORTING_RELIABILITY.md`) covering risk-model calibration
+  (a single confirmed CRITICAL scores 30/100 while uncapped third-party
+  correlations can saturate to 100), accuracy improvement areas
+  (value-pattern credential discovery, constant folding, secret line numbers)
+  and reliability polish (job timestamp units, create-time-only retention
+  pruning, broad exception swallows).
+
 ### Console hero merges the landing page's visual language
 
 - **The local console now carries the hosted landing page's hero identity.**

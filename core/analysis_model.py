@@ -73,6 +73,29 @@ _PROOF_EVIDENCE_TYPES = {"runtime_effect"}
 _STATUS_FOR_SANITIZED = "informational"
 
 
+def coerce_line(value: Any) -> int:
+    """Best-effort line number from any shape a finding might carry.
+
+    Findings arrive from regex scanners (ints), AST walks (ints), runtime
+    evidence (sometimes strings from serialized payloads) and history restores
+    (JSON, where a legacy record may hold a string).  One malformed ``line``
+    used to raise ``ValueError`` inside :func:`normalize_finding` and take
+    every export -- CSV, SARIF, HTML, TXT and the dashboard payload -- down
+    with it.  A line number that cannot be read is simply unknown (0).
+    """
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    try:
+        return max(0, int(str(value).strip()))
+    except (TypeError, ValueError):
+        digits = "".join(ch for ch in str(value) if ch.isdigit())
+        return max(0, int(digits)) if digits else 0
+
+
 @dataclass
 class Finding:
     """Minimal internal representation of a correlated finding."""
@@ -256,7 +279,7 @@ def normalize_finding(
     out.setdefault("limitations", [])
     out.setdefault("observation", observation)
     out["file"] = out.get("file") or fallback_file
-    out["line"] = int(out.get("line") or 0)
+    out["line"] = coerce_line(out.get("line"))
     if not isinstance(out.get("flow", []), list):
         out["flow"] = [out["flow"]]
     if not isinstance(out.get("limitations", []), list):
@@ -289,7 +312,7 @@ def finding_identity(finding: Dict[str, Any]) -> Tuple[str, str, str, str, int, 
         str(f.get("file") or ""),
         source,
         sink_sig,
-        int(f.get("line") or 0),
+        coerce_line(f.get("line")),
         flow_sig,
     )
 
@@ -408,7 +431,7 @@ def _risk_signal_to_finding(sig: Dict[str, Any], filename: str) -> Dict[str, Any
             "confidence": confidence,
             # Signals are never auto-confirmed; derive status from evidence.
             "file": filename,
-            "line": int(sig.get("line", 0) or 0),
+            "line": coerce_line(sig.get("line")),
             "source": "",
             "sink": evidence_text[:120],
             "flow": [],
