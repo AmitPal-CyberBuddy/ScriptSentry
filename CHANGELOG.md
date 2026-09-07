@@ -14,6 +14,22 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Console hero merges the landing page's visual language
+
+- **The local console now carries the hosted landing page's hero identity.**
+  The two pages had drifted into different dialects: the hosted page greets
+  you with the demo "signal" instrument card and a quiet capability meta row,
+  while the engine's own console at `/` opened on a bare text strip — so
+  `127.0.0.1:8000` and the GitHub-Pages site looked like different products
+  (compounded by the launcher's stale-cache bug below, which could serve an
+  older console than the hosted site). The console hero is now a two-column
+  strip: the claim, badges and actions on the left, the same static
+  `hero-signal` example card on the right (labelled "Example signal · demo
+  report" so it can never be mistaken for a real scan result), stacking under
+  the copy below 1080px and capped at 560px so it never stretches. Pure
+  markup + one stylesheet block; the card itself is the exact component the
+  landing page already ships.
+
 ### Launcher: `--update` escapes the stale-engine cache
 
 - **The one-file launcher now has a refresh switch.** It downloads the engine

@@ -94,16 +94,47 @@
 
   <main class="wrap wrap--wide" id="main">
     <section class="tool-hero" id="top">
-      <h1>JavaScript Security Console</h1>
-      <span class="eyebrow">Private by default</span>
-      <p>
-        Paste a snippet, drop your bundle files, or point it at a live URL — every byte is
-        analyzed by the engine on <b>your</b> machine. Nothing is uploaded.
-      </p>
-      <div class="hero-cta">
-        <button class="btn ghost" id="hero-setup" type="button">🛠️ Setup Guide</button>
-        <a class="btn ghost" href="../home/">🏠 Overview</a>
+      <div class="tool-hero-copy">
+        <span class="eyebrow">Private by default · free · open source</span>
+        <h1>JavaScript Security Console</h1>
+        <p>
+          Paste a snippet, drop your bundle files, or point it at a live URL — every byte is
+          analyzed by the engine on <b>your</b> machine. Nothing is uploaded.
+        </p>
+        <div class="badges" aria-label="Capabilities at a glance">
+          <span class="badge">100% local analysis</span>
+          <span class="badge">evidence-weighted scoring</span>
+          <span class="badge">crypto &amp; key hunts</span>
+          <span class="badge">API surface mapping</span>
+          <span class="badge">scan history &amp; diffing</span>
+        </div>
+        <div class="hero-cta">
+          <button class="btn ghost" id="hero-setup" type="button">🛠️ Setup Guide</button>
+          <a class="btn ghost" href="../home/">🏠 Overview</a>
+        </div>
       </div>
+
+      <!-- The landing page's demo instrument card: one visual language across
+           both pages. Static markup, clearly labelled as an example — a real
+           scan renders its own report below. -->
+      <aside class="hero-signal" aria-label="Example of a ScriptSentry report signal">
+        <div class="signal-head"><b>Example signal</b><span>demo report</span></div>
+        <div class="signal-risk">
+          <span class="signal-verdict">CRITICAL</span>
+          <span class="signal-sub">score 86 &middot; checkout.bundle.js</span>
+        </div>
+        <div class="signal-bars" aria-hidden="true">
+          <span class="signal-bar"><span>critical</span><span class="track"><span class="fill" style="width:72%;background:var(--danger)"></span></span><span class="n">4</span></span>
+          <span class="signal-bar"><span>high</span><span class="track"><span class="fill" style="width:46%;background:var(--warning)"></span></span><span class="n">9</span></span>
+          <span class="signal-bar"><span>medium</span><span class="track"><span class="fill" style="width:28%;background:var(--primary)"></span></span><span class="n">14</span></span>
+        </div>
+        <ul class="signal-list">
+          <li><span class="fid">dom_xss</span> location.search &rarr; innerHTML (confirmed)</li>
+          <li><span class="fid">secret</span> sk_live_&hellip; validates against provider format</li>
+          <li><span class="fid">open_redirect</span> ?next= &rarr; external host</li>
+        </ul>
+        <div class="signal-foot"><span>6 files &middot; tree-sitter AST</span><span class="ok">nothing left your machine</span></div>
+      </aside>
     </section>
 
     <!-- ============================ The tool ============================ -->
