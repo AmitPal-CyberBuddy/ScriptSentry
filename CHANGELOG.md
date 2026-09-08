@@ -14,6 +14,28 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Risk-model calibration: the number now agrees with the evidence
+
+- **A demonstrated CRITICAL is finally scored like one.** A single
+  runtime-proven (confirmed) CRITICAL finding used to read 30/100 next to a
+  HIGH label, while twenty unproven third-party "reads cookies + sends
+  externally" correlations saturated the score to 100/CRITICAL — exactly
+  backwards. Two calibrated changes:
+  - **Demonstrated-severity floor:** a confirmed CRITICAL puts the score in
+    the CRITICAL band at minimum (≥ 75; a confirmed HIGH ≥ 50). The lift is
+    an explicit *contributor* ("Demonstrated CRITICAL effect (severity
+    floor)"), never a silent clamp, so points still sum exactly to the score
+    and "why is this 75?" keeps its answer. Confirmed MEDIUM findings and
+    scores that already earned more than the floor are untouched.
+  - **Third-party bucket cap (30):** behavioral correlations from the script
+    inventory (third-party scripts that read sensitive data and send
+    externally, or high per-script risk) are now capped as a group, like
+    observations already were. Every script still counts in the reported
+    totals; only the points are bounded.
+  - Net: one demonstrated CRITICAL (75) outranks twenty trackers (30, label
+    MEDIUM), and mixed results stay fully explainable. Eight new
+    `CalibrationTest` cases pin the contract.
+
 ### Credential discovery: canonical formats, concat folding, line numbers
 
 - **A value that matches a canonical credential shape is now believed.**
