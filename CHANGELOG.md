@@ -14,6 +14,33 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Reliability polish: job hygiene, one digest, diagnosable silences
+
+- **Job timestamps speak one format.** Every `*_at` field in a job snapshot
+  is now an epoch float — `created_at` used to be the lone ISO string next to
+  epoch siblings, forcing every consumer to handle both. Derived
+  `created_at_iso` / `started_at_iso` / `finished_at_iso` twins keep a
+  human-readable form; the dashboard needed no change (it already accepted
+  both for `started_at`).
+- **Finished jobs no longer squat in memory.** Retention and cap pruning now
+  run on every job access (`status`/`result`/`cancel`), not only when a new
+  job is created — an engine left running after its last scan no longer pins
+  every finished result until the next scan starts. Running jobs are never
+  evicted.
+- **`SCRIPTSENTRY_DEBUG=1` explains the silent paths.** The engine's
+  deliberate `except`-and-continue silences (a chunk download that failed,
+  the AST discovery layer falling back to regex, history/calibration
+  bookkeeping that skipped itself, worker-pool shutdown trouble) now print
+  one scoped stderr line when the flag is set, and stay exactly as quiet as
+  before when it is not.
+- **One content digest everywhere.** The crawl-path dedup sites used MD5
+  while the source-map and runtime-script paths used SHA-256; all paths now
+  share `_content_digest()` (SHA-256), so a dedup set seeded by one path
+  recognizes duplicates recorded by another.
+- **`/api/report` parses its query properly** via `parse_qsl`
+  (URL-decoding) instead of a hand-rolled `&`/`=` splitter.
+- New regression suite `tests/test_reliability_polish.py` (13 tests).
+
 ### Risk-model calibration: the number now agrees with the evidence
 
 - **A demonstrated CRITICAL is finally scored like one.** A single

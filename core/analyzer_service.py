@@ -19,6 +19,7 @@ except ImportError:  # allow pure-paste code analysis without network deps
 from config import BEAUTIFY_DIR, FILE_RULES, JS_DIR, SCAN_MAX_WORKERS
 from core.beautifier import beautify
 from core.crypto import extract_crypto_material
+from core.diag import note as diag_note
 from core.discovery import extract_inline_scripts, extract_js, extract_page_assets
 from core.discovery import sitemap_pages
 from core.downloader import download_js, get_safe_filename
@@ -182,7 +183,7 @@ def _scan_document_cpu(path, content, source_url="", cancel_check=None,
     content = content or ""
     data = scan_file(path, content=content, cancel_check=cancel_check,
                      progress_heartbeat=progress_heartbeat)
-    data["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+    data["content_sha256"] = _content_digest(content)
     data["url"] = str(source_url or "")
     crypto = extract_crypto_material(content, filename=os.path.basename(path))
     data.update(crypto)
@@ -251,6 +252,16 @@ def _analyze_document_worker(path, content, source_url="", heartbeat_queue=None,
     return data, refs
 
 
+def _content_digest(content: str) -> str:
+    """SHA-256 of scanned content, for same-scan deduplication.
+
+    One digest algorithm everywhere: the source-map and runtime-script paths
+    already used SHA-256, but the crawl paths used MD5, so a set seeded by one
+    could never recognize a duplicate recorded by the other.
+    """
+    return hashlib.sha256((content or "").encode("utf-8", errors="ignore")).hexdigest()
+
+
 def _merge_into(results, path, content, seen_hashes=None, source_url="", cancel_check=None,
                 progress_heartbeat=None):
     """Run the full scanner plus crypto extractor for a single JS document.
@@ -267,7 +278,7 @@ def _merge_into(results, path, content, seen_hashes=None, source_url="", cancel_
     if len(content.encode("utf-8", errors="ignore")) > FILE_RULES.get("max_js_size", 2_000_000):
         return False
     if seen_hashes is not None:
-        digest = hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()
+        digest = _content_digest(content)
         if digest in seen_hashes:
             return False
         seen_hashes.add(digest)
@@ -410,7 +421,8 @@ def _download_chunk(url, output_dir=None, timeout=20, cancel_check=None):
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(content)
         return path
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - a missed chunk must not fail the scan
+        diag_note("download", f"chunk {url!r} skipped: {exc!r}")
         return None
 
 
@@ -447,8 +459,8 @@ def extract_script_refs(content):
             ref = ref.split("?")[0].split("#")[0]
             if _is_followable_ref(ref) or ref.startswith(("./", "../")):
                 refs.add(ref)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - the regex layer below is the fallback
+        diag_note("discovery", f"AST module layer unavailable: {exc!r}")
 
     # Fallback layer: regex coverage, kept as a safety net when the AST layer
     # is unavailable or cannot parse the dialect. Covers static imports,
@@ -695,7 +707,8 @@ def _fetch_target_script(url, timeout=15, cancel_check=None):
         if "<html" in content.lower() or "<!doctype" in content.lower():
             return None
         return content
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - caller falls back to page discovery
+        diag_note("download", f"direct script fetch {url!r} failed: {exc!r}")
         return None
 
 
@@ -1024,7 +1037,7 @@ def analyze_url(
             record_skip("oversized_script")
             _skip_message(phase, "oversized_script", name)
             return None
-        digest = hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()
+        digest = _content_digest(content)
         with lock:
             if digest in seen_hashes:
                 state["skipped_files"] += 1
@@ -1065,7 +1078,7 @@ def analyze_url(
         if len((content or "").encode("utf-8", errors="ignore")) > FILE_RULES.get("max_js_size", 2_000_000):
             record_skip("oversized_script")
             return "oversized_script"
-        digest = hashlib.md5((content or "").encode("utf-8", errors="ignore")).hexdigest()
+        digest = _content_digest(content or "")
         with lock:
             if digest in seen_hashes:
                 state["skipped_files"] += 1
@@ -1186,8 +1199,8 @@ def analyze_url(
                 for proc in list(getattr(pool, "_processes", {}).values() or []):
                     with contextlib.suppress(Exception):
                         proc.terminate()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - shutdown is best-effort by design
+            diag_note("pool", f"worker pool shutdown issue: {exc!r}")
         pool = None
 
     def run_round_via_processes(tasks):
