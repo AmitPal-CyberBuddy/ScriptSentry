@@ -1610,6 +1610,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       if (link) link.hidden = true;
       return;
     }
+    // Counts first (immediate), then the finding-level revalidation summary
+    // (verdicts, severity moves, coverage honesty) once it arrives.
     const parts = [];
     if (h.new_count) parts.push(`<strong>${h.new_count}</strong> new`);
     if (h.resolved_count) parts.push(`<strong>${h.resolved_count}</strong> resolved`);
@@ -1617,6 +1619,33 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     box.innerHTML = `vs previous scan of this target: ${parts.join(" · ")}`;
     box.hidden = false;
     if (link) link.hidden = false;
+    refreshRevalidation(h.previous_scan_id, h.scan_id);
+  }
+
+  /* Finding-level revalidation: what happened to the INITIAL findings on
+     this re-scan — still there? worse? really fixed? Fetches the engine's
+     comparison and renders the plain summary plus the top verdict rows. */
+  async function refreshRevalidation(fromId, toId) {
+    const box = $("#history-diff");
+    if (!box || !fromId || !toId) return;
+    try {
+      const data = await getJSON(
+        `/api/history/diff?from=${encodeURIComponent(fromId)}&to=${encodeURIComponent(toId)}`);
+      const rv = data && (data.revalidation || data.diff);
+      if (!rv || !Array.isArray(rv.summary_lines)) return;
+      const verdictRows = (rv.verdicts || []).slice(0, 4).map((v) => {
+        const label = { worsened: "▲ worse", persisted: "● still there", new: "＋ new",
+                        improved: "▼ improved", resolved: "✓ no longer detected" }[v.verdict] || v.verdict;
+        const change = v.change ? ` <i>(${escapeHtml(v.change)})</i>` : "";
+        return `<div class="history-row"><span class="meta">${label}</span>` +
+               `<span>${escapeHtml(v.title || v.finding_id)}${change}</span></div>`;
+      }).join("");
+      box.innerHTML = `revalidation vs previous scan:<br/>` +
+        rv.summary_lines.map((l) => `<div>${escapeHtml(l)}</div>`).join("") +
+        (verdictRows ? `<div style="margin-top:6px">${verdictRows}</div>` : "");
+    } catch {
+      /* The counts rendered above remain; revalidation is an enhancement. */
+    }
   }
 
   async function refreshHistory() {
@@ -2284,6 +2313,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       : /file\(s\)$/.test(metaSource) ? "Uploaded files" : "Source snippet";
     $("#result-meta").textContent = `${payload.meta.engine} · ${modeLabel} · ${payload.meta.generated_at || ""}`;
     renderSummary();
+    renderExecutiveSummary();
     renderPriorities();
     renderRiskBreakdown();
     renderSignals();
@@ -2303,6 +2333,41 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
   const SEV_COLOR = { CRITICAL: "#ff4d6d", HIGH: "#ff9f43", MEDIUM: "#ffd166", LOW: "#22d3ee", INFO: "#a78bfa" };
   const CONF_LABEL = { confirmed: "confirmed", high: "high", medium: "medium", low: "low" };
+
+  /* Overview, plain language: what a non-technical reader needs to know.
+     The same evidence as the technical sections, said in sentences —
+     verdict, counts, one block per distinct finding kind, honest notes. */
+  function renderExecutiveSummary() {
+    const card = $("#exec-card");
+    if (!card) return;
+    const es = payload.executive_summary;
+    if (!es) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    const verdict = $("#exec-verdict");
+    const counts = $("#exec-counts");
+    const list = $("#exec-findings");
+    const notes = $("#exec-notes");
+    if (verdict) verdict.textContent = es.verdict || "";
+    if (counts) counts.textContent = es.counts_in_words || "";
+    if (notes) notes.textContent = (es.notes || []).join(" ");
+    if (!list) return;
+    const items = es.findings_in_plain_terms || [];
+    if (!items.length) {
+      list.innerHTML = `<li><span class="risk-dot" style="color:#34d399"></span><span>No findings need explanation — nothing actionable was detected.</span></li>`;
+      return;
+    }
+    list.innerHTML = items.map((item) => {
+      const color = SEV_COLOR[item.severity] || "#22d3ee";
+      const where = item.where ? ` <i>(${escapeHtml(item.where)})</i>` : "";
+      return `<li><span class="risk-dot" style="color:${color}"></span>` +
+        `<span><b>${escapeHtml(item.title)}</b>${where}<br/>` +
+        `<span class="meta">${escapeHtml(item.meaning)}</span><br/>` +
+        `<span><b>What to do:</b> ${escapeHtml(item.action)}</span></span></li>`;
+    }).join("");
+  }
 
   /* Overview: answer "is it risky / why / what first" immediately. */
   function renderPriorities() {

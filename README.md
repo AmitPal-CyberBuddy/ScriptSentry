@@ -264,7 +264,7 @@ You can host the dashboard front-end (for example on **GitHub Pages**) while the
 analysis engine stays entirely on your own machine:
 
 1. Publish the `webui/` folder (a ready-made workflow is in
-   `deployment/deploy-pages.yml`). It is a handful of static pages —
+   `.github/workflows/deploy-pages.yml`). It is a handful of static pages —
    `home/index.html` (overview, what it finds, how it works, setup, connect),
    `tool/index.html` (the console) and `changelog/index.html` (what's new) —
    plus `assets/` (favicons, app icons, web manifest, social card). GitHub
@@ -349,7 +349,7 @@ the detection rules are still being refined — treat findings as signals to
 investigate rather than a final verdict, and expect things to keep improving.
 
 Every change is recorded in the [changelog](webui/changelog/index.html), and
-the technical notes behind the design decisions live in [`AUDIT.md`](AUDIT.md).
+the technical notes behind the design decisions live in [`docs/AUDIT.md`](docs/AUDIT.md).
 
 ---
 

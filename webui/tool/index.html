@@ -303,7 +303,18 @@
           <button class="view-tab" data-view="runtime" role="tab" aria-selected="false" tabindex="-1">🖥️ Runtime</button>
         </div>
 
-        <div class="grid grid-2 view-group" role="tabpanel" data-view="overview">
+        <div class="grid grid-2 view-group" style="margin-top:18px" role="tabpanel" data-view="overview">
+          <!-- Full-width first panel: the plain-language layer for
+               non-technical readers. The technical sections follow. -->
+          <div class="card" id="exec-card" style="grid-column:1/-1" hidden>
+            <h3>🗣️ What this result means</h3>
+            <p class="modal-note" style="margin:0 0 6px">Plain language for non-technical readers — the technical detail lives one section down and in the Findings view.</p>
+            <p id="exec-verdict" style="margin:0 0 6px"></p>
+            <p class="meta" id="exec-counts" style="margin:0 0 10px"></p>
+            <div class="find-list" id="exec-findings"></div>
+            <p class="modal-note" id="exec-notes" style="margin:10px 0 0"></p>
+          </div>
+
           <div class="card">
             <h3>Overall Risk</h3>
             <div class="gauge-wrap">

@@ -14,6 +14,33 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Dual-audience reports, honest revalidation, repo cleanup
+
+- **Every report now speaks to two audiences.** TXT, HTML, JSON and the
+  dashboard open with a plain-language layer — *What this result means* —
+  that a manager or stakeholder can read and act on: a verdict sentence,
+  counts in words, one block per distinct finding kind ("what it means" /
+  "what to do"), and the top three next steps. The technical sections
+  (evidence, locations, remediation, confidence) are unchanged and stay the
+  anchor for the security team; each plain-language block links back to the
+  finding it describes.
+- **Revalidation is evidence, not a gimmick.** Comparing two scans now
+  yields per-finding verdicts — persisted, worsened, improved, resolved,
+  new — joined on the line-independent fingerprint, each with the reason it
+  changed (e.g. `severity HIGH->CRITICAL`). Coverage is honest: when the
+  newer scan only saw part of the previous file set, the comparison is
+  flagged partial and "no longer detected" is stated as *unknown, not
+  fixed*. The `/api/history/diff` endpoint returns the full verdict list
+  (capped at 100, worst first) while keeping its legacy count keys.
+- **Dashboard & history UI.** The Overview tab leads with the
+  plain-language card; the history chip summarizes a re-run against the
+  previous scan of the same target.
+- **Repo cleanup.** The three root review documents moved to `docs/`;
+  the stale `deployment/deploy-pages.yml` template (which had drifted from
+  the real workflow) was removed — `.github/workflows/deploy-pages.yml` is
+  the single source. README and DEPLOYMENT now point at the right paths.
+  CI, the launcher, hosted pages and the test suite are unaffected.
+
 ### Reliability polish: job hygiene, one digest, diagnosable silences
 
 - **Job timestamps speak one format.** Every `*_at` field in a job snapshot

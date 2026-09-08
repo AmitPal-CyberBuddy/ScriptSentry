@@ -19,6 +19,8 @@
       if (link) link.hidden = true;
       return;
     }
+    // Counts first (immediate), then the finding-level revalidation summary
+    // (verdicts, severity moves, coverage honesty) once it arrives.
     const parts = [];
     if (h.new_count) parts.push(`<strong>${h.new_count}</strong> new`);
     if (h.resolved_count) parts.push(`<strong>${h.resolved_count}</strong> resolved`);
@@ -26,6 +28,33 @@
     box.innerHTML = `vs previous scan of this target: ${parts.join(" · ")}`;
     box.hidden = false;
     if (link) link.hidden = false;
+    refreshRevalidation(h.previous_scan_id, h.scan_id);
+  }
+
+  /* Finding-level revalidation: what happened to the INITIAL findings on
+     this re-scan — still there? worse? really fixed? Fetches the engine's
+     comparison and renders the plain summary plus the top verdict rows. */
+  async function refreshRevalidation(fromId, toId) {
+    const box = $("#history-diff");
+    if (!box || !fromId || !toId) return;
+    try {
+      const data = await getJSON(
+        `/api/history/diff?from=${encodeURIComponent(fromId)}&to=${encodeURIComponent(toId)}`);
+      const rv = data && (data.revalidation || data.diff);
+      if (!rv || !Array.isArray(rv.summary_lines)) return;
+      const verdictRows = (rv.verdicts || []).slice(0, 4).map((v) => {
+        const label = { worsened: "▲ worse", persisted: "● still there", new: "＋ new",
+                        improved: "▼ improved", resolved: "✓ no longer detected" }[v.verdict] || v.verdict;
+        const change = v.change ? ` <i>(${escapeHtml(v.change)})</i>` : "";
+        return `<div class="history-row"><span class="meta">${label}</span>` +
+               `<span>${escapeHtml(v.title || v.finding_id)}${change}</span></div>`;
+      }).join("");
+      box.innerHTML = `revalidation vs previous scan:<br/>` +
+        rv.summary_lines.map((l) => `<div>${escapeHtml(l)}</div>`).join("") +
+        (verdictRows ? `<div style="margin-top:6px">${verdictRows}</div>` : "");
+    } catch {
+      /* The counts rendered above remain; revalidation is an enhancement. */
+    }
   }
 
   async function refreshHistory() {

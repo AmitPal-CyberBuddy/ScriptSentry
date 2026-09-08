@@ -19,7 +19,6 @@ from api.settings import (
 from config import DEFAULT_PROFILE, SCAN_MAX_WORKERS, SCAN_PROFILES
 from core.analyzer_service import analyze_content, analyze_files, analyze_url
 from core.history import delete_scan as history_delete_scan
-from core.history import diff_scans as history_diff
 from core.history import export_history as history_export
 from core.history import get_scan as history_get
 from core.history import list_scans as history_list
@@ -121,11 +120,18 @@ class AnalysisRoutesMixin:
         if parsed.path.startswith("/api/history/diff"):
             from_id = self._query_param(parsed, "from", "")
             to_id = self._query_param(parsed, "to", "")
-            diff = history_diff(from_id, to_id) if from_id and to_id else None
-            if diff is None:
+            if not (from_id and to_id):
                 self._send_error_json("Provide from= and to= scan ids", 400)
                 return True
-            self._send_json({"ok": True, "diff": diff})
+            # Finding-level revalidation (verdicts, severity transitions,
+            # coverage honesty, plain-language summary) with the legacy
+            # count keys kept for existing consumers.
+            from core.revalidation import revalidate_scans
+            reval = revalidate_scans(from_id, to_id)
+            if reval is None:
+                self._send_error_json("Provide from= and to= scan ids", 400)
+                return True
+            self._send_json({"ok": True, "diff": reval, "revalidation": reval})
             return True
         if parsed.path == "/api/history/export":
             # Must be checked before the generic /api/history/<scan_id> branch

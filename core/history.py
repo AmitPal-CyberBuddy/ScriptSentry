@@ -30,7 +30,8 @@ from core.state import state_dir
 
 __all__ = [
     "delete_scan", "diff_scans", "enabled", "export_history", "fingerprint",
-    "get_scan", "list_scans", "record_scan", "storage_info", "wipe_history",
+    "finding_rows", "get_scan", "list_scans", "record_scan", "storage_info",
+    "wipe_history",
 ]
 
 #: Findings/observations stored per scan; beyond this we keep the counts.
@@ -338,6 +339,33 @@ def get_scan(scan_id, include_report=False):
             return entry
         except Exception:
             return None
+
+
+def finding_rows(scan_id):
+    """Every stored finding row of one scan, as plain dicts.
+
+    Returns ``None`` for an unknown scan id (so callers can distinguish "no
+    findings" from "no such scan"). Powers the finding-level revalidation in
+    :mod:`core.revalidation`.
+    """
+    try:
+        with _LOCK:
+            conn = _connect()
+            cur = conn.execute(
+                "SELECT fingerprint, finding_id, severity, confidence, title,"
+                " file, detail, observation FROM findings WHERE scan_id = ?"
+                " ORDER BY fingerprint",
+                (int(scan_id),))
+            return [
+                {
+                    "fingerprint": row[0], "finding_id": row[1], "severity": row[2],
+                    "confidence": row[3], "title": row[4], "file": row[5],
+                    "detail": row[6], "observation": bool(row[7]),
+                }
+                for row in cur.fetchall()
+            ]
+    except Exception:
+        return None
 
 
 def diff_scans(from_id, to_id):
