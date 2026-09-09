@@ -108,6 +108,11 @@
       <section class="release" id="unreleased-2-2-0-dev">
         <h2>[Unreleased] — 2.2.0-dev</h2>
         <p>The 2.2.0 accuracy &amp; triage work below is in development and not a published release yet.</p>
+        <h3 id="computed-member-dynamic-execution-detected-deobfuscation">Computed-member dynamic execution detected (deobfuscation)</h3>
+        <ul>
+          <li><code>window[name]()</code> / <code>globalThis[name]()</code> where the engine can <strong>prove</strong> <code>name</code> resolves to a dynamic-code callee (<code>eval</code>, <code>Function</code>, <code>setTimeout</code>, <code>setInterval</code>) is now reported as <code>dangerous_dynamic_code</code> by <strong>both</strong> engines. The name is resolved only from deterministic constructions — <code>String.fromCharCode(&lt;numeric literals&gt;)</code>, <code>atob(&lt;string literal&gt;)</code>, or a plain literal — and a name assigned anywhere else is never trusted (the value at call time would be unknowable). This closes the last miss from the adversarial probe: the classic <code>const s = String.fromCharCode(101,118,97,108)</code> plus a <code>window[s]</code> call, previously only flagged by the obfuscation signal.</li>
+          <li>Adversarial probe: <strong>15/15 on both engines</strong> (was 14/15). Verified false-positive-clean against the tool's own ~283 KB of real dashboard code.</li>
+        </ul>
         <h3 id="engine-accuracy-and-efficiency-pass">Engine accuracy and efficiency pass</h3>
         <ul>
           <li><strong>1.6× faster scans on large bundles (AST engine).</strong> The shared parse cache silently disabled itself for documents over 256 KB — exactly the multi-hundred-KB minified bundles where one parse costs a second or more — so every consumer (taint, attack surface, module discovery, AST summary) re-parsed the same file: three parses per scan. The per-entry cap is now 2 MB with a 4 MB total (trees are shared read-only and dropped at scan end), restoring the documented "parsed exactly once per scan" contract. 488 KB bundle: 4.6s → 2.9s.</li>

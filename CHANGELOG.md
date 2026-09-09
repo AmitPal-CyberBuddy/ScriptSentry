@@ -14,6 +14,22 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Computed-member dynamic execution detected (deobfuscation)
+
+- `window[name]()` / `globalThis[name]()` where the engine can **prove**
+  `name` resolves to a dynamic-code callee (`eval`, `Function`,
+  `setTimeout`, `setInterval`) is now reported as
+  `dangerous_dynamic_code` by **both** engines. The name is resolved only
+  from deterministic constructions — `String.fromCharCode(<numeric
+  literals>)`, `atob(<string literal>)`, or a plain literal — and a name
+  assigned anywhere else is never trusted (the value at call time would be
+  unknowable). This closes the last miss from the adversarial probe: the
+  classic `const s = String.fromCharCode(101,118,97,108)` plus a `window[s]`
+  call, previously only flagged by the obfuscation signal.
+- Adversarial probe: **15/15 on both engines** (was 14/15). Verified
+  false-positive-clean against the tool's own ~283 KB of real dashboard
+  code.
+
 ### Engine accuracy and efficiency pass
 
 - **1.6× faster scans on large bundles (AST engine).** The shared parse

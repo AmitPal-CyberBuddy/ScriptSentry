@@ -81,6 +81,63 @@ def _is_static_value(node):
     return False
 
 
+def _static_string_value(node):
+    """The provable string value of ``node``, or None.
+
+    Covers plain string literals and the two classic deobfuscation
+    constructors: ``String.fromCharCode(<numeric literals>)`` and
+    ``atob(<string literal>)``.  Anything else (variables, calls with
+    non-literal arguments) is unknowable and returns None.
+    """
+    if not isinstance(node, dict):
+        return None
+    ntype = _node_kind_str(node)
+    if ntype in ("Literal", "StringLiteral"):
+        value = node.get("value")
+        return value if isinstance(value, str) else None
+    if ntype in ("CallExpression", "OptionalCallExpression"):
+        callee = node.get("callee") or {}
+        if not isinstance(callee, dict):
+            return None
+        if callee.get("type") == "Identifier":
+            name = callee.get("name")
+        elif _node_kind_str(callee) == "MemberExpression":
+            obj, prop = callee.get("object"), callee.get("property")
+            name = (f"{obj.get('name')}.{prop.get('name')}"
+                    if isinstance(obj, dict) and isinstance(prop, dict)
+                    and obj.get("type") == "Identifier" and prop.get("type") == "Identifier"
+                    else None)
+        else:
+            name = None
+        args = node.get("arguments") or []
+        if name == "String.fromCharCode":
+            codes = []
+            for arg in args:
+                if not isinstance(arg, dict) \
+                        or _node_kind_str(arg) not in ("Literal", "NumericLiteral") \
+                        or not isinstance(arg.get("value"), int):
+                    return None
+                codes.append(arg["value"])
+            try:
+                return "".join(chr(c) for c in codes if 0 <= c <= 0x10FFFF)
+            except (ValueError, OverflowError):
+                return None
+        if name == "atob" and len(args) == 1:
+            arg = args[0]
+            if isinstance(arg, dict) and _node_kind_str(arg) in ("Literal", "StringLiteral") \
+                    and isinstance(arg.get("value"), str):
+                import base64
+                try:
+                    return base64.b64decode(arg["value"], validate=True).decode("utf-8")
+                except Exception:  # noqa: BLE001 - malformed base64 is simply unknowable
+                    return None
+    return None
+
+
+# Computed-member names that mean "this call executes dynamic code".
+_DANGEROUS_MEMBER_NAMES = {"eval", "function", "settimeout", "setinterval"}
+
+
 def _is_sanitizer_call(name):
     if not name:
         return False
@@ -258,6 +315,29 @@ _FALLBACK_OUTBOUND_PATTERN = (
     r"|\.\s*(?:send|post)\s*\(|new\s+WebSocket\s*\("
 )
 _FALLBACK_POSTMESSAGE_WILDCARD_PATTERN = r"postMessage\s*\([^)]*,\s*['\"]\*['\"]"
+# Computed-member execution, fallback form: `const s = String.fromCharCode(
+# 101,118,97,108); window[s](...)` or the atob/plain-literal variants. The
+# declaration patterns only accept literal arguments, so the decoded value is
+# deterministic; only names resolving to a dangerous callee are tracked.
+_FB_NAME = r"([A-Za-z_$][\w$]{0,63})"
+_FB_GAP = r"\s{0,64}"
+_FB_FROMCHARCODE_DECL_RE = re.compile(
+    r"(?:const|let|var)\s{1,64}" + _FB_NAME + _FB_GAP + "=" + _FB_GAP
+    + r"String" + _FB_GAP + r"\." + _FB_GAP + r"fromCharCode" + _FB_GAP + r"\("
+    + _FB_GAP + r"([0-9]{1,7}(?:" + _FB_GAP + "," + _FB_GAP + r"[0-9]{1,7})*)" + _FB_GAP + r"\)"
+)
+_FB_ATOB_DECL_RE = re.compile(
+    r"(?:const|let|var)\s{1,64}" + _FB_NAME + _FB_GAP + "=" + _FB_GAP
+    + r"atob" + _FB_GAP + r"\(" + _FB_GAP + r"(['\"])([^'\"\n]{0,512})\2" + _FB_GAP + r"\)"
+)
+_FB_LITERAL_DECL_RE = re.compile(
+    r"(?:const|let|var)\s{1,64}" + _FB_NAME + _FB_GAP + "=" + _FB_GAP
+    + r"(['\"])([^'\"\n]{0,512})\2" + _FB_GAP + r"[,;\n]"
+)
+# Direct literal computed member: window['eval'](...) -- no variable needed.
+_FB_LITERAL_MEMBER_CALL_RE = re.compile(
+    r"\[\s*['\"](?:eval|Function|setTimeout|setInterval)['\"]\s*\]\s*\(", re.I
+)
 # A timer whose first argument is a string literal *immediately extended by
 # concatenation* (`setTimeout('doStuff(' + input + ')')`) executes assembled
 # text as code -- the eval-class sink. A bare string or a function reference
@@ -316,6 +396,9 @@ class TaintAnalyzer:
         # expressions).  The by-name identifier heuristic must never fire for
         # these: `const input = 'welcome'` is not user input.
         self.known_static = set()
+        # name -> provable string value (String.fromCharCode / atob / literal),
+        # used to resolve computed-member callees like window[name]().
+        self.static_strings = {}
         self.findings = []
         self._seen = set()
         self._func_depth = 0
@@ -731,6 +814,35 @@ class TaintAnalyzer:
                     })
             return
         callee_node = node.get("callee", {}) or {}
+
+        # Computed-member execution: `window[name]()` / `globalThis[name]()`
+        # where the engine can *prove* the member resolves to a dangerous
+        # callee -- a name built by String.fromCharCode or decoded by atob.
+        # This is the classic deobfuscation shape; the obfuscation signal
+        # already flags the file, this proves the dangerous name is reached.
+        if _node_kind_str(callee_node) == "MemberExpression" and callee_node.get("computed"):
+            prop = callee_node.get("property")
+            resolved = None
+            if isinstance(prop, dict):
+                if _node_kind_str(prop) in ("Literal", "StringLiteral"):
+                    value = prop.get("value")
+                    resolved = value if isinstance(value, str) else None
+                elif prop.get("type") == "Identifier":
+                    resolved = self.static_strings.get(prop.get("name"))
+            if resolved and resolved.lower() in _DANGEROUS_MEMBER_NAMES:
+                args = node.get("arguments", []) or []
+                taint = self._taint_of_expr(args[0]) if args else None
+                evidence = _Taint(
+                    [f"member:{resolved}"], False,
+                    [f"computed member resolves to {resolved!r}"], "low")
+                if taint:
+                    evidence.merge(taint)
+                self._record_sink("dangerous_dynamic_code", node, evidence, {
+                    "id": "dangerous_dynamic_code",
+                    "type": "Dangerous dynamic code execution",
+                    "severity": "HIGH",
+                })
+                return
         callee = self._strip_calls(callee_node)
         lower = callee.lower()
         # The method name matters for jQuery-style sinks ($('#x').html(...)):
@@ -964,6 +1076,13 @@ class TaintAnalyzer:
                 # Statically-known value: the by-name identifier heuristic
                 # must not turn this into a "user input" source.
                 self.known_static.add(name)
+            # String.fromCharCode(...) / atob('...') are provable string
+            # values even though _is_static_value (a taint-side predicate)
+            # does not classify calls; resolve them separately so a
+            # computed member like window[name]() can be checked.
+            static_str = _static_string_value(init)
+            if static_str is not None:
+                self.static_strings[name] = static_str
             if _node_kind_str(init) == "NewExpression" and _name(init.get("callee")) == "URLSearchParams":
                 self.urlsearch_vars.add(name)
             # Track tainted object properties so `cfg.q` propagates the same source.
@@ -1000,10 +1119,16 @@ class TaintAnalyzer:
             taint.path.append(f"{name} = {self._node_simple_text(right)[:60]}")
             self.vars[name] = taint
             self.known_static.discard(name)
+            self.static_strings.pop(name, None)
         elif _is_static_value(right):
             # Reassignment to a constant value clears any earlier taint.
             self.vars.pop(name, None)
             self.known_static.add(name)
+        static_str = _static_string_value(right)
+        if static_str is not None:
+            self.static_strings[name] = static_str
+        else:
+            self.static_strings.pop(name, None)
 
     # ---------------- inter-procedural helpers ----------------
     def _collect_functions(self, node):
@@ -1274,6 +1399,45 @@ class TaintAnalyzer:
                 rx = alias_res[key] = re.compile(rf"\b{re.escape(name)}\b{suffix}")
             return rx
 
+        def _dangerous_member_names(content):
+            """name -> resolved value for decodable dangerous member names.
+
+            Only declarations whose value is fully deterministic (numeric
+            String.fromCharCode, atob of a literal, a plain literal) are
+            considered, and only when the decoded value is one of the
+            dangerous callee names. A name assigned anywhere else is
+            dropped: the value at call time would be unknowable.
+            """
+            import base64
+
+            candidates = {}
+            for m in _FB_FROMCHARCODE_DECL_RE.finditer(content):
+                try:
+                    value = "".join(chr(int(c)) for c in m.group(2).split(","))
+                except (ValueError, OverflowError):
+                    continue
+                candidates[m.group(1)] = value
+            for m in _FB_ATOB_DECL_RE.finditer(content):
+                try:
+                    candidates[m.group(1)] = base64.b64decode(m.group(3), validate=True).decode("utf-8")
+                except Exception:  # noqa: BLE001 - malformed base64 is unknowable
+                    continue
+            for m in _FB_LITERAL_DECL_RE.finditer(content):
+                candidates.setdefault(m.group(1), m.group(3))
+
+            dangerous = {}
+            for name, value in candidates.items():
+                if value.lower() not in _DANGEROUS_MEMBER_NAMES:
+                    continue
+                # Exactly one assignment site (the declaration) or the value
+                # at call time is unknowable.
+                sites = len(re.findall(rf"(?<![.\w$]){re.escape(name)}{_FB_GAP}=", content))
+                if sites == 1:
+                    dangerous[name] = value
+            return dangerous
+
+        danger_members = _dangerous_member_names(text or "")
+
         # Split at statement boundaries but retain line numbers. This works for
         # ordinary source and still gives useful evidence for minified bundles.
         lines = LineIndex(text)
@@ -1398,7 +1562,8 @@ class TaintAnalyzer:
             # fragment from _FALLBACK_STATEMENT_MARKERS -- no marker, no
             # finding, skip without a regex call.
             low = statement.lower()
-            if not any(marker in low for marker in _FALLBACK_STATEMENT_MARKERS):
+            if not (any(marker in low for marker in _FALLBACK_STATEMENT_MARKERS)
+                    or (danger_members and "[" in statement)):
                 continue
             sink = _FALLBACK_SINK_RE.search(statement)
             if sink:
@@ -1487,6 +1652,42 @@ class TaintAnalyzer:
                         ],
                         "observation": False,
                     })
+
+            # Direct literal computed member: window['eval'](...).
+            if _FB_LITERAL_MEMBER_CALL_RE.search(statement):
+                flow = combine(taints_in(statement))
+                self._record({
+                    "id": "dangerous_dynamic_code", "type": "Dangerous dynamic code execution", "severity": "HIGH",
+                    "confidence": min_confidence(flow["confidence"] if flow else "high"),
+                    "status": "needs_review",
+                    "file": self.filename, "line": line_no,
+                    "source": "literal computed member names a dynamic-code callee",
+                    "sink": statement[:160], "flow": flow["path"][:8] if flow else ["member:eval"],
+                    "sanitization_detected": bool(flow and flow["sanitized"]), "evidence": statement[:240],
+                    "evidence_type": "static_pattern", "analysis_quality": "heuristic",
+                    "limitations": ["Line-based heuristic: the callee name is literal; payload reachability is not traced."],
+                    "observation": False,
+                })
+
+            # Computed-member execution with a provably dangerous callee:
+            # `const s = String.fromCharCode(101,118,97,108); window[s](x)`.
+            if danger_members:
+                for member_name, member_value in danger_members.items():
+                    if re.search(rf"\[\s*{re.escape(member_name)}\s*\]\s*\(", statement):
+                        flow = combine(taints_in(statement))
+                        self._record({
+                            "id": "dangerous_dynamic_code", "type": "Dangerous dynamic code execution", "severity": "HIGH",
+                            "confidence": min_confidence(flow["confidence"] if flow else "high"),
+                            "status": "needs_review",
+                            "file": self.filename, "line": line_no,
+                            "source": f"computed member resolves to {member_value!r}",
+                            "sink": statement[:160], "flow": flow["path"][:8] if flow else [f"member:{member_value}"],
+                            "sanitization_detected": bool(flow and flow["sanitized"]), "evidence": statement[:240],
+                            "evidence_type": "static_pattern", "analysis_quality": "heuristic",
+                            "limitations": ["Line-based heuristic: the member name is resolved deterministically; payload reachability is not traced."],
+                            "observation": False,
+                        })
+                        break
 
             # String-assembled timer argument: eval-class execution.
             if _FALLBACK_TIMER_CONCAT_RE.search(statement):

@@ -219,5 +219,52 @@ class TimerConcatSinkTest(unittest.TestCase):
                     self.assertNotIn("dangerous_dynamic_code", _ids(engine(code)))
 
 
+class ComputedMemberEvalTest(unittest.TestCase):
+    """`window[name]()` where name provably resolves to a dynamic-code callee.
+
+    The classic deobfuscation shape: the callee name is built at runtime from
+    String.fromCharCode / atob, so a plain sink pattern never sees it. Only
+    deterministic values are resolved, and only the dangerous names matter.
+    """
+
+    HITS = [
+        ("fromCharCode eval",
+         "const s = String.fromCharCode(101,118,97,108);\nwindow[s](atob('YWxlcnQoMSk='));"),
+        ("atob-built Function",
+         "const n = atob('RnVuY3Rpb24=');\nglobalThis[n]('return 1');"),
+        ("literal member eval", "window['eval']('alert(1)');"),
+        ("fromCharCode setTimeout",
+         "const t = String.fromCharCode(115,101,116,84,105,109,101,111,117,116);"
+         "\nwindow[t]('go()', 10);"),
+    ]
+    QUIET = [
+        # Reassigned member name: value at call time is unknowable.
+        "let s = String.fromCharCode(101,118,97,108);\ns = 'log';\nconsole[s]('x');",
+        # Benign resolved names.
+        "const s = 'location';\nwindow[s].href = '/x';",
+        "const s = String.fromCharCode(108,111,103);\nconsole[s]('hi');",
+        # Non-literal construction: nothing is provable.
+        "const s = String.fromCharCode(getCode());\nwindow[s]('x');",
+        "arr[i](x);",
+        "const n = atob('!!!not-base64!!!');\nwindow[n]('x');",
+    ]
+
+    def test_ast_engine_reports_resolved_members(self):
+        for name, code in self.HITS:
+            with self.subTest(case=name):
+                self.assertIn("dangerous_dynamic_code", _ids(analyze_content(code)))
+
+    def test_fallback_engine_reports_resolved_members(self):
+        for name, code in self.HITS:
+            with self.subTest(case=name):
+                self.assertIn("dangerous_dynamic_code", _ids(_fallback_analyze(self, code)))
+
+    def test_benign_computed_members_stay_quiet(self):
+        for code in self.QUIET:
+            for engine in (analyze_content, lambda c: _fallback_analyze(self, c)):
+                with self.subTest(code=code):
+                    self.assertNotIn("dangerous_dynamic_code", _ids(engine(code)))
+
+
 if __name__ == "__main__":
     unittest.main()
