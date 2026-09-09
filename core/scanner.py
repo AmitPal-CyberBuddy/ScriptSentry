@@ -107,47 +107,220 @@ def _secret_context(content, secret, before=120, after=180):
 # Two or more string literals joined by '+', e.g. "AKIA" + "IOSFODNN7EXAMPLE".
 # Minified and defensively-written bundles really do split credentials across
 # a concatenation, and every name- and value-based pattern is blind to that.
+# Each literal is bounded ({0,4096}): after a failed chain match the engine
+# would otherwise shrink a multi-megabyte embedded literal (inline base64
+# source maps) one character at a time -- quadratic backtracking. A real
+# credential is never longer than 4096 chars (JWTs and PEMs fit comfortably).
+_LITERAL_PATTERN = r"'(?:[^'\\\n]|\\.){0,4096}'|\"(?:[^\"\\\n]|\\.){0,4096}\""
+# Identifiers and whitespace runs are bounded for the same reason: a
+# multi-megabyte run of word characters (or spaces) must not be shrunk one
+# character at a time after a failed match. Real names are far under 64 chars.
+_NAME_PATTERN = r"[A-Za-z_$][\w$]{0,63}"
+_GAP = r"\s{0,64}"
+_CHAIN_LINK = "(?:" + _LITERAL_PATTERN + ")"
 _CONCAT_CHAIN_RE = re.compile(
-    r"""(?P<chain>(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*")
-        (?:\s*\+\s*(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"))+)""",
-    re.VERBOSE,
+    r"(?P<chain>" + _CHAIN_LINK + r"(?:" + _GAP + r"\+" + _GAP + _CHAIN_LINK + r")+)"
 )
 # An assignment target immediately left of a chain, so `apiKey = "a" + "b"`
 # can be re-synthesized as the candidate `apiKey = "ab"`.
-_ASSIGN_BEFORE_RE = re.compile(r"([A-Za-z_$][\w$.\]['\"]{0,60})\s*[:=]\s*$")
+_ASSIGN_BEFORE_RE = re.compile(r"([A-Za-z_$][\w$.\\]['\\\"]{0,60})" + _GAP + r"[:=]" + _GAP + r"$")
+# Node-style buffer assembly: Buffer.concat([Buffer.from("a"), "b", ...]).
+_BUFFER_CONCAT_RE = re.compile(r"Buffer" + _GAP + r"\." + _GAP + r"concat" + _GAP + r"\(" + _GAP + r"\[([^\]]{0,2000})\]")
+# A single pure string-literal assignment (`const p = "AKIA"`), the building
+# block for cross-statement folding.
+_PURE_LITERAL_ASSIGN_RE = re.compile(
+    r"(?:const|let|var)" + r"\s{1,64}" + r"(" + _NAME_PATTERN + r")" + _GAP + r"=" + _GAP
+    + r"(" + _LITERAL_PATTERN + r")" + _GAP + r"[,;\n]"
+)
+# A variable-name or string-literal operand inside a concatenation.
+_CONCAT_OPERAND = "(?:" + _NAME_PATTERN + r"|'[^'\n]{0,4096}'|\"[^\"\n]{0,4096}\")"
+
+
+def _line_counter(content):
+    """Incremental 1-based line lookup for ordered matches.
+
+    ``content.count("\n", 0, pos)`` per match is quadratic when a file has
+    thousands of foldable sites; this closure only counts the newline delta
+    since the previous lookup. Each regex pass iterates matches in ascending
+    order, so the state never rewinds within a pass.
+    """
+    state = {"pos": 0, "line": 1}
+
+    def at(offset):
+        if offset < state["pos"]:
+            state["pos"], state["line"] = 0, 1
+        state["line"] += content.count("\n", state["pos"], offset)
+        state["pos"] = offset
+        return state["line"]
+
+    return at
+
+
+# Anchored scanning: every fold-relevant match contains an `=` or `:` (the
+# assignment itself), so the passes below iterate those rare characters and
+# inspect a bounded window around each, instead of attempting the full
+# pattern at every position -- on a multi-MB run of word characters the
+# per-position name-shrink was quadratic.
+_ASSIGN_ANCHOR_RE = re.compile(r"[=:]")
+# A name ending right before an assignment operator (`k =`, `k +=`, `k:`).
+_NAME_BEFORE_ASSIGN_RE = re.compile(
+    r"(?<![.\w$])(" + _NAME_PATTERN + r")" + _GAP + r"[+\-*/]?" + _GAP + r"$"
+)
+# The operand chain after the assignment: ` a + b + "tail";`
+_CONCAT_TAIL_RE = re.compile(
+    _GAP + _CONCAT_OPERAND + r"(?:" + _GAP + r"\+" + _GAP + _CONCAT_OPERAND + r"){1,7}"
+    + _GAP + r"[,;)\n]"
+)
+
+
+def _fold_string_literals(segment):
+    """Concatenate every string literal in ``segment`` ('a', "b", 'c' -> abc)."""
+    parts = re.findall(r"'([^'\n]*)'|\"([^\"\n]*)\"", segment)
+    return "".join(a or b for a, b in parts)
 
 
 def _folded_concat_candidates(content, limit=200):
-    """Re-synthesize candidates from string-literal concatenation chains.
+    """Re-synthesize candidates from split-up string material.
 
-    Returns ``(candidate, line)`` pairs in content order, where ``line`` is
-    where the chain starts (the folded value itself never appears contiguously
-    in the file, so position must be carried explicitly). The candidate text
-    is ``value`` or ``name = "value"`` when the chain is the right-hand side
-    of an assignment, and flows through the same dedup/credibility pipeline
-    as literally-present values.
+    Covers three shapes, all folded into the same ``(candidate, line)``
+    stream in content order and pushed through the identical
+    dedup/credibility pipeline as literally-present values:
+
+    1. a chain of literals in one expression (``"AKIA" + "IOSF..."``);
+    2. Node-style buffer assembly (``Buffer.concat([Buffer.from("a"), "b"])``);
+    3. cross-statement assembly: single-assignment literal variables joined
+       later (``const a = "AKIA"; const b = "IOSF..."; const key = a + b``).
+
+    The candidate text is ``value`` or ``name = "value"`` when the fold sits
+    on the right-hand side of an assignment, so name-based credibility
+    applies. ``line`` is where the material starts -- the folded value never
+    appears contiguously in the file, so the position must be carried
+    explicitly.
     """
+    content = content or ""
     out = []
-    for m in _CONCAT_CHAIN_RE.finditer(content or ""):
-        if len(out) >= limit:
-            break
+    seen = set()
+    line_at = _line_counter(content)
+
+    def add(candidate, line):
+        if len(out) >= limit or candidate in seen:
+            return
+        seen.add(candidate)
+        out.append((candidate, line))
+
+    for m in _CONCAT_CHAIN_RE.finditer(content):
         chain = m.group("chain")
-        parts = re.findall(r"'((?:[^'\\\n]|\\.)*)'|\"((?:[^\"\\\n]|\\.)*)\"", chain)
-        folded = "".join(a or b for a, b in parts)
+        folded = _fold_string_literals(chain)
         if len(folded) < 8:
             continue
-        line = (content or "").count("\n", 0, m.start()) + 1
+        line = line_at(m.start())
         # If the chain is the right-hand side of an assignment, say which
         # name it was assigned to so name-based credibility applies too.
         prefix = content[max(0, m.start() - 120):m.start()]
         assign = _ASSIGN_BEFORE_RE.search(prefix)
         if assign:
-            out.append((f'{assign.group(1).strip()} = "{folded}"', line))
+            add(f'{assign.group(1).strip()} = "{folded}"', line)
         else:
-            out.append((f'"{folded}"', line))
+            add(f'"{folded}"', line)
+
+    # Buffer.concat([Buffer.from("a"), "b", Buffer.from("c")]) -- fold the
+    # literal elements, but only when every array element is a literal
+    # (optionally Buffer.from-wrapped); anything else (a variable, a
+    # .repeat() call) makes the assembled value unknowable.
+    for m in _BUFFER_CONCAT_RE.finditer(content):
+        elements = [e.strip() for e in m.group(1).split(",") if e.strip()]
+        if not elements:
+            continue
+        ok = True
+        for element in elements:
+            stripped = re.sub(r"^Buffer\s*\.\s*from\s*\(|\)$", "", element).strip()
+            if not re.fullmatch(r"'[^'\n]*'|\"[^\"\n]*\"", stripped):
+                ok = False
+                break
+        if not ok:
+            continue
+        folded = _fold_string_literals(m.group(1))
+        if len(folded) < 8:
+            continue
+        prefix = content[max(0, m.start() - 120):m.start()]
+        assign = _ASSIGN_BEFORE_RE.search(prefix)
+        line = line_at(m.start())
+        if assign:
+            add(f'{assign.group(1).strip()} = "{folded}"', line)
+        else:
+            add(f'"{folded}"', line)
+
+    # Cross-statement assembly: variables that are assigned exactly one
+    # pure string literal each, then concatenated somewhere later. A name
+    # assigned more than once (or assigned a non-literal) is dropped -- only
+    # deterministic values are ever folded.
+    literal_vars = {}
+    for m in _PURE_LITERAL_ASSIGN_RE.finditer(content):
+        name = m.group(1)
+        value = (m.group(2) or "")[1:-1]
+        # entry: [value, definition_line, assignment_sites] -- sites are
+        # counted by the generic pass below, which also sees this declaration.
+        literal_vars.setdefault(name, [value, line_at(m.start()), 0])
+    # The assignment-site and concat passes only matter when at least one
+    # foldable variable exists; gating them also keeps pathological content
+    # (a multi-MB embedded string with no declarations) out of two full
+    # regex sweeps for free.
+    if literal_vars:
+        # A name is only foldable when its literal declaration is its ONE
+        # assignment site: any later write (`a = dynamic()`, `a += x`, a
+        # second `let a = ...` in another scope) makes the value at concat
+        # time unknowable, so the name is dropped. Object properties
+        # (`obj.a = x`) are excluded by the lookbehind -- they never touch
+        # the variable. Both checks run off the same rare-character anchors
+        # (`=` / `:`) with bounded windows, never a full-content pattern
+        # attempt per position.
+        var_concats = []  # (target, tail_text, anchor_offset)
+        for anchor in _ASSIGN_ANCHOR_RE.finditer(content):
+            pos = anchor.start()
+            is_eq = content[pos] == "="
+            # `==`, `===`, `=>` are comparisons/arrows, never assignments.
+            if is_eq and content[pos + 1:pos + 2] in ("=", ">"):
+                continue
+            head = content[max(0, pos - 82):pos]
+            name_m = _NAME_BEFORE_ASSIGN_RE.search(head)
+            if not name_m:
+                continue
+            target = name_m.group(1)
+            if is_eq and target in literal_vars:
+                # Count the assignment site (the declaration itself is one).
+                literal_vars[target][2] += 1
+                continue
+            # Concat fold candidate: `target = <operand> + <operand>...`.
+            tail_m = _CONCAT_TAIL_RE.match(content, pos + 1, pos + 402)
+            if tail_m:
+                var_concats.append((target, tail_m.group(0), pos))
+        for name in [n for n, e in literal_vars.items() if e[2] != 1]:
+            literal_vars.pop(name, None)
+
+        for target, tail, pos in var_concats:
+            operands = [op.strip() for op in re.findall(_CONCAT_OPERAND, tail)]
+            pieces = []
+            for operand in operands:
+                if operand.startswith(("'", '"')):
+                    pieces.append(operand[1:-1])
+                else:
+                    entry = literal_vars.get(operand)
+                    if entry is None:
+                        pieces = None
+                        break
+                    pieces.append(entry[0])  # entry: [value, definition_line, sites]
+            if not pieces:
+                continue
+            folded = "".join(pieces)
+            if len(folded) < 8:
+                continue
+            # Position: the fold is only as good as the variable definitions,
+            # so point at the first literal definition when one exists.
+            line = min((literal_vars[op][1] for op in operands if op in literal_vars),
+                       default=line_at(pos))
+            add(f'{target} = "{folded}"', line)
+
     return out
-
-
 def _line_of(content, needle):
     """1-based line of ``needle`` in ``content`` (0 when not found)."""
     if not needle:

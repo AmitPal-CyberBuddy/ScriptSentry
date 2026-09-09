@@ -205,6 +205,105 @@ def _node_text(node, content):
     return _name(node) or node.get("type", "")
 
 
+# --- Regex-fallback engine: precompiled pattern sets ------------------------
+# _regex_analyze runs these over every statement of every document whenever no
+# AST parser is available, which used to mean re-resolving each pattern through
+# re.search's per-call cache hundreds of thousands of times on a large bundle
+# (an 18k-statement file made ~205k re.search calls). They are compiled once
+# here instead, and a fused any-source pre-filter lets the ~99% of statements
+# that contain no taint source skip the per-spec loop entirely.
+_FALLBACK_SOURCE_PATTERNS = (
+    (r"(?:new\s+URLSearchParams\s*\(\s*)?location\.search|url\.search|searchParams(?:\.get)?", "URL query string"),
+    (r"location\.hash|url\.hash", "URL fragment"),
+    (r"location\.href|window\.location", "full URL"),
+    (r"document\.referrer", "referrer"),
+    (r"document\.baseURI", "document base URL"),
+    (r"history\.state|history\.pushState\s*\(", "history state"),
+    (r"window\.name", "window.name"),
+    (r"(?:event|e|msg|message)\.data", "postMessage/window message data"),
+    (r"(?:localStorage|sessionStorage)\.getItem\s*\(", "browser storage"),
+    (r"document\.cookie", "document.cookie"),
+    (r"(?:document\.querySelector|document\.getElementById)\s*\([^)]*\)\s*\.value", "form/input value"),
+)
+_FALLBACK_SOURCE_SPECS = tuple(
+    (re.compile(pattern, re.I), label) for pattern, label in _FALLBACK_SOURCE_PATTERNS
+)
+# Matches iff any source spec matches (same flags, same alternatives).
+_FALLBACK_SOURCE_ANY = re.compile(
+    "|".join(f"(?:{pattern})" for pattern, _ in _FALLBACK_SOURCE_PATTERNS), re.I
+)
+_FALLBACK_ASSIGN_DECL_RE = re.compile(
+    r"(?<![.\w$])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=(?![=>])\s*(.+)$", re.I | re.S
+)
+_FALLBACK_ASSIGN_RE = re.compile(
+    r"(?<![.\w$!=<>])([A-Za-z_$][\w$]*)\s*=(?![=>])\s*(.+)$", re.I | re.S
+)
+_FALLBACK_PROP_RE = re.compile(r"([A-Za-z_$][\w$]*)\s*:\s*([^,}]+)")
+_FALLBACK_SINK_PATTERN = (
+    r"(?:innerHTML|outerHTML|srcdoc)\s*(?:=|\+=)|insertAdjacentHTML\s*\("
+    r"|document\.(?:write|writeln)\s*\(|\beval\s*\(|new\s+Function\s*\("
+    r"|\.\s*html\s*\(|\$\s*\([^)]*\)\s*\.\s*(?:append|prepend|attr)\s*\("
+    r"|setAttribute\s*\(\s*['\"](?:href|src|srcdoc)['\"]"
+)
+_FALLBACK_REDIRECT_PATTERN = (
+    r"\blocation\s*\.\s*(?:href|assign|replace)\s*(?:=|\()"
+    r"|\.href\s*(?:=(?!=)|\+=)"
+    r"|\.\s*(?:assign|replace)\s*\("
+    # Bare `location = x` / `window.location = x`: navigation by assignment,
+    # the same primitive the AST engine already reports.
+    r"|\blocation\s*=(?![=>])"
+)
+_FALLBACK_OUTBOUND_PATTERN = (
+    r"\b(?:fetch|axios|XMLHttpRequest|sendBeacon)\s*\("
+    r"|\.\s*(?:send|post)\s*\(|new\s+WebSocket\s*\("
+)
+_FALLBACK_POSTMESSAGE_WILDCARD_PATTERN = r"postMessage\s*\([^)]*,\s*['\"]\*['\"]"
+# A timer whose first argument is a string literal *immediately extended by
+# concatenation* (`setTimeout('doStuff(' + input + ')')`) executes assembled
+# text as code -- the eval-class sink. A bare string or a function reference
+# is the ordinary callback form and must not match.
+_FALLBACK_TIMER_CONCAT_PATTERN = (
+    r"\b(?:setTimeout|setInterval)\s*\(\s*['\"][^'\"]*['\"]\s*\+"
+)
+_FALLBACK_PROTOTYPE_PATTERN = (
+    r"(?:__proto__|constructor\.prototype|Object\.assign\s*\([^)]*(?:__proto__|prototype))"
+)
+_FALLBACK_SINK_RE = re.compile(_FALLBACK_SINK_PATTERN, re.I)
+_FALLBACK_REDIRECT_RE = re.compile(_FALLBACK_REDIRECT_PATTERN, re.I)
+_FALLBACK_OUTBOUND_RE = re.compile(_FALLBACK_OUTBOUND_PATTERN, re.I)
+_FALLBACK_POSTMESSAGE_WILDCARD_RE = re.compile(_FALLBACK_POSTMESSAGE_WILDCARD_PATTERN, re.I)
+_FALLBACK_TIMER_CONCAT_RE = re.compile(_FALLBACK_TIMER_CONCAT_PATTERN, re.I)
+_FALLBACK_PROTOTYPE_RE = re.compile(_FALLBACK_PROTOTYPE_PATTERN, re.I)
+# Noise fast path for the per-statement pass: every finding needs one of the
+# sink / redirect / outbound / wildcard-postMessage / prototype patterns in
+# the statement itself, and new taint needs a source. Each of those
+# alternatives contains at least one of the literal fragments below, so a
+# statement (lowercased) containing none of them cannot match any pattern
+# and is skipped without a single regex call -- plain substring containment
+# measures ~5x faster than one regex search over the same text.
+_FALLBACK_STATEMENT_MARKERS = (
+    # sinks
+    "srcdoc", "html", "document.write", "eval",
+    "function", "append", "prepend", "attr", "setattribute",
+    # redirects
+    "location", "href", "assign", "replace",
+    # outbound transports
+    "fetch", "axios", "xmlhttprequest", "send", "post", "websocket",
+    # wildcard postMessage / prototype pollution / string-arg timers
+    "__proto__", "prototype", "object.assign", "settimeout", "setinterval",
+    # taint sources
+    "search", "hash", "referrer", "baseuri", "history.", "window.name",
+    ".data", "getitem", "cookie", "queryselector", "getelementbyid",
+)
+# Reads whose value leaving the page would matter.  Broader than the
+# module-level SENSITIVE_READ_RE on purpose: for an exfiltration heuristic a
+# false lead costs a review, a missed lead costs data.
+_FALLBACK_EXFIL_READ_RE = re.compile(
+    r"cookie|localStorage|sessionStorage|storage|token|password|credential|session",
+    re.I,
+)
+
+
 class TaintAnalyzer:
     def __init__(self, content, filename="inline.js"):
         self.content = content
@@ -728,7 +827,8 @@ class TaintAnalyzer:
         # (the scanner's `unsafe_runtime` risk signal covers it), but a data flow
         # should only be claimed when tainted input reaches the sink (or a template
         # literal interpolation does).
-        if lower in ("eval", "function") or any(k in lower for k in ("eval(", "new function", "function(", "settimeout(", "setinterval(")):
+        if lower in ("eval", "function", "settimeout", "setinterval") \
+                or any(k in lower for k in ("eval(", "new function", "function(", "settimeout(", "setinterval(")):
             args = node.get("arguments", []) or []
             if args:
                 arg = args[0]
@@ -1152,33 +1252,27 @@ class TaintAnalyzer:
         tainted = {}
         properties = {}
 
-        source_specs = [
-            (r"(?:new\s+URLSearchParams\s*\(\s*)?location\.search|url\.search|searchParams(?:\.get)?", "URL query string"),
-            (r"location\.hash|url\.hash", "URL fragment"),
-            (r"location\.href|window\.location", "full URL"),
-            (r"document\.referrer", "referrer"),
-            (r"document\.baseURI", "document base URL"),
-            (r"history\.state|history\.pushState\s*\(", "history state"),
-            (r"window\.name", "window.name"),
-            (r"(?:event|e|msg|message)\.data", "postMessage/window message data"),
-            (r"(?:localStorage|sessionStorage)\.getItem\s*\(", "browser storage"),
-            (r"document\.cookie", "document.cookie"),
-            (r"(?:document\.querySelector|document\.getElementById)\s*\([^)]*\)\s*\.value", "form/input value"),
-        ]
-
-        # Reads whose value leaving the page would matter.  Broader than the
-        # module-level SENSITIVE_READ_RE on purpose: for an exfiltration
-        # heuristic a false lead costs a review, a missed lead costs data.
-        EXFIL_READ_RE = re.compile(
-            r"cookie|localStorage|sessionStorage|storage|token|password|credential|session",
-            re.I,
-        )
-
         def source_for(expr):
-            for pattern, label in source_specs:
-                if re.search(pattern, expr, re.I):
+            # Fused pre-filter first: statements without any taint source --
+            # the overwhelming majority -- never enter the per-spec loop.
+            if not _FALLBACK_SOURCE_ANY.search(expr):
+                return None
+            for pattern, label in _FALLBACK_SOURCE_SPECS:
+                if pattern.search(expr):
                     return label
             return None
+
+        # Per-name alias regexes, compiled once per analysis instead of once
+        # per (tainted variable x statement) -- the old form re-built a fresh
+        # pattern for every tracked name on every line of a large bundle.
+        alias_res = {}
+
+        def alias_re(name, suffix=""):
+            key = (name, suffix)
+            rx = alias_res.get(key)
+            if rx is None:
+                rx = alias_res[key] = re.compile(rf"\b{re.escape(name)}\b{suffix}")
+            return rx
 
         # Split at statement boundaries but retain line numbers. This works for
         # ordinary source and still gives useful evidence for minified bundles.
@@ -1202,18 +1296,13 @@ class TaintAnalyzer:
             # line.  The lookbehind/lookahead keep member assignments
             # (`el.innerHTML = …`) and comparisons (`a == b`) out of the taint
             # table; member expressions are handled as sinks below.
-            assignment = re.search(
-                r"(?<![.\w$])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=(?![=>])\s*(.+)$",
-                statement, re.I | re.S,
-            ) or re.search(
-                r"(?<![.\w$!=<>])([A-Za-z_$][\w$]*)\s*=(?![=>])\s*(.+)$",
-                statement, re.I | re.S,
-            )
+            assignment = _FALLBACK_ASSIGN_DECL_RE.search(statement) \
+                or _FALLBACK_ASSIGN_RE.search(statement)
             if not assignment:
                 continue
             name, expr = assignment.groups()
             source = source_for(expr)
-            aliases = [value for value in tainted if re.search(rf"\b{re.escape(value)}\b", expr)]
+            aliases = [value for value in tainted if alias_re(value).search(expr)]
             if source or aliases:
                 value = {
                     "sources": [f"source:{source}"] if source else [],
@@ -1239,9 +1328,9 @@ class TaintAnalyzer:
                 tainted.pop(name, None)
 
             # Track object literal properties, e.g. { q: location.search }.
-            for prop, expr_value in re.findall(r"([A-Za-z_$][\w$]*)\s*:\s*([^,}]+)", expr):
+            for prop, expr_value in _FALLBACK_PROP_RE.findall(expr):
                 prop_source = source_for(expr_value)
-                prop_alias = next((v for v in tainted if re.search(rf"\b{re.escape(v)}\b", expr_value)), None)
+                prop_alias = next((v for v in tainted if alias_re(v).search(expr_value)), None)
                 if prop_source or prop_alias:
                     base = tainted[prop_alias] if prop_alias else None
                     properties[f"{name}.{prop}"] = {
@@ -1275,14 +1364,15 @@ class TaintAnalyzer:
             entirely whenever the AST parser was unavailable.
             """
             values = []
-            for pattern, label in source_specs:
-                if re.search(pattern, expr, re.I):
-                    values.append({
-                        "sources": [f"source:{label}"],
-                        "sanitized": any(h in expr.lower() for h in SANITIZER_HINTS),
-                        "path": [f"read {label}"],
-                        "confidence": "high",
-                    })
+            if _FALLBACK_SOURCE_ANY.search(expr):
+                for pattern, label in _FALLBACK_SOURCE_SPECS:
+                    if pattern.search(expr):
+                        values.append({
+                            "sources": [f"source:{label}"],
+                            "sanitized": any(h in expr.lower() for h in SANITIZER_HINTS),
+                            "path": [f"read {label}"],
+                            "confidence": "high",
+                        })
             return values
 
         def taints_in(expr):
@@ -1292,24 +1382,25 @@ class TaintAnalyzer:
             # payload, so an alias followed by one does not propagate taint.
             not_numeric = rf"(?!\s*\.\s*(?:{numeric_props})\b)"
             for name, value in tainted.items():
-                if re.search(rf"\b{re.escape(name)}\b{not_numeric}", expr):
+                if alias_re(name, not_numeric).search(expr):
                     values.append(value)
             for key, value in properties.items():
-                if re.search(rf"\b{re.escape(key)}\b{not_numeric}", expr):
+                if alias_re(key, not_numeric).search(expr):
                     values.append(value)
             values.extend(inline_sources(expr))
             return values
 
         for line_no, statement in statements:
-            sink = re.search(
-                r"(?:innerHTML|outerHTML|srcdoc)\s*(?:=|\+=)|insertAdjacentHTML\s*\(|"
-                r"document\.(?:write|writeln)\s*\(|\beval\s*\(|new\s+Function\s*\(|"
-                # jQuery-style sinks: $('#x').html(...) / .append(...)
-                r"\.\s*html\s*\(|\$\s*\([^)]*\)\s*\.\s*(?:append|prepend|attr)\s*\(|"
-                # redirect / script URL sinks via setAttribute
-                r"setAttribute\s*\(\s*['\"](?:href|src|srcdoc)['\"]",
-                statement, re.I,
-            )
+            # Noise fast path: a finding always needs one of the sink /
+            # redirect / outbound / wildcard-postMessage / prototype patterns
+            # *in this statement* (aliases only matter at a sink, and new
+            # taint needs a source), and each of those contains a literal
+            # fragment from _FALLBACK_STATEMENT_MARKERS -- no marker, no
+            # finding, skip without a regex call.
+            low = statement.lower()
+            if not any(marker in low for marker in _FALLBACK_STATEMENT_MARKERS):
+                continue
+            sink = _FALLBACK_SINK_RE.search(statement)
             if sink:
                 flow = combine(taints_in(statement[sink.end():]))
                 is_dom = bool(re.search(
@@ -1350,12 +1441,7 @@ class TaintAnalyzer:
             # Redirect sinks: location.href/assign/replace, and any element
             # whose href is assigned from data (a tainted <a href> is the
             # classic "phishing link inside your own page" primitive).
-            redirect = re.search(
-                r"\blocation\s*\.\s*(?:href|assign|replace)\s*(?:=|\()"
-                r"|\.href\s*(?:=(?!=)|\+=)"
-                r"|\.\s*(?:assign|replace)\s*\(",
-                statement, re.I,
-            )
+            redirect = _FALLBACK_REDIRECT_RE.search(statement)
             if redirect:
                 flow = combine(taints_in(statement[redirect.end():]))
                 if flow:
@@ -1376,15 +1462,11 @@ class TaintAnalyzer:
             # transport.  Reported as a *candidate* (medium confidence,
             # behavioural correlation) because the fallback cannot establish
             # that the destination is external or attacker-controlled.
-            outbound = re.search(
-                r"\b(?:fetch|axios|XMLHttpRequest|sendBeacon)\s*\("
-                r"|\.\s*(?:send|post)\s*\(|new\s+WebSocket\s*\(",
-                statement, re.I,
-            )
+            outbound = _FALLBACK_OUTBOUND_RE.search(statement)
             if outbound:
                 flow = combine(taints_in(statement))
                 sensitive = [src for src in (flow or {}).get("sources", [])
-                             if EXFIL_READ_RE.search(src)]
+                             if _FALLBACK_EXFIL_READ_RE.search(src)]
                 if flow and sensitive:
                     self._record({
                         "id": "data_exfiltration_candidate",
@@ -1406,7 +1488,24 @@ class TaintAnalyzer:
                         "observation": False,
                     })
 
-            if re.search(r"postMessage\s*\([^)]*,\s*['\"]\*['\"]", statement, re.I):
+            # String-assembled timer argument: eval-class execution.
+            if _FALLBACK_TIMER_CONCAT_RE.search(statement):
+                flow = combine(taints_in(statement))
+                if flow:
+                    self._record({
+                        "id": "dangerous_dynamic_code", "type": "Dangerous dynamic code execution", "severity": "HIGH",
+                        "confidence": min_confidence(flow["confidence"]),
+                        "status": "open" if flow["confidence"] == "high" else "needs_review",
+                        "file": self.filename, "line": line_no,
+                        "source": " → ".join(s.replace("source:", "") for s in flow["sources"]),
+                        "sink": statement[:160], "flow": flow["path"][:8],
+                        "sanitization_detected": flow["sanitized"], "evidence": statement[:240],
+                        "evidence_type": "source_to_sink", "analysis_quality": "heuristic",
+                        "limitations": ["Line-based heuristic: the assembled string is executed as code; the exact payload reachability is not traced."],
+                        "observation": False,
+                    })
+
+            if _FALLBACK_POSTMESSAGE_WILDCARD_RE.search(statement):
                 self._record({
                     "id": "insecure_postmessage", "type": "Insecure postMessage", "severity": "MEDIUM",
                     "confidence": "medium", "status": "needs_review", "file": self.filename, "line": line_no,
@@ -1416,7 +1515,7 @@ class TaintAnalyzer:
                     "limitations": ["Wildcard targetOrigin observed; payload sensitivity not established."],
                     "observation": False,
                 })
-            if re.search(r"(?:__proto__|constructor\.prototype|Object\.assign\s*\([^)]*(?:__proto__|prototype))", statement, re.I):
+            if _FALLBACK_PROTOTYPE_RE.search(statement):
                 self._record({
                     "id": "prototype_pollution", "type": "Prototype pollution", "severity": "MEDIUM",
                     "confidence": "low", "status": "needs_review", "file": self.filename, "line": line_no,

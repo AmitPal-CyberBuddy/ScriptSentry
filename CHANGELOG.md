@@ -14,6 +14,48 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Engine accuracy and efficiency pass
+
+- **1.6× faster scans on large bundles (AST engine).** The shared parse
+  cache silently disabled itself for documents over 256 KB — exactly the
+  multi-hundred-KB minified bundles where one parse costs a second or more —
+  so every consumer (taint, attack surface, module discovery, AST summary)
+  re-parsed the same file: three parses per scan. The per-entry cap is now
+  2 MB with a 4 MB total (trees are shared read-only and dropped at scan
+  end), restoring the documented "parsed exactly once per scan" contract.
+  488 KB bundle: 4.6s → 2.9s.
+- **Split-up credentials are found (documented stretch item).** Secret
+  discovery now folds three assembly shapes through the same
+  dedup/credibility pipeline: in-expression chains (existing),
+  `Buffer.concat([Buffer.from(...), ...])`, and cross-statement assembly
+  via single-assignment literal variables (`const a='AKIA'; const b='…';
+  const key=a+b`). A variable written more than once (any later `=`, `+=`,
+  a second declaration) is never folded — its value at concat time would be
+  unknowable. Object-property writes (`obj.p=…`) and comparisons (`==`)
+  correctly do not invalidate.
+- **Regex-fallback engine parity and speed.** The fallback (no AST parser
+  installed) now catches `location = <tainted>` open redirects (parity with
+  the AST engine) and string-assembled timer arguments
+  (`setTimeout('go(' + input + ')')`) as eval-class sinks — with the benign
+  callback forms staying quiet. Internally the fallback's per-statement pass
+  compiles its patterns once at import, caches per-name alias regexes, and
+  skips noise statements behind a literal-marker fast path (a superset test
+  plus fuzz pins the filter's soundness).
+- **AST engine timer-sink fix.** `setTimeout`/`setInterval` calls with a
+  plain identifier callee never matched the eval-class sink check (the
+  pattern looked for the callee text *with* parentheses); tainted data
+  assembled into a timer string argument is now reported.
+- **No more quadratic regex blowups in the fold layer.** Literals are
+  bounded (4096 chars), identifiers and gaps bounded, assignment scans run
+  off `=`/`:` anchors with bounded windows, and line numbers are counted
+  incrementally. A 2 MB embedded literal or word-run went from ~6 s (or
+  unbounded, pre-bound) to ~50 ms; an 8 000-var bundle from 3.6 s to ~0.3 s.
+  Adversarial probe score: AST 12/15 → 14/15, fallback 11/15 → 14/15
+  (remaining miss: computed-member indirect eval, documented).
+
+New `tests/test_accuracy_efficiency.py` (19 tests) plus a parse-cache test
+update. Full suite: **555 tests OK**; ruff clean.
+
 ### Dual-audience reports, honest revalidation, repo cleanup
 
 - **Every report now speaks to two audiences.** TXT, HTML, JSON and the

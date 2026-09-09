@@ -48,13 +48,21 @@ PARSER_NAME = "tree-sitter"
 # reported as 0 when tokens are not collected).
 _PARSE_OPTIONS = {"loc": True, "range": True, "comment": True, "tokens": False}
 
-# Bounds for the shared parse cache. Trees are huge relative to their source
-# (order of 500x), so the limit is expressed in source bytes: the worst case
-# resident cost of the cache is bounded and small next to what a single scan
-# already allocates transiently.
+# Bounds for the shared parse cache. Trees are large relative to their source
+# (measured ~14x for tree-sitter plain dicts), so the limit is expressed in
+# source bytes: the worst-case resident cost of the cache is bounded and
+# transient (a scan calls clear_parse_cache() when it finishes).
+#
+# The per-entry cap matters more than it looks: every consumer (taint, attack
+# surface, module discovery, the AST summary) parses through this cache, and a
+# document above the cap is parsed once *per consumer* -- for exactly the
+# multi-hundred-KB minified bundles where a single parse costs a second or
+# more. The cap is therefore set high enough for any realistic single script;
+# multi-file scans that overflow the total simply evict oldest-first, and the
+# per-scan clear bounds the lifetime either way.
 _RAW_CACHE_MAX_ENTRIES = 4
-_RAW_CACHE_MAX_SOURCE_BYTES = 256 * 1024
-_RAW_CACHE_MAX_TOTAL_SOURCE_BYTES = 512 * 1024
+_RAW_CACHE_MAX_SOURCE_BYTES = 2 * 1024 * 1024
+_RAW_CACHE_MAX_TOTAL_SOURCE_BYTES = 4 * 1024 * 1024
 _PARSE_FAILURE_CACHE_MAX_ENTRIES = 128
 
 _RAW_CACHE = OrderedDict()          # sha256 -> (plain-dict AST, source_bytes)
