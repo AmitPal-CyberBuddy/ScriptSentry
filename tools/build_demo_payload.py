@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from core.analyzer_service import analyze_files  # noqa: E402
+from core.js_parser import parser_status  # noqa: E402
 from core.reporter import build_dashboard_payload  # noqa: E402
 
 OUT = ROOT / "webui" / "demo" / "report.js"
@@ -92,6 +93,19 @@ def build_payload():
     # Make the demo self-describing wherever the UI prints the engine line.
     payload["meta"]["engine"] = "ScriptSentry demo report"
     payload["meta"]["demo"] = True
+    # The meta parser inventory lists *every* parser installed on the build
+    # machine (e.g. "tree-sitter" alone vs "tree-sitter" + "esprima"), which
+    # made the payload differ between environments whose findings are
+    # identical. The demo reports what the *primary* engine finds; pin the
+    # inventory to it so the artifact is reproducible across installs.
+    status = parser_status()
+    parser_meta = payload["meta"].get("ast_parser")
+    if status["mode"] == "ast" and isinstance(parser_meta, dict):
+        parser_meta["engines"] = [status["name"]]
+        # Which engine produced this artifact, so a byte-exact freshness
+        # check can pin itself to that engine instead of failing (or
+        # silently passing) under a different one.
+        payload["meta"]["demo_engine"] = status["name"]
     return payload
 
 
