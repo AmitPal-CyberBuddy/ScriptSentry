@@ -14,6 +14,40 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### CI story: local CLI targets, --fail-on gate, GitHub Action, rule reference, demo report
+
+- **The CLI scans local code, not just URLs.** `main.py ./dist bundle.js`
+  walks local files/directories (`.js/.mjs/.cjs/.jsx/.ts/.tsx`, skipping
+  `node_modules` and VCS dirs, capped at 1000 files) through the exact
+  `analyze_files` pipeline the dashboard uses for uploads. Result keys keep
+  repository-relative paths (SARIF consumers like GitHub code scanning map
+  findings onto files; browser uploads still sanitize to basenames).
+  `--format` now accepts several formats at once (`--format sarif txt`),
+  `--output DIR` replaces the hardcoded `output/`, and one dead URL in a
+  mixed target list never discards the results of the others.
+- **`--fail-on {critical,high,medium,low,none}`** turns the CLI into a CI
+  gate: exit 1 when any *actionable* finding (observations excluded) reaches
+  the threshold, exit 2 for operational errors (nothing scanned), 0
+  otherwise. Fixed along the way: `report.json` was double-encoded (a JSON
+  string containing JSON) — it is now a directly loadable document.
+- **A ready-to-use GitHub Action** (`.github/actions/scan`) installs the
+  engine on the runner and scans a checkout; the README shows the two-step
+  workflow with SARIF upload to code scanning. This repository runs the
+  action on itself on every push to main as a live example
+  (`.github/workflows/self-scan.yml`, fail-on `none` so it never blocks a
+  merge).
+- **Rule reference, generated from the engine.** `docs/RULES.md` and the
+  hosted `/rules/` page document every finding id in plain language with an
+  example and the usual fix — meaning/action text comes from the engine's
+  own `PLAIN_TERMS` registry, and the generator refuses to build if a
+  finding id is undocumented. Linked from the README and the landing page.
+- **Demo report on the hosted console.** A "View a demo report" button
+  renders the real engine's report for a labelled example bundle through
+  the exact same pipeline a live scan uses — a first-time visitor sees the
+  product before installing anything, and the demo can never advertise
+  detections the engine does not make (`tools/build_demo_payload.py`,
+  regenerable + sync-tested).
+
 ### Computed-member dynamic execution detected (deobfuscation)
 
 - `window[name]()` / `globalThis[name]()` where the engine can **prove**

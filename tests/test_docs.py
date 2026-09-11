@@ -27,6 +27,70 @@ with open(CHANGELOG_HTML, encoding="utf-8") as fh:
     PAGE = fh.read()
 
 
+class DemoReportFreshnessTest(unittest.TestCase):
+    """The hosted demo report must match what the engine produces."""
+
+    def test_demo_report_is_up_to_date(self):
+        generator = os.path.join(ROOT, "tools", "build_demo_payload.py")
+        proc = subprocess.run(
+            [sys.executable, generator, "--check"],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        self.assertEqual(
+            proc.returncode, 0,
+            "webui/demo/report.js is out of date. Regenerate with:\n"
+            "    python3 tools/build_demo_payload.py\n"
+            f"generator said: {proc.stdout.strip()}{proc.stderr.strip()}",
+        )
+
+    def test_demo_report_is_loadable_and_marked(self):
+        import json
+        path = os.path.join(ROOT, "webui", "demo", "report.js")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("window.SS_DEMO_REPORT = ", text)
+        payload = json.loads(
+            text.split("window.SS_DEMO_REPORT = ", 1)[1].rsplit(";", 1)[0])
+        # The dashboard render pipeline contract: everything a real
+        # /api/result payload has, the demo must have too.
+        for key in ("meta", "summary", "executive_summary", "files"):
+            self.assertIn(key, payload)
+        self.assertTrue(payload["meta"].get("demo"),
+                        "the demo report must identify itself as a demo")
+        self.assertTrue(payload["summary"]["total_findings"] > 0,
+                        "a demo with zero findings sells nothing")
+
+
+class RulesPageFreshnessTest(unittest.TestCase):
+    """The committed rule reference must match what the engine renders to."""
+
+    def test_rules_page_and_doc_are_up_to_date(self):
+        generator = os.path.join(ROOT, "tools", "build_rules_page.py")
+        proc = subprocess.run(
+            [sys.executable, generator, "--check"],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        self.assertEqual(
+            proc.returncode, 0,
+            "webui/rules/index.html or docs/RULES.md is out of date. "
+            "Regenerate with:\n    python3 tools/build_rules_page.py\n"
+            f"generator said: {proc.stdout.strip()}{proc.stderr.strip()}",
+        )
+
+    def test_rules_doc_covers_every_plain_terms_entry(self):
+        """Every plain-language finding id must appear in the rule docs."""
+        sys.path.insert(0, ROOT)
+        try:
+            from core.reporter import PLAIN_TERMS
+        finally:
+            sys.path.pop(0)
+        with open(os.path.join(ROOT, "docs", "RULES.md"), encoding="utf-8") as fh:
+            doc = fh.read()
+        for key in PLAIN_TERMS:
+            self.assertIn(key.rstrip(":"), doc,
+                          f"finding id {key!r} is missing from docs/RULES.md")
+
+
 class GeneratedPageFreshnessTest(unittest.TestCase):
     """The committed page must match what CHANGELOG.md renders to."""
 

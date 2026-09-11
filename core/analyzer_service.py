@@ -322,27 +322,44 @@ def analyze_content(code, filename="inline.js", progress_callback=None, cancel_c
     return results
 
 
-def _safe_local_filename(name, index):
+def _safe_local_filename(name, index, keep_path=False):
     """Turn an uploaded file name into a safe, unique per-scan result key.
 
     Uploaded files are never written to disk; we only need a display-safe key
     for the results dict. Path components and newlines are stripped so a file
     named ``../../etc`` or ``a\\nb.js`` cannot confuse the UI.
+
+    ``keep_path`` is for CLI scans of local checkouts, where the *path is the
+    identity*: SARIF consumers (GitHub code scanning) map results onto the
+    repository by relative path, and two ``utils.js`` in different folders
+    must not collide. Slash-separated relative paths are preserved, but
+    parent segments (``..``, leading ``/``) and control characters are still
+    removed -- a trusted caller gets a readable path, never an escape.
     """
-    base = os.path.basename(str(name or "").replace("\\", "/").strip())
-    base = "".join(ch for ch in base if ch not in "\x00\r\n/").strip()
-    if not base:
-        base = f"snippet-{index + 1}.js"
-    return base
+    cleaned = str(name or "").replace("\\", "/").strip()
+    if keep_path:
+        parts = [seg for seg in cleaned.split("/") if seg not in ("", ".", "..")]
+        cleaned = "/".join(parts)
+    else:
+        cleaned = os.path.basename(cleaned)
+    cleaned = "".join(ch for ch in cleaned if ch not in "\x00\r\n").strip()
+    if not cleaned:
+        cleaned = f"snippet-{index + 1}.js"
+    return cleaned
 
 
-def analyze_files(files, progress_callback=None, cancel_check=None):
+def analyze_files(files, progress_callback=None, cancel_check=None, trusted_names=False):
     """Analyze several pasted/uploaded JavaScript documents in one scan.
 
     ``files`` is an iterable of ``{"filename": str, "code": str}``. Documents
     are analyzed locally and merged into one results dict, deduplicating
     identical content (the same way URL scans dedupe mirrored bundles). Nothing
     here is written to disk or sent anywhere; inputs come from the local UI.
+
+    ``trusted_names=True`` keeps each file's relative path as the result key
+    (the CLI uses this so SARIF reports map onto the scanned checkout); the
+    default sanitizes to a basename, which is what untrusted browser uploads
+    need.
     """
     clear_parse_cache()
     files = [f for f in (files or []) if isinstance(f, dict)]
@@ -370,7 +387,7 @@ def analyze_files(files, progress_callback=None, cancel_check=None):
         code = item.get("code") or ""
         if not isinstance(code, str) or not code.strip():
             continue
-        name = _safe_local_filename(item.get("filename"), index)
+        name = _safe_local_filename(item.get("filename"), index, keep_path=trusted_names)
         # Guarantee unique keys when two uploads share a basename.
         unique = name
         n = 2

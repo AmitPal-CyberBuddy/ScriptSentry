@@ -3901,6 +3901,98 @@ main[id] {
   text-underline-offset: 2px;
 }
 
+/* ============================================================
+   RULE REFERENCE PAGE (webui/rules/)
+   ------------------------------------------------------------
+   The rule reference shares the changelog's prose column and
+   release sections; it adds severity chips and a per-rule
+   card rhythm. Like the changelog page, nothing here invents
+   a new colour or type size -- severity colour is the shared
+   data palette, chips are hairline-outlined like the badges,
+   and examples reuse the console's .code-box treatment.
+   ============================================================ */
+
+.changelog-sub {
+  max-width: 60ch;
+  margin: var(--space-xs) auto 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.rule {
+  padding: var(--space-sm) 0 var(--space-md);
+  border-top: 1px solid var(--hairline);
+}
+
+.rule:first-of-type {
+  border-top: 0;
+  padding-top: var(--space-xs);
+}
+
+.rule h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs);
+  margin: 0 0 var(--space-2xs);
+  font-size: var(--fs-h4);
+}
+
+.rule h3 code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--primary);
+}
+
+.rule-meaning {
+  margin: 0 0 var(--space-2xs);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.65;
+}
+
+.rule .code-box {
+  margin: var(--space-2xs) 0 var(--space-xs);
+}
+
+.sev-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-strong);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sev-chip.sev-critical {
+  color: var(--danger);
+  border-color: rgba(255, 77, 109, 0.45);
+  background: rgba(255, 77, 109, 0.08);
+}
+
+.sev-chip.sev-high {
+  color: var(--danger);
+  border-color: rgba(255, 77, 109, 0.35);
+  background: rgba(255, 77, 109, 0.05);
+}
+
+.sev-chip.sev-medium {
+  color: var(--warning);
+  border-color: rgba(255, 159, 67, 0.4);
+  background: rgba(255, 159, 67, 0.06);
+}
+
+.sev-chip.sev-low,
+.sev-chip.sev-info {
+  color: var(--primary);
+  border-color: rgba(34, 211, 238, 0.35);
+  background: rgba(34, 211, 238, 0.05);
+}
+
 .changelog-back {
   margin-top: var(--space-xl);
   padding-top: var(--space-md);
