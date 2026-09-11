@@ -14,6 +14,36 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Workflows: baselines, watch mode, scan-again-and-compare, honest fallback notice
+
+- **Baselines: fail only on what is new.** `--fail-on` alone answers "are
+  there findings?" — the wrong question for a codebase with accepted ones.
+  `--save-baseline FILE` snapshots a scan's finding fingerprints (sorted, no
+  timestamps: committed baselines diff cleanly in review); `--baseline FILE`
+  narrows the gate to findings that are new or worsened (severity raised, or
+  an observation that came back actionable) since it. Known findings stay in
+  every report — the report never lies, only the gate narrows — and a
+  missing baseline behaves like an empty one (everything is new: the safe
+  direction). A run is always judged against the baseline as it existed at
+  its start, so `--baseline X --save-baseline X` in one command cannot
+  silently accept itself. Identity is the engine's line-independent history
+  fingerprint, shared with the diff API, so an unrelated edit above a
+  finding never flips it to "new". The GitHub Action gains a `baseline:`
+  input.
+- **Watch mode.** `--watch SECONDS` (minimum 10) re-scans any target on an
+  interval and prints per-cycle changes — new / worse / improved /
+  no-longer-detected — through the same fingerprint identity. Ctrl+C exits
+  0; with `--fail-on`, the first failing cycle exits 1 and stops the watch.
+- **"Scan again & compare" on the dashboard.** One button re-runs the last
+  scan submitted from that tab (URL with its settings, pasted code, or
+  uploaded files — held in memory, so after a reload it honestly
+  disappears) and the history chip renders the engine's per-finding
+  revalidation against the previous run of the same target.
+- **The CLI no longer scans silently degraded.** Without an AST parser the
+  CLI now prints the same honest notice the dashboard and server do — the
+  concrete cost (flows capped at medium confidence, some missed entirely)
+  and the install command.
+
 ### CI story: local CLI targets, --fail-on gate, GitHub Action, rule reference, demo report
 
 - **The CLI scans local code, not just URLs.** `main.py ./dist bundle.js`

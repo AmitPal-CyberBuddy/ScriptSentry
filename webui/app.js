@@ -702,6 +702,7 @@
         }
         payload = demo;
         renderDashboard();
+        updateRescanButton();  // the demo is not re-runnable: hide the rescan affordance
         const results = $("#results");
         if (results) results.scrollIntoView({ behavior: "smooth", block: "start" });
       };
@@ -1629,6 +1630,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
   function renderHistoryChip() {
     const box = $("#history-diff");
+    updateRescanButton();
     if (!box) return;
     const link = $("#history-storage-link");
     const h = payload && payload.history;
@@ -1672,6 +1674,44 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
         (verdictRows ? `<div style="margin-top:6px">${verdictRows}</div>` : "");
     } catch {
       /* The counts rendered above remain; revalidation is an enhancement. */
+    }
+  }
+
+  /* "Scan again & compare": re-runs the last scan submitted from this tab
+     (the request — URL with its settings, pasted code, or uploaded files —
+     lives in memory) so the history chip can render the per-finding
+     revalidation against the previous run of the same target. After a page
+     reload the request is gone and the button honestly disappears: files
+     cannot be re-scanned from history alone. */
+  function updateRescanButton() {
+    const btn = $("#rescan-compare");
+    if (!btn) return;
+    const demo = !!(payload && payload.meta && payload.meta.demo);
+    btn.hidden = !(lastQuery && !viewedScanNote && !demo);
+  }
+
+  async function rescanAndCompare() {
+    if (!lastQuery) return;
+    const btn = $("#rescan-compare");
+    if (btn) btn.disabled = true;
+    if (!(await ensureBackend())) {
+      if (btn) btn.disabled = false;
+      return;
+    }
+    showLoading(lastQuery.mode === "url"
+      ? "Re-scanning the target — stages below."
+      : "Re-scanning the submitted files…");
+    try {
+      const data = await postJSON("/api/analyze", lastQuery);
+      lastJobId = data.job_id;
+      renderProgress(data.job || { percent: 0, message: "Starting…" });
+      await pollJob(data.job_id);
+      await finishJob(data.job_id);
+    } catch (err) {
+      await handleAnalysisError(err, { urlMode: lastQuery.mode === "url" });
+    } finally {
+      hideLoading();
+      if (btn) btn.disabled = false;
     }
   }
 
@@ -1720,6 +1760,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       renderDashboard();
       const chip = $("#history-diff");
       if (chip) chip.hidden = true;
+      updateRescanButton();
       refreshHistory().catch(() => {});
     } finally {
       if (btn) btn.disabled = false;
@@ -3383,6 +3424,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     $("#code-input").value = SAMPLE;
     $("#analyze-code").addEventListener("click", analyzeCode);
     $("#analyze-url").addEventListener("click", analyzeUrl);
+    const rescanBtn = $("#rescan-compare");
+    if (rescanBtn) rescanBtn.addEventListener("click", rescanAndCompare);
     $("#export-html").addEventListener("click", () => exportReport("html"));
     $("#export-txt").addEventListener("click", () => exportReport("txt"));
     $("#export-csv").addEventListener("click", () => exportReport("csv"));

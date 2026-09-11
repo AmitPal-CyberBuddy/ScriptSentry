@@ -22,6 +22,13 @@ inputs:
     description: "Directory the reports are written to"
     required: false
     default: "scriptsentry-report"
+  baseline:
+    description: >-
+      Path to a baseline file (written by 'scriptsentry --save-baseline' and
+      typically committed): the fail-on gate then counts only findings that
+      are new or worsened since it. Empty disables baseline mode.
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -43,11 +50,16 @@ runs:
       shell: bash
       run: |
         set -o pipefail
+        BASELINE_ARGS=()
+        if [ -n "${{ inputs.baseline }}" ]; then
+          BASELINE_ARGS=(--baseline "${{ inputs.baseline }}")
+        fi
         # shellcheck disable=SC2086 -- targets are intentionally word-split
         scriptsentry ${{ inputs.targets }} \
           --format ${{ inputs.format }} \
           --output "${{ inputs.output }}" \
-          --fail-on ${{ inputs.fail-on }}
+          --fail-on ${{ inputs.fail-on }} \
+          "${BASELINE_ARGS[@]}"
 
     - name: Report locations
       shell: bash

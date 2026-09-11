@@ -198,3 +198,38 @@ class MixedTargetsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FallbackModeWarningTest(unittest.TestCase):
+    """The CLI must not scan silently degraded (P1: fallback nudge)."""
+
+    _UNAVAILABLE = {
+        "name": "none", "available": False, "mode": "regex_fallback",
+        "engines": [], "install_hint": "pip install tree-sitter tree-sitter-javascript",
+    }
+    _AVAILABLE = {"name": "tree-sitter", "available": True, "mode": "ast",
+                  "engines": ["tree-sitter"], "install_hint": ""}
+
+    def _run_scan(self, tmp, status):
+        import io
+        from contextlib import redirect_stderr
+        path = os.path.join(tmp, "app.js")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("var x = 1;\n")
+        with mock.patch("core.js_parser.parser_status", return_value=status), \
+                mock.patch("main.analyze_files", return_value={"app.js": {"findings": []}}), \
+                redirect_stderr(io.StringIO()) as err:
+            cli.run([path], output_formats=["txt"], output_dir=tmp)
+        return err.getvalue()
+
+    def test_fallback_mode_is_announced_with_the_cost_and_fix(self):
+        with tempfile.TemporaryDirectory(prefix="ss-fb-") as tmp:
+            err = self._run_scan(tmp, self._UNAVAILABLE)
+        self.assertIn("AST parser unavailable", err)
+        self.assertIn("regex_fallback", err)
+        self.assertIn("pip install tree-sitter", err)
+
+    def test_full_engine_runs_quiet(self):
+        with tempfile.TemporaryDirectory(prefix="ss-fb-") as tmp:
+            err = self._run_scan(tmp, self._AVAILABLE)
+        self.assertEqual(err, "")

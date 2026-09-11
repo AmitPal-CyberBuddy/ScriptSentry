@@ -12,11 +12,14 @@ uses for uploads, so a CLI scan and a dashboard scan of the same code agree.
 
 ``--fail-on <severity>`` makes the process exit 1 when any *actionable*
 finding (not an observation) is at or above that severity -- the hook CI
-pipelines gate on. ``--output`` chooses the report directory.
+pipelines gate on. ``--baseline FILE`` narrows that gate to findings that are
+*new or worsened* since an accepted snapshot (written by ``--save-baseline``
+and typically committed), and ``--output`` chooses the report directory.
 """
 import argparse
 import os
 import sys
+import time
 
 from config import DEFAULT_PROFILE, REPORT_FORMATS, SCAN_MAX_WORKERS, SCAN_PROFILES
 from core.analyzer_service import analyze_files, analyze_url
@@ -142,18 +145,157 @@ def worst_actionable_severity(results):
     return worst_rank, count
 
 
+def count_actionable(results):
+    """Number of actionable findings (observations excluded) across all files."""
+    total = 0
+    for value in results.values():
+        if isinstance(value, dict):
+            total += sum(1 for finding in value.get("findings") or []
+                         if isinstance(finding, dict) and not finding.get("observation"))
+    return total
+
+
+# Watch mode's floor: a tight interval turns the machine into a scanner, not
+# a monitor (each cycle re-downloads and re-analyzes every target).
+MIN_WATCH_INTERVAL = 10.0
+
+_VERDICT_MARKS = {
+    "new": "+ new", "worsened": "! worse", "improved": "- improved",
+    "persisted": "= still there", "resolved": "x no longer detected",
+}
+
+
+def _watch_rows(results):
+    """Results -> history-identity rows (same fingerprint as diff/baseline)."""
+    from core.history import _finding_rows
+    return [dict(row, fingerprint=fp) for fp, row in _finding_rows(results)]
+
+
+def watch_cycle_diff(previous, current):
+    """Per-finding revalidation between two watch cycles (pure, testable)."""
+    from core.revalidation import revalidate_rows
+    return revalidate_rows(_watch_rows(previous), _watch_rows(current))
+
+
+def gate_failure(results, baseline, fail_on):
+    """Evaluate the --fail-on gate; (None, None) when it passes.
+
+    Shared by the single-run path and watch mode so the two can never drift:
+    with a baseline, only new/worsened actionable findings count; without
+    one, every actionable finding does. Observations never gate.
+    """
+    if fail_on == "none":
+        return None, None
+    gate_results = results
+    if baseline is not None:
+        from core.baseline import gate_view
+        gate_results, _stats = gate_view(results, baseline)
+    threshold = SEVERITY_RANK[fail_on.upper()]
+    worst_rank, count = worst_actionable_severity(gate_results)
+    if worst_rank >= threshold and count > 0:
+        severity_name = next(name for name, rank in SEVERITY_RANK.items() if rank == worst_rank)
+        return 1, (f"[!] FAIL: {count} actionable finding(s) at {severity_name} "
+                   f"(threshold: {fail_on.upper()})")
+    return None, None
+
+
+def watch_loop(args, run_kwargs):
+    """Re-scan the target(s) on an interval and report what changed.
+
+    Each cycle is a full scan through the same pipeline; the between-cycles
+    comparison uses the engine's line-independent finding fingerprint (the
+    same identity as the history diff and baselines), so a re-formatted file
+    is "still there", not "new + resolved". With ``--fail-on``, the first
+    failing cycle exits 1 — watch mode is monitoring, and a gate that keeps
+    running after turning red is a gate nobody watches.
+    """
+    interval = max(MIN_WATCH_INTERVAL, float(args.watch or MIN_WATCH_INTERVAL))
+    baseline = None
+    if args.baseline:
+        from core.baseline import load_baseline
+        try:
+            baseline, warnings = load_baseline(args.baseline)
+        except ValueError as exc:
+            print(f"[!] {exc}", file=sys.stderr)
+            return 2
+        for warning in warnings:
+            print(f"[!] {warning}", file=sys.stderr)
+    print(f"[watch] re-scanning {len(args.targets)} target(s) every {int(interval)}s — Ctrl+C to stop")
+    previous = None
+    cycle = 0
+    try:
+        while True:
+            cycle += 1
+            try:
+                results = run(**run_kwargs)
+            except ValueError as exc:
+                print(f"[!] {exc}", file=sys.stderr)
+                return 2
+            stamp = time.strftime("%H:%M:%S")
+            print(f"[watch {stamp}] cycle {cycle}: {count_actionable(results)} actionable finding(s)")
+            if previous is not None:
+                diff = watch_cycle_diff(previous, results)
+                interesting = [v for v in (diff.get("verdicts") or [])
+                               if v.get("verdict") in ("new", "worsened", "improved", "resolved")]
+                if not interesting:
+                    print("    (no changes since the previous cycle)")
+                for verdict in interesting:
+                    mark = _VERDICT_MARKS.get(verdict["verdict"], "?")
+                    where = f" ({verdict['file']})" if verdict.get("file") else ""
+                    change = f" [{verdict['change']}]" if verdict.get("change") else ""
+                    print(f"    {mark}: {verdict['title']}{where}{change}")
+                for line in (diff.get("summary_lines") or [])[:1]:
+                    print(f"    {line}")
+            if args.save_baseline:
+                from core.baseline import write_baseline
+                write_baseline(results, args.save_baseline)
+            code, message = gate_failure(results, baseline, args.fail_on)
+            if message:
+                print(message + " — stopping the watch", file=sys.stderr)
+            if code:
+                return code
+            previous = results
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\n[watch] stopped.")
+        return 0
+
+
+def _warn_fallback_mode():
+    """Announce reduced-depth scans: the CLI must not degrade silently.
+
+    Same message the dashboard banner and server startup print, so every
+    surface names the concrete cost (capped confidence, missed flows) and
+    the fix.
+    """
+    from core.js_parser import parser_status
+    status = parser_status()
+    if status.get("available"):
+        return
+    print(
+        f"[!] AST parser unavailable — running in {status.get('mode', 'regex_fallback')} mode. "
+        "Source-to-sink flows are capped at 'medium' confidence and some are missed entirely. "
+        f"Install it for full analysis: {status.get('install_hint', 'pip install esprima')}",
+        file=sys.stderr,
+    )
+
+
 def run(targets, max_depth=5, timeout=15, profile=DEFAULT_PROFILE, output_formats=None,
         ai_provider="disabled", model=None, ollama_url=None, openai_base_url=None,
-        api_key=None, max_workers=SCAN_MAX_WORKERS, output_dir=None, progress=lambda **e: None):
+        api_key=None, max_workers=SCAN_MAX_WORKERS, output_dir=None, progress=lambda **e: None,
+        quiet=False):
     """Analyze URLs and/or local paths; write reports; return the results.
 
     ``output_dir`` defaults to ``output``. Returns the merged results dict
-    (consumed by tests and by ``--fail-on`` in :func:`main`).
+    (consumed by tests and by ``--fail-on`` in :func:`main`). ``quiet``
+    suppresses the full text report on stdout (used by watch mode, which
+    prints per-cycle summaries instead).
     """
     targets = [t for t in (targets or []) if str(t).strip()]
     if not targets:
         raise ValueError("At least one target (URL or local path) is required")
     out = output_dir or OUTPUT_DIR
+    _warn_fallback_mode()
     profile_cfg = SCAN_PROFILES.get(profile, SCAN_PROFILES[DEFAULT_PROFILE])
     urls = [t for t in targets if is_url(t)]
     local_paths = [t for t in targets if not is_url(t)]
@@ -232,7 +374,8 @@ def run(targets, max_depth=5, timeout=15, profile=DEFAULT_PROFILE, output_format
         _save(os.path.join(out, "report.csv"), generate_csv_report(results, ai_summary=ai_summary, metadata=metadata))
     if "all" in formats or "sarif" in formats:
         _save(os.path.join(out, "report.sarif"), generate_sarif_report(results, ai_summary=ai_summary, metadata=metadata))
-    print(generate_report(results, ai_summary=ai_summary, metadata=metadata))
+    if not quiet:
+        print(generate_report(results, ai_summary=ai_summary, metadata=metadata))
     return results
 
 
@@ -259,8 +402,21 @@ def build_parser():
                         help=f"Directory for report files (default: {OUTPUT_DIR}/)")
     parser.add_argument("--fail-on", choices=["critical", "high", "medium", "low", "none"], default="none",
                         help="Exit with code 1 when any actionable finding (observations excluded) "
-                             "is at or above this severity. 'none' (the default) always exits 0 -- "
-                             "the hook CI pipelines gate on.")
+                        "is at or above this severity. 'none' (the default) always exits 0 -- "
+                        "the hook CI pipelines gate on.")
+    parser.add_argument("--baseline", metavar="FILE", default=None,
+                        help="Gate on what is NEW: with --fail-on, only findings that are new or "
+                        "worsened since this baseline file count against the exit code. A missing "
+                        "file behaves like an empty baseline (everything counts as new).")
+    parser.add_argument("--save-baseline", metavar="FILE", default=None,
+                        help="Write this scan's finding fingerprints to FILE as a baseline for "
+                        "later --baseline runs (typically committed to the repo; updating it is "
+                        "a visible, reviewable act)")
+    parser.add_argument("--watch", type=float, default=None, metavar="SECONDS",
+                        help="Watch mode: re-scan the target(s) every SECONDS seconds (minimum "
+                        "10) and print what changed between cycles -- new, worse, improved and "
+                        "no-longer-detected findings, identified line-independently. Ctrl+C "
+                        "stops (exit 0); with --fail-on, the first failing cycle exits 1.")
     parser.add_argument("--ai", choices=["disabled", "ollama", "openai"], default="disabled",
                         help="Executive summary mode. 'ollama'/'openai' call LOCAL "
                              "model servers (code never leaves your machine): "
@@ -301,36 +457,70 @@ def main(argv=None):
 
     if not args.targets:
         parser.error("provide at least one target (URL or local path) or use --serve")
+    run_kwargs = dict(
+        targets=args.targets,
+        max_depth=max(1, min(args.max_depth, 10)),
+        timeout=max(2, min(args.timeout, 60)),
+        profile=args.profile,
+        output_formats=["all"] if "all" in args.format else list(args.format),
+        ai_provider=args.ai,
+        model=args.model,
+        ollama_url=args.ollama_url,
+        openai_base_url=args.openai_base_url,
+        api_key=args.api_key,
+        max_workers=max(1, min(args.workers, 32)),
+        output_dir=args.output,
+        progress=lambda **event: print(
+            f"    [{event.get('phase', 'scan')}] {event.get('message', '')}", flush=True
+        ),
+    )
+
+    if args.watch:
+        # Watch mode: cycles print one summary line + what changed, not a
+        # full report each time (files are still written to --output).
+        run_kwargs["quiet"] = True
+        run_kwargs["progress"] = lambda **event: None
+        return watch_loop(args, run_kwargs)
+
     try:
-        results = run(
-            args.targets,
-            max_depth=max(1, min(args.max_depth, 10)),
-            timeout=max(2, min(args.timeout, 60)),
-            profile=args.profile,
-            output_formats=["all"] if "all" in args.format else list(args.format),
-            ai_provider=args.ai,
-            model=args.model,
-            ollama_url=args.ollama_url,
-            openai_base_url=args.openai_base_url,
-            api_key=args.api_key,
-            max_workers=max(1, min(args.workers, 32)),
-            output_dir=args.output,
-            progress=lambda **event: print(
-                f"    [{event.get('phase', 'scan')}] {event.get('message', '')}", flush=True
-            ),
-        )
+        results = run(**run_kwargs)
     except ValueError as exc:
         print(f"[!] {exc}", file=sys.stderr)
         return 2
-    if args.fail_on != "none":
-        threshold = SEVERITY_RANK[args.fail_on.upper()]
-        worst_rank, count = worst_actionable_severity(results)
-        if worst_rank >= threshold and count > 0:
-            severity_name = next(name for name, rank in SEVERITY_RANK.items() if rank == worst_rank)
-            print(f"[!] FAIL: {count} actionable finding(s) at {severity_name} "
-                  f"(threshold: {args.fail_on.upper()})", file=sys.stderr)
-            return 1
-    return 0
+    # The baseline must be captured BEFORE --save-baseline can overwrite the
+    # same file: a run is always judged against the baseline as it existed at
+    # the start, never against a snapshot of its own results.
+    baseline = None
+    if args.baseline:
+        from core.baseline import load_baseline
+        try:
+            baseline, baseline_warnings = load_baseline(args.baseline)
+        except ValueError as exc:
+            print(f"[!] {exc}", file=sys.stderr)
+            return 2
+        for warning in baseline_warnings:
+            print(f"[!] {warning}", file=sys.stderr)
+
+    if args.save_baseline:
+        from core.baseline import write_baseline
+        try:
+            saved = write_baseline(results, args.save_baseline)
+        except OSError as exc:
+            print(f"[!] Cannot write baseline file {args.save_baseline}: {exc}", file=sys.stderr)
+            return 2
+        print(f"[+] Baseline saved: {args.save_baseline} ({saved} finding(s))")
+
+    if baseline is not None:
+        from core.baseline import gate_view
+        _gate_view, stats = gate_view(results, baseline)
+        print(f"[baseline] {stats['known']} known finding(s) excluded from the gate; "
+              f"{stats['new']} new, {stats['worsened']} worsened "
+              f"(baseline: {args.baseline})")
+
+    code, message = gate_failure(results, baseline, args.fail_on)
+    if message:
+        print(message + (" since the baseline" if args.baseline else ""), file=sys.stderr)
+    return code or 0
 
 
 if __name__ == "__main__":

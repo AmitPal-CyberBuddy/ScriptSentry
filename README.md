@@ -216,6 +216,44 @@ scanned), so a broken target never silently passes a gate:
 python3 main.py ./dist --format sarif txt --fail-on high --output ci-report
 ```
 
+**Baselines: fail only on what is new.** `--fail-on` alone answers "are there
+findings?" — the wrong question for a codebase that already has accepted
+ones. A baseline answers the question CI actually needs ("is this run worse
+than the accepted state?"):
+
+```bash
+# Once (e.g. on main, or locally): snapshot the current findings…
+python3 main.py ./dist --fail-on low --save-baseline scriptsentry-baseline.json
+
+# …commit the file, then gate every future run on what changed:
+python3 main.py ./dist --fail-on low --baseline scriptsentry-baseline.json
+```
+
+With `--baseline`, only findings that are **new** or **worsened** (severity
+raised, or an observation that came back actionable) count against the exit
+code; known findings stay in every report — the report never lies, only the
+gate narrows. Baselines are deterministic (sorted fingerprints, no
+timestamps), so they diff cleanly in review, and a missing baseline file
+behaves like an empty one: everything counts as new, the safe direction.
+Findings are identified by the same line-independent fingerprint the history
+diff uses, so an unrelated edit above a finding does not flip it to "new".
+Updating a baseline — accepting a finding — is a visible, reviewable act:
+commit the file.
+
+**Watch mode:** `--watch SECONDS` re-scans the target(s) on an interval and
+prints what changed between cycles — new, worse, improved and
+no-longer-detected findings, identified line-independently (the same
+fingerprint as baselines and the history diff), so cosmetic edits don't
+noise the diff:
+
+```bash
+python3 main.py https://example.com --watch 60 --fail-on high
+```
+
+Ctrl+C stops the watch (exit 0). With `--fail-on`, the first failing cycle
+exits 1 — watch mode is monitoring, and a gate that keeps running after
+turning red is a gate nobody watches.
+
 Launch the dashboard directly from the CLI:
 
 ```bash
@@ -302,6 +340,7 @@ jobs:
           fail-on: high           # critical|high|medium|low|none
           format: sarif txt
           output: scriptsentry-report
+          # baseline: scriptsentry-baseline.json   # gate only on new/worsened
       - name: Upload findings to code scanning
         uses: github/codeql-action/upload-sarif@v3
         if: always()

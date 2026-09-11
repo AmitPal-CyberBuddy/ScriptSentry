@@ -214,6 +214,7 @@
         }
         payload = demo;
         renderDashboard();
+        updateRescanButton();  // the demo is not re-runnable: hide the rescan affordance
         const results = $("#results");
         if (results) results.scrollIntoView({ behavior: "smooth", block: "start" });
       };
