@@ -81,6 +81,63 @@ def _is_static_value(node):
     return False
 
 
+def _static_string_value(node):
+    """The provable string value of ``node``, or None.
+
+    Covers plain string literals and the two classic deobfuscation
+    constructors: ``String.fromCharCode(<numeric literals>)`` and
+    ``atob(<string literal>)``.  Anything else (variables, calls with
+    non-literal arguments) is unknowable and returns None.
+    """
+    if not isinstance(node, dict):
+        return None
+    ntype = _node_kind_str(node)
+    if ntype in ("Literal", "StringLiteral"):
+        value = node.get("value")
+        return value if isinstance(value, str) else None
+    if ntype in ("CallExpression", "OptionalCallExpression"):
+        callee = node.get("callee") or {}
+        if not isinstance(callee, dict):
+            return None
+        if callee.get("type") == "Identifier":
+            name = callee.get("name")
+        elif _node_kind_str(callee) == "MemberExpression":
+            obj, prop = callee.get("object"), callee.get("property")
+            name = (f"{obj.get('name')}.{prop.get('name')}"
+                    if isinstance(obj, dict) and isinstance(prop, dict)
+                    and obj.get("type") == "Identifier" and prop.get("type") == "Identifier"
+                    else None)
+        else:
+            name = None
+        args = node.get("arguments") or []
+        if name == "String.fromCharCode":
+            codes = []
+            for arg in args:
+                if not isinstance(arg, dict) \
+                        or _node_kind_str(arg) not in ("Literal", "NumericLiteral") \
+                        or not isinstance(arg.get("value"), int):
+                    return None
+                codes.append(arg["value"])
+            try:
+                return "".join(chr(c) for c in codes if 0 <= c <= 0x10FFFF)
+            except (ValueError, OverflowError):
+                return None
+        if name == "atob" and len(args) == 1:
+            arg = args[0]
+            if isinstance(arg, dict) and _node_kind_str(arg) in ("Literal", "StringLiteral") \
+                    and isinstance(arg.get("value"), str):
+                import base64
+                try:
+                    return base64.b64decode(arg["value"], validate=True).decode("utf-8")
+                except Exception:  # noqa: BLE001 - malformed base64 is simply unknowable
+                    return None
+    return None
+
+
+# Computed-member names that mean "this call executes dynamic code".
+_DANGEROUS_MEMBER_NAMES = {"eval", "function", "settimeout", "setinterval"}
+
+
 def _is_sanitizer_call(name):
     if not name:
         return False
@@ -205,6 +262,128 @@ def _node_text(node, content):
     return _name(node) or node.get("type", "")
 
 
+# --- Regex-fallback engine: precompiled pattern sets ------------------------
+# _regex_analyze runs these over every statement of every document whenever no
+# AST parser is available, which used to mean re-resolving each pattern through
+# re.search's per-call cache hundreds of thousands of times on a large bundle
+# (an 18k-statement file made ~205k re.search calls). They are compiled once
+# here instead, and a fused any-source pre-filter lets the ~99% of statements
+# that contain no taint source skip the per-spec loop entirely.
+_FALLBACK_SOURCE_PATTERNS = (
+    (r"(?:new\s+URLSearchParams\s*\(\s*)?location\.search|url\.search|searchParams(?:\.get)?", "URL query string"),
+    (r"location\.hash|url\.hash", "URL fragment"),
+    (r"location\.href|window\.location", "full URL"),
+    (r"document\.referrer", "referrer"),
+    (r"document\.baseURI", "document base URL"),
+    (r"history\.state|history\.pushState\s*\(", "history state"),
+    (r"window\.name", "window.name"),
+    (r"(?:event|e|msg|message)\.data", "postMessage/window message data"),
+    (r"(?:localStorage|sessionStorage)\.getItem\s*\(", "browser storage"),
+    (r"document\.cookie", "document.cookie"),
+    (r"(?:document\.querySelector|document\.getElementById)\s*\([^)]*\)\s*\.value", "form/input value"),
+)
+_FALLBACK_SOURCE_SPECS = tuple(
+    (re.compile(pattern, re.I), label) for pattern, label in _FALLBACK_SOURCE_PATTERNS
+)
+# Matches iff any source spec matches (same flags, same alternatives).
+_FALLBACK_SOURCE_ANY = re.compile(
+    "|".join(f"(?:{pattern})" for pattern, _ in _FALLBACK_SOURCE_PATTERNS), re.I
+)
+_FALLBACK_ASSIGN_DECL_RE = re.compile(
+    r"(?<![.\w$])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=(?![=>])\s*(.+)$", re.I | re.S
+)
+_FALLBACK_ASSIGN_RE = re.compile(
+    r"(?<![.\w$!=<>])([A-Za-z_$][\w$]*)\s*=(?![=>])\s*(.+)$", re.I | re.S
+)
+_FALLBACK_PROP_RE = re.compile(r"([A-Za-z_$][\w$]*)\s*:\s*([^,}]+)")
+_FALLBACK_SINK_PATTERN = (
+    r"(?:innerHTML|outerHTML|srcdoc)\s*(?:=|\+=)|insertAdjacentHTML\s*\("
+    r"|document\.(?:write|writeln)\s*\(|\beval\s*\(|new\s+Function\s*\("
+    r"|\.\s*html\s*\(|\$\s*\([^)]*\)\s*\.\s*(?:append|prepend|attr)\s*\("
+    r"|setAttribute\s*\(\s*['\"](?:href|src|srcdoc)['\"]"
+)
+_FALLBACK_REDIRECT_PATTERN = (
+    r"\blocation\s*\.\s*(?:href|assign|replace)\s*(?:=|\()"
+    r"|\.href\s*(?:=(?!=)|\+=)"
+    r"|\.\s*(?:assign|replace)\s*\("
+    # Bare `location = x` / `window.location = x`: navigation by assignment,
+    # the same primitive the AST engine already reports.
+    r"|\blocation\s*=(?![=>])"
+)
+_FALLBACK_OUTBOUND_PATTERN = (
+    r"\b(?:fetch|axios|XMLHttpRequest|sendBeacon)\s*\("
+    r"|\.\s*(?:send|post)\s*\(|new\s+WebSocket\s*\("
+)
+_FALLBACK_POSTMESSAGE_WILDCARD_PATTERN = r"postMessage\s*\([^)]*,\s*['\"]\*['\"]"
+# Computed-member execution, fallback form: `const s = String.fromCharCode(
+# 101,118,97,108); window[s](...)` or the atob/plain-literal variants. The
+# declaration patterns only accept literal arguments, so the decoded value is
+# deterministic; only names resolving to a dangerous callee are tracked.
+_FB_NAME = r"([A-Za-z_$][\w$]{0,63})"
+_FB_GAP = r"\s{0,64}"
+_FB_FROMCHARCODE_DECL_RE = re.compile(
+    r"(?:const|let|var)\s{1,64}" + _FB_NAME + _FB_GAP + "=" + _FB_GAP
+    + r"String" + _FB_GAP + r"\." + _FB_GAP + r"fromCharCode" + _FB_GAP + r"\("
+    + _FB_GAP + r"([0-9]{1,7}(?:" + _FB_GAP + "," + _FB_GAP + r"[0-9]{1,7})*)" + _FB_GAP + r"\)"
+)
+_FB_ATOB_DECL_RE = re.compile(
+    r"(?:const|let|var)\s{1,64}" + _FB_NAME + _FB_GAP + "=" + _FB_GAP
+    + r"atob" + _FB_GAP + r"\(" + _FB_GAP + r"(['\"])([^'\"\n]{0,512})\2" + _FB_GAP + r"\)"
+)
+_FB_LITERAL_DECL_RE = re.compile(
+    r"(?:const|let|var)\s{1,64}" + _FB_NAME + _FB_GAP + "=" + _FB_GAP
+    + r"(['\"])([^'\"\n]{0,512})\2" + _FB_GAP + r"[,;\n]"
+)
+# Direct literal computed member: window['eval'](...) -- no variable needed.
+_FB_LITERAL_MEMBER_CALL_RE = re.compile(
+    r"\[\s*['\"](?:eval|Function|setTimeout|setInterval)['\"]\s*\]\s*\(", re.I
+)
+# A timer whose first argument is a string literal *immediately extended by
+# concatenation* (`setTimeout('doStuff(' + input + ')')`) executes assembled
+# text as code -- the eval-class sink. A bare string or a function reference
+# is the ordinary callback form and must not match.
+_FALLBACK_TIMER_CONCAT_PATTERN = (
+    r"\b(?:setTimeout|setInterval)\s*\(\s*['\"][^'\"]*['\"]\s*\+"
+)
+_FALLBACK_PROTOTYPE_PATTERN = (
+    r"(?:__proto__|constructor\.prototype|Object\.assign\s*\([^)]*(?:__proto__|prototype))"
+)
+_FALLBACK_SINK_RE = re.compile(_FALLBACK_SINK_PATTERN, re.I)
+_FALLBACK_REDIRECT_RE = re.compile(_FALLBACK_REDIRECT_PATTERN, re.I)
+_FALLBACK_OUTBOUND_RE = re.compile(_FALLBACK_OUTBOUND_PATTERN, re.I)
+_FALLBACK_POSTMESSAGE_WILDCARD_RE = re.compile(_FALLBACK_POSTMESSAGE_WILDCARD_PATTERN, re.I)
+_FALLBACK_TIMER_CONCAT_RE = re.compile(_FALLBACK_TIMER_CONCAT_PATTERN, re.I)
+_FALLBACK_PROTOTYPE_RE = re.compile(_FALLBACK_PROTOTYPE_PATTERN, re.I)
+# Noise fast path for the per-statement pass: every finding needs one of the
+# sink / redirect / outbound / wildcard-postMessage / prototype patterns in
+# the statement itself, and new taint needs a source. Each of those
+# alternatives contains at least one of the literal fragments below, so a
+# statement (lowercased) containing none of them cannot match any pattern
+# and is skipped without a single regex call -- plain substring containment
+# measures ~5x faster than one regex search over the same text.
+_FALLBACK_STATEMENT_MARKERS = (
+    # sinks
+    "srcdoc", "html", "document.write", "eval",
+    "function", "append", "prepend", "attr", "setattribute",
+    # redirects
+    "location", "href", "assign", "replace",
+    # outbound transports
+    "fetch", "axios", "xmlhttprequest", "send", "post", "websocket",
+    # wildcard postMessage / prototype pollution / string-arg timers
+    "__proto__", "prototype", "object.assign", "settimeout", "setinterval",
+    # taint sources
+    "search", "hash", "referrer", "baseuri", "history.", "window.name",
+    ".data", "getitem", "cookie", "queryselector", "getelementbyid",
+)
+# Reads whose value leaving the page would matter.  Broader than the
+# module-level SENSITIVE_READ_RE on purpose: for an exfiltration heuristic a
+# false lead costs a review, a missed lead costs data.
+_FALLBACK_EXFIL_READ_RE = re.compile(
+    r"cookie|localStorage|sessionStorage|storage|token|password|credential|session",
+    re.I,
+)
+
+
 class TaintAnalyzer:
     def __init__(self, content, filename="inline.js"):
         self.content = content
@@ -217,6 +396,9 @@ class TaintAnalyzer:
         # expressions).  The by-name identifier heuristic must never fire for
         # these: `const input = 'welcome'` is not user input.
         self.known_static = set()
+        # name -> provable string value (String.fromCharCode / atob / literal),
+        # used to resolve computed-member callees like window[name]().
+        self.static_strings = {}
         self.findings = []
         self._seen = set()
         self._func_depth = 0
@@ -632,6 +814,35 @@ class TaintAnalyzer:
                     })
             return
         callee_node = node.get("callee", {}) or {}
+
+        # Computed-member execution: `window[name]()` / `globalThis[name]()`
+        # where the engine can *prove* the member resolves to a dangerous
+        # callee -- a name built by String.fromCharCode or decoded by atob.
+        # This is the classic deobfuscation shape; the obfuscation signal
+        # already flags the file, this proves the dangerous name is reached.
+        if _node_kind_str(callee_node) == "MemberExpression" and callee_node.get("computed"):
+            prop = callee_node.get("property")
+            resolved = None
+            if isinstance(prop, dict):
+                if _node_kind_str(prop) in ("Literal", "StringLiteral"):
+                    value = prop.get("value")
+                    resolved = value if isinstance(value, str) else None
+                elif prop.get("type") == "Identifier":
+                    resolved = self.static_strings.get(prop.get("name"))
+            if resolved and resolved.lower() in _DANGEROUS_MEMBER_NAMES:
+                args = node.get("arguments", []) or []
+                taint = self._taint_of_expr(args[0]) if args else None
+                evidence = _Taint(
+                    [f"member:{resolved}"], False,
+                    [f"computed member resolves to {resolved!r}"], "low")
+                if taint:
+                    evidence.merge(taint)
+                self._record_sink("dangerous_dynamic_code", node, evidence, {
+                    "id": "dangerous_dynamic_code",
+                    "type": "Dangerous dynamic code execution",
+                    "severity": "HIGH",
+                })
+                return
         callee = self._strip_calls(callee_node)
         lower = callee.lower()
         # The method name matters for jQuery-style sinks ($('#x').html(...)):
@@ -728,7 +939,8 @@ class TaintAnalyzer:
         # (the scanner's `unsafe_runtime` risk signal covers it), but a data flow
         # should only be claimed when tainted input reaches the sink (or a template
         # literal interpolation does).
-        if lower in ("eval", "function") or any(k in lower for k in ("eval(", "new function", "function(", "settimeout(", "setinterval(")):
+        if lower in ("eval", "function", "settimeout", "setinterval") \
+                or any(k in lower for k in ("eval(", "new function", "function(", "settimeout(", "setinterval(")):
             args = node.get("arguments", []) or []
             if args:
                 arg = args[0]
@@ -864,6 +1076,13 @@ class TaintAnalyzer:
                 # Statically-known value: the by-name identifier heuristic
                 # must not turn this into a "user input" source.
                 self.known_static.add(name)
+            # String.fromCharCode(...) / atob('...') are provable string
+            # values even though _is_static_value (a taint-side predicate)
+            # does not classify calls; resolve them separately so a
+            # computed member like window[name]() can be checked.
+            static_str = _static_string_value(init)
+            if static_str is not None:
+                self.static_strings[name] = static_str
             if _node_kind_str(init) == "NewExpression" and _name(init.get("callee")) == "URLSearchParams":
                 self.urlsearch_vars.add(name)
             # Track tainted object properties so `cfg.q` propagates the same source.
@@ -900,10 +1119,16 @@ class TaintAnalyzer:
             taint.path.append(f"{name} = {self._node_simple_text(right)[:60]}")
             self.vars[name] = taint
             self.known_static.discard(name)
+            self.static_strings.pop(name, None)
         elif _is_static_value(right):
             # Reassignment to a constant value clears any earlier taint.
             self.vars.pop(name, None)
             self.known_static.add(name)
+        static_str = _static_string_value(right)
+        if static_str is not None:
+            self.static_strings[name] = static_str
+        else:
+            self.static_strings.pop(name, None)
 
     # ---------------- inter-procedural helpers ----------------
     def _collect_functions(self, node):
@@ -1152,33 +1377,66 @@ class TaintAnalyzer:
         tainted = {}
         properties = {}
 
-        source_specs = [
-            (r"(?:new\s+URLSearchParams\s*\(\s*)?location\.search|url\.search|searchParams(?:\.get)?", "URL query string"),
-            (r"location\.hash|url\.hash", "URL fragment"),
-            (r"location\.href|window\.location", "full URL"),
-            (r"document\.referrer", "referrer"),
-            (r"document\.baseURI", "document base URL"),
-            (r"history\.state|history\.pushState\s*\(", "history state"),
-            (r"window\.name", "window.name"),
-            (r"(?:event|e|msg|message)\.data", "postMessage/window message data"),
-            (r"(?:localStorage|sessionStorage)\.getItem\s*\(", "browser storage"),
-            (r"document\.cookie", "document.cookie"),
-            (r"(?:document\.querySelector|document\.getElementById)\s*\([^)]*\)\s*\.value", "form/input value"),
-        ]
-
-        # Reads whose value leaving the page would matter.  Broader than the
-        # module-level SENSITIVE_READ_RE on purpose: for an exfiltration
-        # heuristic a false lead costs a review, a missed lead costs data.
-        EXFIL_READ_RE = re.compile(
-            r"cookie|localStorage|sessionStorage|storage|token|password|credential|session",
-            re.I,
-        )
-
         def source_for(expr):
-            for pattern, label in source_specs:
-                if re.search(pattern, expr, re.I):
+            # Fused pre-filter first: statements without any taint source --
+            # the overwhelming majority -- never enter the per-spec loop.
+            if not _FALLBACK_SOURCE_ANY.search(expr):
+                return None
+            for pattern, label in _FALLBACK_SOURCE_SPECS:
+                if pattern.search(expr):
                     return label
             return None
+
+        # Per-name alias regexes, compiled once per analysis instead of once
+        # per (tainted variable x statement) -- the old form re-built a fresh
+        # pattern for every tracked name on every line of a large bundle.
+        alias_res = {}
+
+        def alias_re(name, suffix=""):
+            key = (name, suffix)
+            rx = alias_res.get(key)
+            if rx is None:
+                rx = alias_res[key] = re.compile(rf"\b{re.escape(name)}\b{suffix}")
+            return rx
+
+        def _dangerous_member_names(content):
+            """name -> resolved value for decodable dangerous member names.
+
+            Only declarations whose value is fully deterministic (numeric
+            String.fromCharCode, atob of a literal, a plain literal) are
+            considered, and only when the decoded value is one of the
+            dangerous callee names. A name assigned anywhere else is
+            dropped: the value at call time would be unknowable.
+            """
+            import base64
+
+            candidates = {}
+            for m in _FB_FROMCHARCODE_DECL_RE.finditer(content):
+                try:
+                    value = "".join(chr(int(c)) for c in m.group(2).split(","))
+                except (ValueError, OverflowError):
+                    continue
+                candidates[m.group(1)] = value
+            for m in _FB_ATOB_DECL_RE.finditer(content):
+                try:
+                    candidates[m.group(1)] = base64.b64decode(m.group(3), validate=True).decode("utf-8")
+                except Exception:  # noqa: BLE001 - malformed base64 is unknowable
+                    continue
+            for m in _FB_LITERAL_DECL_RE.finditer(content):
+                candidates.setdefault(m.group(1), m.group(3))
+
+            dangerous = {}
+            for name, value in candidates.items():
+                if value.lower() not in _DANGEROUS_MEMBER_NAMES:
+                    continue
+                # Exactly one assignment site (the declaration) or the value
+                # at call time is unknowable.
+                sites = len(re.findall(rf"(?<![.\w$]){re.escape(name)}{_FB_GAP}=", content))
+                if sites == 1:
+                    dangerous[name] = value
+            return dangerous
+
+        danger_members = _dangerous_member_names(text or "")
 
         # Split at statement boundaries but retain line numbers. This works for
         # ordinary source and still gives useful evidence for minified bundles.
@@ -1202,18 +1460,13 @@ class TaintAnalyzer:
             # line.  The lookbehind/lookahead keep member assignments
             # (`el.innerHTML = …`) and comparisons (`a == b`) out of the taint
             # table; member expressions are handled as sinks below.
-            assignment = re.search(
-                r"(?<![.\w$])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=(?![=>])\s*(.+)$",
-                statement, re.I | re.S,
-            ) or re.search(
-                r"(?<![.\w$!=<>])([A-Za-z_$][\w$]*)\s*=(?![=>])\s*(.+)$",
-                statement, re.I | re.S,
-            )
+            assignment = _FALLBACK_ASSIGN_DECL_RE.search(statement) \
+                or _FALLBACK_ASSIGN_RE.search(statement)
             if not assignment:
                 continue
             name, expr = assignment.groups()
             source = source_for(expr)
-            aliases = [value for value in tainted if re.search(rf"\b{re.escape(value)}\b", expr)]
+            aliases = [value for value in tainted if alias_re(value).search(expr)]
             if source or aliases:
                 value = {
                     "sources": [f"source:{source}"] if source else [],
@@ -1239,9 +1492,9 @@ class TaintAnalyzer:
                 tainted.pop(name, None)
 
             # Track object literal properties, e.g. { q: location.search }.
-            for prop, expr_value in re.findall(r"([A-Za-z_$][\w$]*)\s*:\s*([^,}]+)", expr):
+            for prop, expr_value in _FALLBACK_PROP_RE.findall(expr):
                 prop_source = source_for(expr_value)
-                prop_alias = next((v for v in tainted if re.search(rf"\b{re.escape(v)}\b", expr_value)), None)
+                prop_alias = next((v for v in tainted if alias_re(v).search(expr_value)), None)
                 if prop_source or prop_alias:
                     base = tainted[prop_alias] if prop_alias else None
                     properties[f"{name}.{prop}"] = {
@@ -1275,14 +1528,15 @@ class TaintAnalyzer:
             entirely whenever the AST parser was unavailable.
             """
             values = []
-            for pattern, label in source_specs:
-                if re.search(pattern, expr, re.I):
-                    values.append({
-                        "sources": [f"source:{label}"],
-                        "sanitized": any(h in expr.lower() for h in SANITIZER_HINTS),
-                        "path": [f"read {label}"],
-                        "confidence": "high",
-                    })
+            if _FALLBACK_SOURCE_ANY.search(expr):
+                for pattern, label in _FALLBACK_SOURCE_SPECS:
+                    if pattern.search(expr):
+                        values.append({
+                            "sources": [f"source:{label}"],
+                            "sanitized": any(h in expr.lower() for h in SANITIZER_HINTS),
+                            "path": [f"read {label}"],
+                            "confidence": "high",
+                        })
             return values
 
         def taints_in(expr):
@@ -1292,24 +1546,26 @@ class TaintAnalyzer:
             # payload, so an alias followed by one does not propagate taint.
             not_numeric = rf"(?!\s*\.\s*(?:{numeric_props})\b)"
             for name, value in tainted.items():
-                if re.search(rf"\b{re.escape(name)}\b{not_numeric}", expr):
+                if alias_re(name, not_numeric).search(expr):
                     values.append(value)
             for key, value in properties.items():
-                if re.search(rf"\b{re.escape(key)}\b{not_numeric}", expr):
+                if alias_re(key, not_numeric).search(expr):
                     values.append(value)
             values.extend(inline_sources(expr))
             return values
 
         for line_no, statement in statements:
-            sink = re.search(
-                r"(?:innerHTML|outerHTML|srcdoc)\s*(?:=|\+=)|insertAdjacentHTML\s*\(|"
-                r"document\.(?:write|writeln)\s*\(|\beval\s*\(|new\s+Function\s*\(|"
-                # jQuery-style sinks: $('#x').html(...) / .append(...)
-                r"\.\s*html\s*\(|\$\s*\([^)]*\)\s*\.\s*(?:append|prepend|attr)\s*\(|"
-                # redirect / script URL sinks via setAttribute
-                r"setAttribute\s*\(\s*['\"](?:href|src|srcdoc)['\"]",
-                statement, re.I,
-            )
+            # Noise fast path: a finding always needs one of the sink /
+            # redirect / outbound / wildcard-postMessage / prototype patterns
+            # *in this statement* (aliases only matter at a sink, and new
+            # taint needs a source), and each of those contains a literal
+            # fragment from _FALLBACK_STATEMENT_MARKERS -- no marker, no
+            # finding, skip without a regex call.
+            low = statement.lower()
+            if not (any(marker in low for marker in _FALLBACK_STATEMENT_MARKERS)
+                    or (danger_members and "[" in statement)):
+                continue
+            sink = _FALLBACK_SINK_RE.search(statement)
             if sink:
                 flow = combine(taints_in(statement[sink.end():]))
                 is_dom = bool(re.search(
@@ -1350,12 +1606,7 @@ class TaintAnalyzer:
             # Redirect sinks: location.href/assign/replace, and any element
             # whose href is assigned from data (a tainted <a href> is the
             # classic "phishing link inside your own page" primitive).
-            redirect = re.search(
-                r"\blocation\s*\.\s*(?:href|assign|replace)\s*(?:=|\()"
-                r"|\.href\s*(?:=(?!=)|\+=)"
-                r"|\.\s*(?:assign|replace)\s*\(",
-                statement, re.I,
-            )
+            redirect = _FALLBACK_REDIRECT_RE.search(statement)
             if redirect:
                 flow = combine(taints_in(statement[redirect.end():]))
                 if flow:
@@ -1376,15 +1627,11 @@ class TaintAnalyzer:
             # transport.  Reported as a *candidate* (medium confidence,
             # behavioural correlation) because the fallback cannot establish
             # that the destination is external or attacker-controlled.
-            outbound = re.search(
-                r"\b(?:fetch|axios|XMLHttpRequest|sendBeacon)\s*\("
-                r"|\.\s*(?:send|post)\s*\(|new\s+WebSocket\s*\(",
-                statement, re.I,
-            )
+            outbound = _FALLBACK_OUTBOUND_RE.search(statement)
             if outbound:
                 flow = combine(taints_in(statement))
                 sensitive = [src for src in (flow or {}).get("sources", [])
-                             if EXFIL_READ_RE.search(src)]
+                             if _FALLBACK_EXFIL_READ_RE.search(src)]
                 if flow and sensitive:
                     self._record({
                         "id": "data_exfiltration_candidate",
@@ -1406,7 +1653,60 @@ class TaintAnalyzer:
                         "observation": False,
                     })
 
-            if re.search(r"postMessage\s*\([^)]*,\s*['\"]\*['\"]", statement, re.I):
+            # Direct literal computed member: window['eval'](...).
+            if _FB_LITERAL_MEMBER_CALL_RE.search(statement):
+                flow = combine(taints_in(statement))
+                self._record({
+                    "id": "dangerous_dynamic_code", "type": "Dangerous dynamic code execution", "severity": "HIGH",
+                    "confidence": min_confidence(flow["confidence"] if flow else "high"),
+                    "status": "needs_review",
+                    "file": self.filename, "line": line_no,
+                    "source": "literal computed member names a dynamic-code callee",
+                    "sink": statement[:160], "flow": flow["path"][:8] if flow else ["member:eval"],
+                    "sanitization_detected": bool(flow and flow["sanitized"]), "evidence": statement[:240],
+                    "evidence_type": "static_pattern", "analysis_quality": "heuristic",
+                    "limitations": ["Line-based heuristic: the callee name is literal; payload reachability is not traced."],
+                    "observation": False,
+                })
+
+            # Computed-member execution with a provably dangerous callee:
+            # `const s = String.fromCharCode(101,118,97,108); window[s](x)`.
+            if danger_members:
+                for member_name, member_value in danger_members.items():
+                    if re.search(rf"\[\s*{re.escape(member_name)}\s*\]\s*\(", statement):
+                        flow = combine(taints_in(statement))
+                        self._record({
+                            "id": "dangerous_dynamic_code", "type": "Dangerous dynamic code execution", "severity": "HIGH",
+                            "confidence": min_confidence(flow["confidence"] if flow else "high"),
+                            "status": "needs_review",
+                            "file": self.filename, "line": line_no,
+                            "source": f"computed member resolves to {member_value!r}",
+                            "sink": statement[:160], "flow": flow["path"][:8] if flow else [f"member:{member_value}"],
+                            "sanitization_detected": bool(flow and flow["sanitized"]), "evidence": statement[:240],
+                            "evidence_type": "static_pattern", "analysis_quality": "heuristic",
+                            "limitations": ["Line-based heuristic: the member name is resolved deterministically; payload reachability is not traced."],
+                            "observation": False,
+                        })
+                        break
+
+            # String-assembled timer argument: eval-class execution.
+            if _FALLBACK_TIMER_CONCAT_RE.search(statement):
+                flow = combine(taints_in(statement))
+                if flow:
+                    self._record({
+                        "id": "dangerous_dynamic_code", "type": "Dangerous dynamic code execution", "severity": "HIGH",
+                        "confidence": min_confidence(flow["confidence"]),
+                        "status": "open" if flow["confidence"] == "high" else "needs_review",
+                        "file": self.filename, "line": line_no,
+                        "source": " → ".join(s.replace("source:", "") for s in flow["sources"]),
+                        "sink": statement[:160], "flow": flow["path"][:8],
+                        "sanitization_detected": flow["sanitized"], "evidence": statement[:240],
+                        "evidence_type": "source_to_sink", "analysis_quality": "heuristic",
+                        "limitations": ["Line-based heuristic: the assembled string is executed as code; the exact payload reachability is not traced."],
+                        "observation": False,
+                    })
+
+            if _FALLBACK_POSTMESSAGE_WILDCARD_RE.search(statement):
                 self._record({
                     "id": "insecure_postmessage", "type": "Insecure postMessage", "severity": "MEDIUM",
                     "confidence": "medium", "status": "needs_review", "file": self.filename, "line": line_no,
@@ -1416,7 +1716,7 @@ class TaintAnalyzer:
                     "limitations": ["Wildcard targetOrigin observed; payload sensitivity not established."],
                     "observation": False,
                 })
-            if re.search(r"(?:__proto__|constructor\.prototype|Object\.assign\s*\([^)]*(?:__proto__|prototype))", statement, re.I):
+            if _FALLBACK_PROTOTYPE_RE.search(statement):
                 self._record({
                     "id": "prototype_pollution", "type": "Prototype pollution", "severity": "MEDIUM",
                     "confidence": "low", "status": "needs_review", "file": self.filename, "line": line_no,

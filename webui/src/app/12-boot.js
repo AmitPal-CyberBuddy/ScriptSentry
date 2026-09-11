@@ -60,6 +60,8 @@
     $("#code-input").value = SAMPLE;
     $("#analyze-code").addEventListener("click", analyzeCode);
     $("#analyze-url").addEventListener("click", analyzeUrl);
+    const rescanBtn = $("#rescan-compare");
+    if (rescanBtn) rescanBtn.addEventListener("click", rescanAndCompare);
     $("#export-html").addEventListener("click", () => exportReport("html"));
     $("#export-txt").addEventListener("click", () => exportReport("txt"));
     $("#export-csv").addEventListener("click", () => exportReport("csv"));

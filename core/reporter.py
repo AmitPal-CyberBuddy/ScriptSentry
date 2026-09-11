@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from core.js_parser import parser_status
-from core.analysis_model import deduplicate_findings, split_findings
+from core.analysis_model import coerce_line, deduplicate_findings, split_findings
 from core.risk_model import file_risk, overall_risk, top_priorities
 from core.script_intel import build_script_intel, data_exfiltration_candidates
 from core.version import ENGINE_NAME, RELEASE_STATUS, SARIF_TOOL_VERSION, __version__ as ENGINE_VERSION, is_dev_build
@@ -469,6 +469,236 @@ def build_report_model(results, ai_summary=None, metadata=None):
     }
 
 
+
+# ============================================================
+# Plain-language layer (managers / non-technical stakeholders)
+# ============================================================
+
+# One plain-terms entry per known finding id: what it means for a non-technical
+# reader, and what the fix usually looks like. Written to be read aloud.
+PLAIN_TERMS = {
+    "dom_injection": {
+        "plain": "Unsafe use of page content",
+        "meaning": "The code inserts information taken from the page address or user input "
+                   "directly into the page without cleaning it first. An attacker can craft a "
+                   "link that makes the page run their own script in a visitor's browser "
+                   "(a common attack called cross-site scripting).",
+        "action": "Clean the value before it is inserted into the page, or use a safer "
+                  "rendering method. The security team should verify the listed lines.",
+    },
+    "dom_injection_document_write": {
+        "plain": "Unsafe use of page content",
+        "meaning": "The code writes information taken from the page address or user input "
+                   "straight into the document. A crafted link can make a visitor's browser "
+                   "run attacker-controlled script (cross-site scripting).",
+        "action": "Avoid writing raw input into the document; render cleaned values only.",
+    },
+    "hardcoded_secret": {
+        "plain": "A password or key written into the code",
+        "meaning": "A credential (password, API key or token) appears in plain text inside the "
+                   "shipped code. Anyone who can view or download the code - including this "
+                   "scan - can read it.",
+        "action": "Move the credential to a secure configuration store and replace the "
+                  "exposed one; assume it is compromised once it has shipped.",
+    },
+    "data_exfiltration_flow": {
+        "plain": "Sensitive information is sent somewhere else",
+        "meaning": "The code reads private information (login details, cookies, form input) "
+                   "and sends it to an external destination. If that destination is not "
+                   "yours or not expected, this is how data leaks happen.",
+        "action": "Confirm the destination is legitimate and intended; remove or gate the "
+                  "transfer if it is not.",
+    },
+    "data_exfiltration_candidate": {
+        "plain": "Possible data sending",
+        "meaning": "The code both reads private information and contacts external services. "
+                   "This is only a pattern match - it may be perfectly normal - but the "
+                   "combination is worth checking.",
+        "action": "Have the security team confirm where the data actually goes.",
+    },
+    "open_redirect": {
+        "plain": "Open door to another website",
+        "meaning": "The code sends visitors to whatever address is in the link, without "
+                   "checking it. Attackers use this to wrap phishing pages in your site's "
+                   "trusted name.",
+        "action": "Only allow redirects to a list of approved addresses.",
+    },
+    "dangerous_dynamic_code": {
+        "plain": "Code that builds and runs new code",
+        "meaning": "The code constructs program instructions from text at run time. If any "
+                   "part of that text comes from outside, an attacker may be able to run "
+                   "their own instructions.",
+        "action": "Remove the dynamic execution, or make sure its input can never be "
+                  "influenced from outside.",
+    },
+    "exposed_key_iv_pair": {
+        "plain": "Encryption recipe written into the code",
+        "meaning": "Both the encryption key and its starting value are in the shipped code. "
+                   "Encryption with a visible key protects nothing.",
+        "action": "Move the key somewhere safe; treat data encrypted with it as exposed.",
+    },
+    "static_crypto_key": {
+        "plain": "Encryption key written into the code",
+        "meaning": "A fixed encryption key is embedded in the code where anyone reading it "
+                   "can copy it.",
+        "action": "Move the key to a secure store and rotate it.",
+    },
+    "sensitive_storage": {
+        "plain": "Private data stored in the browser",
+        "meaning": "The code stores sensitive-looking information in the browser's storage. "
+                   "Anything stored there can be read by other scripts on the page.",
+        "action": "Store only what is necessary, and prefer server-side sessions.",
+    },
+    "unsafe_runtime": {
+        "plain": "Risky run-time behaviour",
+        "meaning": "The code uses mechanisms that build or run instructions dynamically - "
+                   "legitimate in some cases, dangerous if the input is ever influenced by "
+                   "an outsider.",
+        "action": "Security team: check whether outside input can reach these calls.",
+    },
+}
+
+_PLAIN_PREFIXES = {
+    "vulnerable_dependency": {
+        "plain": "A known-vulnerable library",
+        "meaning": "The bundle includes a library version with publicly known security "
+                   "problems. The problems are documented, which also means attackers know "
+                   "them.",
+        "action": "Update the library to a fixed version.",
+    },
+    "dom_xss": None,  # filled after PLAIN_TERMS is complete
+    "secret": None,
+}
+
+_VERDICT_SENTENCES = {
+    "CRITICAL": "Critical risk - serious, evidenced problems were found. Treat fixing them "
+                "as a priority before this code is relied on.",
+    "HIGH": "High risk - real problems were found that should be fixed before this code "
+            "ships or is trusted further.",
+    "MEDIUM": "Medium risk - several things need a closer look. Nothing is proven broken, "
+              "but the warning signs should not be ignored.",
+    "LOW": "Low risk - no serious issues were found. Only minor observations remain.",
+    "INFO": "No significant risk identified - only informational notes.",
+}
+_PLAIN_PREFIXES["dom_xss"] = PLAIN_TERMS["dom_injection"]
+_PLAIN_PREFIXES["secret"] = PLAIN_TERMS["hardcoded_secret"]
+
+
+def _plain_entry_for(finding):
+    """Plain-terms entry for one finding, or None when unknown."""
+    fid = str(finding.get("id") or finding.get("type") or "")
+    if fid in PLAIN_TERMS:
+        return PLAIN_TERMS[fid]
+    prefix = fid.split(":", 1)[0]
+    return _PLAIN_PREFIXES.get(prefix)
+
+
+def executive_summary(model, results=None):
+    """A report layer a non-technical reader can act on.
+
+    The detailed sections stay as they are (evidence, file:line, remediation)
+    for the security team; this layer answers, in plain sentences, the three
+    questions a manager asks: *what is the result*, *what does it mean* and
+    *what happens next*. Deterministic - never dependent on the optional AI
+    summary - and honest about what was and was not checked.
+    """
+    summary = model.get("summary") or {}
+    # The text/HTML model calls it total_score; the dashboard payload calls it
+    # overall_score. Accept either.
+    score = summary.get("total_score", summary.get("overall_score", 0))
+    label = str(summary.get("risk_label") or "INFO")
+    findings = list(summary.get("actionable_findings") or [])
+    observations = list(summary.get("observations") or [])
+    priorities = list(summary.get("priorities") or [])
+
+    plain_findings = []
+    seen_kinds = set()
+    for finding in findings:
+        fid = str(finding.get("id") or finding.get("type") or "")
+        if fid in seen_kinds:
+            continue
+        seen_kinds.add(fid)
+        entry = _plain_entry_for(finding) or {
+            "plain": str(finding.get("type") or fid or "Finding"),
+            "meaning": "The security team should review the details of this finding; "
+                       "a plain-language description is not yet available for this type.",
+            "action": "See the detailed findings section.",
+        }
+        location = ""
+        if finding.get("file"):
+            location = str(finding.get("file"))
+            if finding.get("line"):
+                location += f" (line {finding.get('line')})"
+        plain_findings.append({
+            "finding_id": fid,
+            "title": entry["plain"],
+            "severity": str(finding.get("severity") or "MEDIUM").upper(),
+            "meaning": entry["meaning"],
+            "action": entry["action"],
+            "where": location,
+            # The technical anchor for the security team.
+            "for_security_team": {
+                "id": fid,
+                "type": finding.get("type") or fid,
+                "file": finding.get("file", ""),
+                "line": finding.get("line", 0),
+                "severity": finding.get("severity", ""),
+                "confidence": finding.get("confidence", ""),
+                "status": finding.get("status", ""),
+                "evidence_type": finding.get("evidence_type", ""),
+            },
+        })
+        if len(plain_findings) >= 5:
+            break
+
+    # What was checked, in words a reader can retell.
+    reliability = dict(scan_reliability(model, results))
+    checks = []
+    files_total = int(summary.get("total_files") or 0)
+    if files_total:
+        checks.append(f"{files_total} JavaScript file(s) shipped by the target were analyzed "
+                      "on this machine - nothing was uploaded anywhere.")
+    coverage = reliability.get("Coverage", "")
+    if "of" in str(coverage):
+        checks.append(f"Coverage: {coverage}.")
+    engine = reliability.get("Analysis engine", "")
+    if engine:
+        checks.append(f"How: {engine}.")
+    runtime = reliability.get("Runtime verification", "")
+    if runtime:
+        checks.append(f"Behaviour check in a real browser: {runtime}.")
+    if not checks:
+        checks.append("The target was analyzed locally; see the reliability section for scope.")
+
+    if findings or observations:
+        counts_in_words = (
+            f"{len(findings)} issue(s) needing attention and {len(observations)} background "
+            f"observation(s) across {files_total} file(s), rated {label} "
+            f"({score}/100)."
+        )
+    else:
+        counts_in_words = (
+            f"No issues were found across {files_total} file(s). Rated {label} "
+            f"({score}/100)."
+        )
+
+    return {
+        "verdict_label": label,
+        "verdict": _VERDICT_SENTENCES.get(label, _VERDICT_SENTENCES["INFO"]),
+        "counts_in_words": counts_in_words,
+        "what_was_checked": checks,
+        "findings_in_plain_terms": plain_findings,
+        "what_to_do_first": list(dict.fromkeys(
+            p.get("type", "") for p in priorities[:6] if p.get("type")))[:3],
+        "notes": [
+            "This is an automated static review: it reports what the code makes possible, "
+            "not proof that an attack succeeded. The security team should verify each item "
+            "before acting on it.",
+            "Only scan applications you own or are explicitly authorized to test.",
+        ],
+    }
+
+
 def scan_reliability(model, results=None):
     """How much of the target we actually saw, and how much to trust it.
 
@@ -604,6 +834,20 @@ def generate_report(results, ai_summary=None, metadata=None):
     report.append(f" Signals     : {summary['total_findings']}")
     report.append(f" Overall Risk: {summary['risk_label']} ({summary['total_score']})")
     report.append("============================================================\n")
+
+    # Plain-language layer first: a manager reads this far and no further.
+    exec_summary = executive_summary(model, results)
+    report.append("========== WHAT THIS RESULT MEANS (PLAIN LANGUAGE) ==========")
+    report.append(f"  {exec_summary['verdict']}")
+    report.append(f"  {exec_summary['counts_in_words']}")
+    for item in exec_summary["findings_in_plain_terms"]:
+        where = f" [{item['where']}]" if item["where"] else ""
+        report.append(f"  - {item['title']} ({item['severity'].lower()}){where}")
+        report.append(f"    What it means: {item['meaning']}")
+        report.append(f"    What to do:    {item['action']}")
+    if exec_summary["what_to_do_first"]:
+        report.append("  Do these first: " + "; ".join(exec_summary["what_to_do_first"]) + ".")
+    report.append("")
 
     report.append("========== EXECUTIVE SUMMARY ==========")
     report.append(f"  - Risk posture: {summary['risk_label']} with {summary['total_findings']} findings across {summary['total_files']} file(s).")
@@ -833,6 +1077,7 @@ def generate_html_report(results, ai_summary=None, metadata=None):
     """Generate a self-contained, modern HTML report (exportable/shareable)."""
     model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
     summary = model["summary"]
+    exec_summary = executive_summary(model, results)
     risk_color = summary["risk_color"]
 
     def esc(v):
@@ -920,6 +1165,19 @@ def generate_html_report(results, ai_summary=None, metadata=None):
         f"<div class=\"stat\"><b>{len(summary['transport'])}</b><span>Transport</span></div>",
         "</div>",
         "<div class=\"body\">",
+        "<h2>🗣️ What This Result Means</h2>",
+        "<div class=\"card\">"
+        + f"<p><b>{esc(exec_summary['verdict'])}</b></p>"
+        + f"<p>{esc(exec_summary['counts_in_words'])}</p>"
+        + "".join(
+            "<div class=\"sig\"><span class=\"sev sev-" + esc(item["severity"]) + "\">" + esc(item["severity"]) + "</span>"
+            + "<div><b>" + esc(item["title"]) + ("</b> — <i>" + esc(item["where"]) + "</i>" if item["where"] else "</b>")
+            + "<br><span>" + esc(item["meaning"]) + "</span>"
+            + "<br><span><b>What to do:</b> " + esc(item["action"]) + "</span></div></div>"
+            for item in exec_summary["findings_in_plain_terms"]
+        )
+        + "<p class=\"muted\">" + esc(" ".join(exec_summary["notes"])) + "</p>"
+        + "</div>",
         "<h2>📌 Executive Summary</h2>",
         "<div class=\"card\"><p>" + esc(f"Risk posture is {summary['risk_label'].lower()} with {summary['total_findings']} findings across {summary['total_files']} file(s).") + "</p>",
         "<div class=\"bars\">",
@@ -1064,6 +1322,23 @@ def _all_unified_findings(model):
     return deduplicate_findings(list(findings) + list(flows))
 
 
+def _csv_safe(value):
+    """Neutralize spreadsheet formula injection in one CSV cell.
+
+    Evidence, sources, sinks and file names come from the *scanned* (untrusted)
+    code: a bundle can deliberately ship a value like ``=HYPERLINK(...)`` or
+    ``=2+5|cmd|...`` and a paste can name its file ``=cmd|' /C calc'!A0.js``.
+    Excel, Google Sheets and LibreOffice execute a cell that starts with
+    ``=``, ``+``, ``-``, ``@`` or a tab/CR as a formula when the export is
+    opened -- the standard OWASP mitigation is to prefix such cells with an
+    apostrophe so they render as text.
+    """
+    text = str(value)
+    if text[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + text
+    return text
+
+
 def generate_csv_report(results, ai_summary=None, metadata=None):
     """Generate a CSV export of unified findings."""
     import csv
@@ -1088,23 +1363,23 @@ def generate_csv_report(results, ai_summary=None, metadata=None):
         if isinstance(evidence, (list, tuple)):
             evidence = " | ".join(str(x) for x in evidence)
         writer.writerow({
-            "id": f.get("id", ""),
-            "type": f.get("type", ""),
-            "severity": f.get("severity", ""),
-            "confidence": f.get("confidence", ""),
-            "status": f.get("status", ""),
-            "origin": f.get("origin", "") or f.get("file", ""),
-            "file": f.get("file", ""),
+            "id": _csv_safe(f.get("id", "")),
+            "type": _csv_safe(f.get("type", "")),
+            "severity": _csv_safe(f.get("severity", "")),
+            "confidence": _csv_safe(f.get("confidence", "")),
+            "status": _csv_safe(f.get("status", "")),
+            "origin": _csv_safe(f.get("origin", "") or f.get("file", "")),
+            "file": _csv_safe(f.get("file", "")),
             "line": f.get("line", 0),
-            "source": f.get("source", ""),
-            "sink": f.get("sink", ""),
-            "flow": flow,
-            "evidence": evidence,
+            "source": _csv_safe(f.get("source", "")),
+            "sink": _csv_safe(f.get("sink", "")),
+            "flow": _csv_safe(flow),
+            "evidence": _csv_safe(evidence),
             "sanitization_detected": f.get("sanitization_detected", False),
-            "framework": f.get("framework", ""),
-            "evidence_type": f.get("evidence_type", ""),
-            "analysis_quality": f.get("analysis_quality", ""),
-            "limitations": limitations,
+            "framework": _csv_safe(f.get("framework", "")),
+            "evidence_type": _csv_safe(f.get("evidence_type", "")),
+            "analysis_quality": _csv_safe(f.get("analysis_quality", "")),
+            "limitations": _csv_safe(limitations),
             "observation": f.get("observation", False),
         })
     return buf.getvalue()
@@ -1134,7 +1409,7 @@ def generate_sarif_report(results, ai_summary=None, metadata=None):
                 },
             }
         # line numbers are typically 1-indexed in ESTree; SARIF expects 0-indexed.
-        start_line = max(0, int(f.get("line", 1) or 1) - 1)
+        start_line = max(0, coerce_line(f.get("line", 1)) - 1)
         message = f.get("sink") or f.get("evidence") or f.get("type", rule_id)
         if f.get("source"):
             message = f"{f.get('source')} -> {message}"
@@ -1561,6 +1836,20 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         # disabled or the scan was not recorded.
         "history": history_info,
     }
+    # Plain-language layer for the Overview card (managers/stakeholders).
+    # Built from the same evidence the payload already carries, via the same
+    # model contract the text/HTML exports use.
+    actionable, observation_rows = split_findings(payload["summary"]["findings"])
+    exec_model = {
+        "summary": {**payload["summary"],
+                    "actionable_findings": actionable,
+                    "observations": observation_rows},
+        "meta": payload["meta"],
+        "scan_summary": scan_summary,
+        "runtime": runtime_evidence,
+        "files": files,
+    }
+    payload["executive_summary"] = executive_summary(exec_model, results)
     return payload
 
 
@@ -1577,6 +1866,8 @@ def generate_json_report(results, ai_summary=None, metadata=None):
         "dashboard": build_dashboard_payload(results, ai_summary=ai_summary, metadata=metadata),
         "ai_summary": ai_summary or {},
     }
+    # The plain-language layer, from the already-built report model.
+    payload["executive_summary"] = executive_summary(payload["report_model"], results)
     return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
 
 

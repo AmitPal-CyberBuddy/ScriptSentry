@@ -69,7 +69,8 @@ Privacy invariants for this pass:
   static analysis and the dashboard shows `missing_dependency` on the Runtime view.
 
 ### Set it up
-1. Copy `deployment/deploy-pages.yml` to `.github/workflows/deploy-pages.yml`.
+1. Copy `.github/workflows/deploy-pages.yml` from this repository into your fork
+   (it is already active in the main repo; forks need it added once).
 2. Enable **Settings → Pages → Source → GitHub Actions**.
 3. Publish `webui/` (the workflow copies `webui/*` into `_site/`).
 
@@ -134,11 +135,12 @@ Use the included Actions workflow (below), or manually publish the `webui/` fold
 
 ## ⚙️ GitHub Pages workflow (static UI only)
 
-A ready-to-use template lives at `deployment/deploy-pages.yml`. Copy it into
-`.github/workflows/deploy-pages.yml`, then set the repo **Pages → Source → GitHub Actions**:
+The ready-to-use workflow lives at `.github/workflows/deploy-pages.yml` in this
+repository. In a fork or another repo, copy it into the same path, then set
+**Pages → Source → GitHub Actions**:
 
 ```bash
-cp deployment/deploy-pages.yml .github/workflows/deploy-pages.yml
+cp .github/workflows/deploy-pages.yml <your-repo>/.github/workflows/deploy-pages.yml
 ```
 
 > Note: hosted GitHub Apps without `workflows` permission cannot create or update

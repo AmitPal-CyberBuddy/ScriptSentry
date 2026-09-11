@@ -19,6 +19,7 @@ except ImportError:  # allow pure-paste code analysis without network deps
 from config import BEAUTIFY_DIR, FILE_RULES, JS_DIR, SCAN_MAX_WORKERS
 from core.beautifier import beautify
 from core.crypto import extract_crypto_material
+from core.diag import note as diag_note
 from core.discovery import extract_inline_scripts, extract_js, extract_page_assets
 from core.discovery import sitemap_pages
 from core.downloader import download_js, get_safe_filename
@@ -182,7 +183,7 @@ def _scan_document_cpu(path, content, source_url="", cancel_check=None,
     content = content or ""
     data = scan_file(path, content=content, cancel_check=cancel_check,
                      progress_heartbeat=progress_heartbeat)
-    data["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+    data["content_sha256"] = _content_digest(content)
     data["url"] = str(source_url or "")
     crypto = extract_crypto_material(content, filename=os.path.basename(path))
     data.update(crypto)
@@ -251,6 +252,16 @@ def _analyze_document_worker(path, content, source_url="", heartbeat_queue=None,
     return data, refs
 
 
+def _content_digest(content: str) -> str:
+    """SHA-256 of scanned content, for same-scan deduplication.
+
+    One digest algorithm everywhere: the source-map and runtime-script paths
+    already used SHA-256, but the crawl paths used MD5, so a set seeded by one
+    could never recognize a duplicate recorded by the other.
+    """
+    return hashlib.sha256((content or "").encode("utf-8", errors="ignore")).hexdigest()
+
+
 def _merge_into(results, path, content, seen_hashes=None, source_url="", cancel_check=None,
                 progress_heartbeat=None):
     """Run the full scanner plus crypto extractor for a single JS document.
@@ -267,7 +278,7 @@ def _merge_into(results, path, content, seen_hashes=None, source_url="", cancel_
     if len(content.encode("utf-8", errors="ignore")) > FILE_RULES.get("max_js_size", 2_000_000):
         return False
     if seen_hashes is not None:
-        digest = hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()
+        digest = _content_digest(content)
         if digest in seen_hashes:
             return False
         seen_hashes.add(digest)
@@ -311,27 +322,44 @@ def analyze_content(code, filename="inline.js", progress_callback=None, cancel_c
     return results
 
 
-def _safe_local_filename(name, index):
+def _safe_local_filename(name, index, keep_path=False):
     """Turn an uploaded file name into a safe, unique per-scan result key.
 
     Uploaded files are never written to disk; we only need a display-safe key
     for the results dict. Path components and newlines are stripped so a file
     named ``../../etc`` or ``a\\nb.js`` cannot confuse the UI.
+
+    ``keep_path`` is for CLI scans of local checkouts, where the *path is the
+    identity*: SARIF consumers (GitHub code scanning) map results onto the
+    repository by relative path, and two ``utils.js`` in different folders
+    must not collide. Slash-separated relative paths are preserved, but
+    parent segments (``..``, leading ``/``) and control characters are still
+    removed -- a trusted caller gets a readable path, never an escape.
     """
-    base = os.path.basename(str(name or "").replace("\\", "/").strip())
-    base = "".join(ch for ch in base if ch not in "\x00\r\n/").strip()
-    if not base:
-        base = f"snippet-{index + 1}.js"
-    return base
+    cleaned = str(name or "").replace("\\", "/").strip()
+    if keep_path:
+        parts = [seg for seg in cleaned.split("/") if seg not in ("", ".", "..")]
+        cleaned = "/".join(parts)
+    else:
+        cleaned = os.path.basename(cleaned)
+    cleaned = "".join(ch for ch in cleaned if ch not in "\x00\r\n").strip()
+    if not cleaned:
+        cleaned = f"snippet-{index + 1}.js"
+    return cleaned
 
 
-def analyze_files(files, progress_callback=None, cancel_check=None):
+def analyze_files(files, progress_callback=None, cancel_check=None, trusted_names=False):
     """Analyze several pasted/uploaded JavaScript documents in one scan.
 
     ``files`` is an iterable of ``{"filename": str, "code": str}``. Documents
     are analyzed locally and merged into one results dict, deduplicating
     identical content (the same way URL scans dedupe mirrored bundles). Nothing
     here is written to disk or sent anywhere; inputs come from the local UI.
+
+    ``trusted_names=True`` keeps each file's relative path as the result key
+    (the CLI uses this so SARIF reports map onto the scanned checkout); the
+    default sanitizes to a basename, which is what untrusted browser uploads
+    need.
     """
     clear_parse_cache()
     files = [f for f in (files or []) if isinstance(f, dict)]
@@ -359,7 +387,7 @@ def analyze_files(files, progress_callback=None, cancel_check=None):
         code = item.get("code") or ""
         if not isinstance(code, str) or not code.strip():
             continue
-        name = _safe_local_filename(item.get("filename"), index)
+        name = _safe_local_filename(item.get("filename"), index, keep_path=trusted_names)
         # Guarantee unique keys when two uploads share a basename.
         unique = name
         n = 2
@@ -410,7 +438,8 @@ def _download_chunk(url, output_dir=None, timeout=20, cancel_check=None):
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(content)
         return path
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - a missed chunk must not fail the scan
+        diag_note("download", f"chunk {url!r} skipped: {exc!r}")
         return None
 
 
@@ -447,8 +476,8 @@ def extract_script_refs(content):
             ref = ref.split("?")[0].split("#")[0]
             if _is_followable_ref(ref) or ref.startswith(("./", "../")):
                 refs.add(ref)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - the regex layer below is the fallback
+        diag_note("discovery", f"AST module layer unavailable: {exc!r}")
 
     # Fallback layer: regex coverage, kept as a safety net when the AST layer
     # is unavailable or cannot parse the dialect. Covers static imports,
@@ -695,7 +724,8 @@ def _fetch_target_script(url, timeout=15, cancel_check=None):
         if "<html" in content.lower() or "<!doctype" in content.lower():
             return None
         return content
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - caller falls back to page discovery
+        diag_note("download", f"direct script fetch {url!r} failed: {exc!r}")
         return None
 
 
@@ -1024,7 +1054,7 @@ def analyze_url(
             record_skip("oversized_script")
             _skip_message(phase, "oversized_script", name)
             return None
-        digest = hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()
+        digest = _content_digest(content)
         with lock:
             if digest in seen_hashes:
                 state["skipped_files"] += 1
@@ -1065,7 +1095,7 @@ def analyze_url(
         if len((content or "").encode("utf-8", errors="ignore")) > FILE_RULES.get("max_js_size", 2_000_000):
             record_skip("oversized_script")
             return "oversized_script"
-        digest = hashlib.md5((content or "").encode("utf-8", errors="ignore")).hexdigest()
+        digest = _content_digest(content or "")
         with lock:
             if digest in seen_hashes:
                 state["skipped_files"] += 1
@@ -1186,8 +1216,8 @@ def analyze_url(
                 for proc in list(getattr(pool, "_processes", {}).values() or []):
                     with contextlib.suppress(Exception):
                         proc.terminate()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - shutdown is best-effort by design
+            diag_note("pool", f"worker pool shutdown issue: {exc!r}")
         pool = None
 
     def run_round_via_processes(tasks):

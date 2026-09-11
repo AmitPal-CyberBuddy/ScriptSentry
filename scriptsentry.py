@@ -6,6 +6,7 @@ this file and run it:
 
     python3 scriptsentry.py
     python3 scriptsentry.py --port 8000          # options are passed to the server
+    python3 scriptsentry.py --update             # discard the cached engine, fetch the latest
     python3 scriptsentry.py --help
 
 How it works
@@ -16,6 +17,11 @@ How it works
    GitHub repository over HTTPS, unpacks it into a local cache
    (``~/.scriptsentry/bootstrap/``), installs the small set of Python
    dependencies into your environment, and then starts the local server.
+
+The cached engine is reused on every later run — the launcher never
+re-downloads it on its own. After fixes land in the repository, refresh with
+``python3 scriptsentry.py --update`` (or delete
+``~/.scriptsentry/bootstrap/`` and run again).
 
 Nothing is uploaded anywhere; the download only ever fetches the engine from
 the official repository, and all analysis stays on your machine.
@@ -34,7 +40,9 @@ Only scan applications you own or are explicitly authorized to test.
 """
 
 import argparse
+import contextlib
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -42,6 +50,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = os.environ.get("SCRIPTSENTRY_REPO", "AmitPal-CyberBuddy/ScriptSentry")
@@ -95,15 +104,47 @@ def engine_present(here: Path) -> bool:
     return (here / "core" / "analyzer_service.py").is_file() and (here / "server.py").is_file()
 
 
+# Informational marker written into the cached engine so "which build am I
+# running?" always has an answer (the GitHub tarball itself carries no VCS data).
+META_NAME = ".launcher-meta.json"
+
+
+def _write_download_meta(engine_dir: Path) -> None:
+    """Record when and from where the engine was fetched. Best-effort."""
+    payload = {
+        "repo": REPO,
+        "ref": REF,
+        "url": _archive_url(),
+        "downloaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    # Purely informational; never block the bootstrap on a meta-file failure.
+    with contextlib.suppress(OSError):
+        (engine_dir / META_NAME).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _downloaded_at(engine_dir: Path) -> str:
+    """The cached engine's download timestamp ('unknown' when not recorded)."""
+    try:
+        meta = json.loads((engine_dir / META_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "unknown"
+    return str(meta.get("downloaded_at", "unknown"))
+
+
 def _info(msg: str) -> None:
     print(f"  {msg}", flush=True)
 
 
+def _archive_url() -> str:
+    """GitHub tarball URL for the configured repo/ref."""
+    if REF in ("main", "master"):
+        return f"https://github.com/{REPO}/archive/refs/heads/{REF}.tar.gz"
+    # Tags/commits use the 'tags' (or raw ref) archive endpoint.
+    return f"https://github.com/{REPO}/archive/{REF}.tar.gz"
+
+
 def download_archive() -> bytes:
-    url = f"https://github.com/{REPO}/archive/refs/heads/{REF}.tar.gz"
-    if REF not in ("main", "master"):
-        # Tags/commits use the 'tags' (or raw ref) archive endpoint.
-        url = f"https://github.com/{REPO}/archive/{REF}.tar.gz"
+    url = _archive_url()
     print(f"⬇  Downloading ScriptSentry engine from:\n   {url}", flush=True)
     req = urllib.request.Request(url, headers={"User-Agent": "ScriptSentry-Launcher"})
     with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 (official https URL)
@@ -148,6 +189,7 @@ def extract_engine(data: bytes) -> Path:
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
         shutil.move(str(tmp_path), str(target))
+    _write_download_meta(target)
     return target
 
 
@@ -262,6 +304,11 @@ def main() -> int:
         add_help=False,
     )
     parser.add_argument("--help", "-h", action="store_true", help="Show this help and exit")
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="Discard the cached engine and download the latest from GitHub before starting",
+    )
     args, server_args = parser.parse_known_args()
     if args.help:
         parser.print_help()
@@ -273,11 +320,26 @@ def main() -> int:
 
     if engine_present(here):
         _info("Engine found next to the launcher — starting directly.")
+        if args.update:
+            _info("--update refreshes the downloaded cache, but this launcher sits inside a")
+            _info("project checkout — get the latest fixes with:  git pull")
         engine_dir = here
     else:
         cached = BOOTSTRAP_DIR / REF
+        if args.update and cached.exists():
+            print(f"♻️  --update: discarding the cached engine ({cached})…", flush=True)
+            try:
+                # Loud failure beats silently rescanning stale code, so no
+                # ignore_errors here (a Windows lock or permission problem must
+                # surface, not quietly keep the old engine).
+                shutil.rmtree(cached)
+            except OSError as exc:
+                print(f"❌ Could not remove the cached engine: {exc}", flush=True)
+                print("   Stop the running dashboard first (Ctrl+C in its terminal), then retry.", flush=True)
+                return 1
         if engine_present(cached):
             _info(f"Using cached engine ({cached}).")
+            _info(f"Downloaded at: {_downloaded_at(cached)} UTC — run with --update to fetch the latest code.")
             engine_dir = cached
         else:
             print("🚀 First run: the engine isn't present locally.", flush=True)

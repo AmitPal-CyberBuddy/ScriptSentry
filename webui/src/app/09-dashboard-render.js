@@ -37,6 +37,7 @@
       : /file\(s\)$/.test(metaSource) ? "Uploaded files" : "Source snippet";
     $("#result-meta").textContent = `${payload.meta.engine} · ${modeLabel} · ${payload.meta.generated_at || ""}`;
     renderSummary();
+    renderExecutiveSummary();
     renderPriorities();
     renderRiskBreakdown();
     renderSignals();
@@ -56,6 +57,41 @@
 
   const SEV_COLOR = { CRITICAL: "#ff4d6d", HIGH: "#ff9f43", MEDIUM: "#ffd166", LOW: "#22d3ee", INFO: "#a78bfa" };
   const CONF_LABEL = { confirmed: "confirmed", high: "high", medium: "medium", low: "low" };
+
+  /* Overview, plain language: what a non-technical reader needs to know.
+     The same evidence as the technical sections, said in sentences —
+     verdict, counts, one block per distinct finding kind, honest notes. */
+  function renderExecutiveSummary() {
+    const card = $("#exec-card");
+    if (!card) return;
+    const es = payload.executive_summary;
+    if (!es) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    const verdict = $("#exec-verdict");
+    const counts = $("#exec-counts");
+    const list = $("#exec-findings");
+    const notes = $("#exec-notes");
+    if (verdict) verdict.textContent = es.verdict || "";
+    if (counts) counts.textContent = es.counts_in_words || "";
+    if (notes) notes.textContent = (es.notes || []).join(" ");
+    if (!list) return;
+    const items = es.findings_in_plain_terms || [];
+    if (!items.length) {
+      list.innerHTML = `<li><span class="risk-dot" style="color:#34d399"></span><span>No findings need explanation — nothing actionable was detected.</span></li>`;
+      return;
+    }
+    list.innerHTML = items.map((item) => {
+      const color = SEV_COLOR[item.severity] || "#22d3ee";
+      const where = item.where ? ` <i>(${escapeHtml(item.where)})</i>` : "";
+      return `<li><span class="risk-dot" style="color:${color}"></span>` +
+        `<span><b>${escapeHtml(item.title)}</b>${where}<br/>` +
+        `<span class="meta">${escapeHtml(item.meaning)}</span><br/>` +
+        `<span><b>What to do:</b> ${escapeHtml(item.action)}</span></span></li>`;
+    }).join("");
+  }
 
   /* Overview: answer "is it risky / why / what first" immediately. */
   function renderPriorities() {

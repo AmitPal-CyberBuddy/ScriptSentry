@@ -14,6 +14,287 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Workflows: baselines, watch mode, scan-again-and-compare, honest fallback notice
+
+- **Baselines: fail only on what is new.** `--fail-on` alone answers "are
+  there findings?" — the wrong question for a codebase with accepted ones.
+  `--save-baseline FILE` snapshots a scan's finding fingerprints (sorted, no
+  timestamps: committed baselines diff cleanly in review); `--baseline FILE`
+  narrows the gate to findings that are new or worsened (severity raised, or
+  an observation that came back actionable) since it. Known findings stay in
+  every report — the report never lies, only the gate narrows — and a
+  missing baseline behaves like an empty one (everything is new: the safe
+  direction). A run is always judged against the baseline as it existed at
+  its start, so `--baseline X --save-baseline X` in one command cannot
+  silently accept itself. Identity is the engine's line-independent history
+  fingerprint, shared with the diff API, so an unrelated edit above a
+  finding never flips it to "new". The GitHub Action gains a `baseline:`
+  input.
+- **Watch mode.** `--watch SECONDS` (minimum 10) re-scans any target on an
+  interval and prints per-cycle changes — new / worse / improved /
+  no-longer-detected — through the same fingerprint identity. Ctrl+C exits
+  0; with `--fail-on`, the first failing cycle exits 1 and stops the watch.
+- **"Scan again & compare" on the dashboard.** One button re-runs the last
+  scan submitted from that tab (URL with its settings, pasted code, or
+  uploaded files — held in memory, so after a reload it honestly
+  disappears) and the history chip renders the engine's per-finding
+  revalidation against the previous run of the same target.
+- **The CLI no longer scans silently degraded.** Without an AST parser the
+  CLI now prints the same honest notice the dashboard and server do — the
+  concrete cost (flows capped at medium confidence, some missed entirely)
+  and the install command.
+
+### CI story: local CLI targets, --fail-on gate, GitHub Action, rule reference, demo report
+
+- **The CLI scans local code, not just URLs.** `main.py ./dist bundle.js`
+  walks local files/directories (`.js/.mjs/.cjs/.jsx/.ts/.tsx`, skipping
+  `node_modules` and VCS dirs, capped at 1000 files) through the exact
+  `analyze_files` pipeline the dashboard uses for uploads. Result keys keep
+  repository-relative paths (SARIF consumers like GitHub code scanning map
+  findings onto files; browser uploads still sanitize to basenames).
+  `--format` now accepts several formats at once (`--format sarif txt`),
+  `--output DIR` replaces the hardcoded `output/`, and one dead URL in a
+  mixed target list never discards the results of the others.
+- **`--fail-on {critical,high,medium,low,none}`** turns the CLI into a CI
+  gate: exit 1 when any *actionable* finding (observations excluded) reaches
+  the threshold, exit 2 for operational errors (nothing scanned), 0
+  otherwise. Fixed along the way: `report.json` was double-encoded (a JSON
+  string containing JSON) — it is now a directly loadable document.
+- **A ready-to-use GitHub Action** (`.github/actions/scan`) installs the
+  engine on the runner and scans a checkout; the README shows the two-step
+  workflow with SARIF upload to code scanning. This repository runs the
+  action on itself on every push to main as a live example
+  (`.github/workflows/self-scan.yml`, fail-on `none` so it never blocks a
+  merge).
+- **Rule reference, generated from the engine.** `docs/RULES.md` and the
+  hosted `/rules/` page document every finding id in plain language with an
+  example and the usual fix — meaning/action text comes from the engine's
+  own `PLAIN_TERMS` registry, and the generator refuses to build if a
+  finding id is undocumented. Linked from the README and the landing page.
+- **Demo report on the hosted console.** A "View a demo report" button
+  renders the real engine's report for a labelled example bundle through
+  the exact same pipeline a live scan uses — a first-time visitor sees the
+  product before installing anything, and the demo can never advertise
+  detections the engine does not make (`tools/build_demo_payload.py`,
+  regenerable + sync-tested).
+
+### Computed-member dynamic execution detected (deobfuscation)
+
+- `window[name]()` / `globalThis[name]()` where the engine can **prove**
+  `name` resolves to a dynamic-code callee (`eval`, `Function`,
+  `setTimeout`, `setInterval`) is now reported as
+  `dangerous_dynamic_code` by **both** engines. The name is resolved only
+  from deterministic constructions — `String.fromCharCode(<numeric
+  literals>)`, `atob(<string literal>)`, or a plain literal — and a name
+  assigned anywhere else is never trusted (the value at call time would be
+  unknowable). This closes the last miss from the adversarial probe: the
+  classic `const s = String.fromCharCode(101,118,97,108)` plus a `window[s]`
+  call, previously only flagged by the obfuscation signal.
+- Adversarial probe: **15/15 on both engines** (was 14/15). Verified
+  false-positive-clean against the tool's own ~283 KB of real dashboard
+  code.
+
+### Engine accuracy and efficiency pass
+
+- **1.6× faster scans on large bundles (AST engine).** The shared parse
+  cache silently disabled itself for documents over 256 KB — exactly the
+  multi-hundred-KB minified bundles where one parse costs a second or more —
+  so every consumer (taint, attack surface, module discovery, AST summary)
+  re-parsed the same file: three parses per scan. The per-entry cap is now
+  2 MB with a 4 MB total (trees are shared read-only and dropped at scan
+  end), restoring the documented "parsed exactly once per scan" contract.
+  488 KB bundle: 4.6s → 2.9s.
+- **Split-up credentials are found (documented stretch item).** Secret
+  discovery now folds three assembly shapes through the same
+  dedup/credibility pipeline: in-expression chains (existing),
+  `Buffer.concat([Buffer.from(...), ...])`, and cross-statement assembly
+  via single-assignment literal variables (`const a='AKIA'; const b='…';
+  const key=a+b`). A variable written more than once (any later `=`, `+=`,
+  a second declaration) is never folded — its value at concat time would be
+  unknowable. Object-property writes (`obj.p=…`) and comparisons (`==`)
+  correctly do not invalidate.
+- **Regex-fallback engine parity and speed.** The fallback (no AST parser
+  installed) now catches `location = <tainted>` open redirects (parity with
+  the AST engine) and string-assembled timer arguments
+  (`setTimeout('go(' + input + ')')`) as eval-class sinks — with the benign
+  callback forms staying quiet. Internally the fallback's per-statement pass
+  compiles its patterns once at import, caches per-name alias regexes, and
+  skips noise statements behind a literal-marker fast path (a superset test
+  plus fuzz pins the filter's soundness).
+- **AST engine timer-sink fix.** `setTimeout`/`setInterval` calls with a
+  plain identifier callee never matched the eval-class sink check (the
+  pattern looked for the callee text *with* parentheses); tainted data
+  assembled into a timer string argument is now reported.
+- **No more quadratic regex blowups in the fold layer.** Literals are
+  bounded (4096 chars), identifiers and gaps bounded, assignment scans run
+  off `=`/`:` anchors with bounded windows, and line numbers are counted
+  incrementally. A 2 MB embedded literal or word-run went from ~6 s (or
+  unbounded, pre-bound) to ~50 ms; an 8 000-var bundle from 3.6 s to ~0.3 s.
+  Adversarial probe score: AST 12/15 → 14/15, fallback 11/15 → 14/15
+  (remaining miss: computed-member indirect eval, documented).
+
+New `tests/test_accuracy_efficiency.py` (19 tests) plus a parse-cache test
+update. Full suite: **555 tests OK**; ruff clean.
+
+### Dual-audience reports, honest revalidation, repo cleanup
+
+- **Every report now speaks to two audiences.** TXT, HTML, JSON and the
+  dashboard open with a plain-language layer — *What this result means* —
+  that a manager or stakeholder can read and act on: a verdict sentence,
+  counts in words, one block per distinct finding kind ("what it means" /
+  "what to do"), and the top three next steps. The technical sections
+  (evidence, locations, remediation, confidence) are unchanged and stay the
+  anchor for the security team; each plain-language block links back to the
+  finding it describes.
+- **Revalidation is evidence, not a gimmick.** Comparing two scans now
+  yields per-finding verdicts — persisted, worsened, improved, resolved,
+  new — joined on the line-independent fingerprint, each with the reason it
+  changed (e.g. `severity HIGH->CRITICAL`). Coverage is honest: when the
+  newer scan only saw part of the previous file set, the comparison is
+  flagged partial and "no longer detected" is stated as *unknown, not
+  fixed*. The `/api/history/diff` endpoint returns the full verdict list
+  (capped at 100, worst first) while keeping its legacy count keys.
+- **Dashboard & history UI.** The Overview tab leads with the
+  plain-language card; the history chip summarizes a re-run against the
+  previous scan of the same target.
+- **Repo cleanup.** The three root review documents moved to `docs/`;
+  the stale `deployment/deploy-pages.yml` template (which had drifted from
+  the real workflow) was removed — `.github/workflows/deploy-pages.yml` is
+  the single source. README and DEPLOYMENT now point at the right paths.
+  CI, the launcher, hosted pages and the test suite are unaffected.
+
+### Reliability polish: job hygiene, one digest, diagnosable silences
+
+- **Job timestamps speak one format.** Every `*_at` field in a job snapshot
+  is now an epoch float — `created_at` used to be the lone ISO string next to
+  epoch siblings, forcing every consumer to handle both. Derived
+  `created_at_iso` / `started_at_iso` / `finished_at_iso` twins keep a
+  human-readable form; the dashboard needed no change (it already accepted
+  both for `started_at`).
+- **Finished jobs no longer squat in memory.** Retention and cap pruning now
+  run on every job access (`status`/`result`/`cancel`), not only when a new
+  job is created — an engine left running after its last scan no longer pins
+  every finished result until the next scan starts. Running jobs are never
+  evicted.
+- **`SCRIPTSENTRY_DEBUG=1` explains the silent paths.** The engine's
+  deliberate `except`-and-continue silences (a chunk download that failed,
+  the AST discovery layer falling back to regex, history/calibration
+  bookkeeping that skipped itself, worker-pool shutdown trouble) now print
+  one scoped stderr line when the flag is set, and stay exactly as quiet as
+  before when it is not.
+- **One content digest everywhere.** The crawl-path dedup sites used MD5
+  while the source-map and runtime-script paths used SHA-256; all paths now
+  share `_content_digest()` (SHA-256), so a dedup set seeded by one path
+  recognizes duplicates recorded by another.
+- **`/api/report` parses its query properly** via `parse_qsl`
+  (URL-decoding) instead of a hand-rolled `&`/`=` splitter.
+- New regression suite `tests/test_reliability_polish.py` (13 tests).
+
+### Risk-model calibration: the number now agrees with the evidence
+
+- **A demonstrated CRITICAL is finally scored like one.** A single
+  runtime-proven (confirmed) CRITICAL finding used to read 30/100 next to a
+  HIGH label, while twenty unproven third-party "reads cookies + sends
+  externally" correlations saturated the score to 100/CRITICAL — exactly
+  backwards. Two calibrated changes:
+  - **Demonstrated-severity floor:** a confirmed CRITICAL puts the score in
+    the CRITICAL band at minimum (≥ 75; a confirmed HIGH ≥ 50). The lift is
+    an explicit *contributor* ("Demonstrated CRITICAL effect (severity
+    floor)"), never a silent clamp, so points still sum exactly to the score
+    and "why is this 75?" keeps its answer. Confirmed MEDIUM findings and
+    scores that already earned more than the floor are untouched.
+  - **Third-party bucket cap (30):** behavioral correlations from the script
+    inventory (third-party scripts that read sensitive data and send
+    externally, or high per-script risk) are now capped as a group, like
+    observations already were. Every script still counts in the reported
+    totals; only the points are bounded.
+  - Net: one demonstrated CRITICAL (75) outranks twenty trackers (30, label
+    MEDIUM), and mixed results stay fully explainable. Eight new
+    `CalibrationTest` cases pin the contract.
+
+### Credential discovery: canonical formats, concat folding, line numbers
+
+- **A value that matches a canonical credential shape is now believed.**
+  `_credible_secret` consults the provider validator, so a well-formed AWS
+  (`AKIA…`, plus the `ASIA/ABIA/ACCA` temp prefixes), GitHub, Slack, Stripe,
+  SendGrid, Twilio or npm key — or a JWT/PEM that actually decodes — is
+  reported even when its variable name says nothing and when the key's random
+  characters happen to contain "example"/"xxx"-like substrings that the
+  fixture-marker heuristic would reject (the canonical AWS docs example key
+  is shape-identical to a live one; statically they are indistinguishable).
+  Public-by-design client keys (`AIza…`, `pk_live_…`, `GOCSPX…`) remain
+  excluded — that check deliberately runs first.
+- **Credentials split across a string concatenation are discovered.**
+  `"AKIA" + "IOSFODNN7EXAMPLE"` was invisible to every pattern; literal chains
+  are now folded into synthetic candidates that run through the same
+  dedup/credibility pipeline, keep the assignment name when one exists, and
+  carry the chain's line number. Verified fast on pathological inputs and
+  300 KB single-line minified bundles.
+- **Secret findings finally carry a line number.** The `hardcoded_secret`
+  signal points at the first credible secret (or chain), so the dashboard,
+  CSV and SARIF exports no longer show line 0 / the top of the file.
+- New regression suite `tests/test_credential_discovery.py` (13 tests).
+
+### Review pass: scoring, reporting, accuracy & reliability (3 bugs fixed)
+
+- **CSV exports no longer execute as spreadsheet formulas.** Evidence,
+  sources, sinks and file names are strings from the *scanned* code, and a
+  paste could name its file `=HYPERLINK(...)-1.js`; cells starting with
+  `= + - @` or a tab/CR are now prefixed with an apostrophe (OWASP
+  mitigation) and caller-supplied filenames get control characters stripped
+  at the API boundary. Verified end-to-end against the live server.
+- **One malformed finding can no longer kill every export.** A finding whose
+  `line` was a non-numeric string raised `ValueError` inside the shared
+  correlation layer, taking CSV, SARIF, HTML, TXT *and* the dashboard payload
+  down with it; line numbers are now safely coerced (digits salvaged or 0)
+  and the finding survives.
+- **Real secrets survive fixture markers on neighboring text.** The
+  credibility filter applied "example/sample/your_…" markers to the whole
+  candidate line, so a real high-entropy key next to an `api.example.com` URL
+  (or a `sample_rate` field) silently vanished; markers now apply to the
+  secret value only. The full fixture/placeholder false-positive corpus still
+  passes.
+- **New regression suite** (`tests/test_export_hardening.py`, 13 tests) pins
+  all three contracts, plus a written review
+  (`REVIEW_SCORING_REPORTING_RELIABILITY.md`) covering risk-model calibration
+  (a single confirmed CRITICAL scores 30/100 while uncapped third-party
+  correlations can saturate to 100), accuracy improvement areas
+  (value-pattern credential discovery, constant folding, secret line numbers)
+  and reliability polish (job timestamp units, create-time-only retention
+  pruning, broad exception swallows).
+
+### Console hero merges the landing page's visual language
+
+- **The local console now carries the hosted landing page's hero identity.**
+  The two pages had drifted into different dialects: the hosted page greets
+  you with the demo "signal" instrument card and a quiet capability meta row,
+  while the engine's own console at `/` opened on a bare text strip — so
+  `127.0.0.1:8000` and the GitHub-Pages site looked like different products
+  (compounded by the launcher's stale-cache bug below, which could serve an
+  older console than the hosted site). The console hero is now a two-column
+  strip: the claim, badges and actions on the left, the same static
+  `hero-signal` example card on the right (labelled "Example signal · demo
+  report" so it can never be mistaken for a real scan result), stacking under
+  the copy below 1080px and capped at 560px so it never stretches. Pure
+  markup + one stylesheet block; the card itself is the exact component the
+  landing page already ships.
+
+### Launcher: `--update` escapes the stale-engine cache
+
+- **The one-file launcher now has a refresh switch.** It downloads the engine
+  once into `~/.scriptsentry/bootstrap/` and then reuses that cache on every
+  later run — forever. Fixes pushed to the repository therefore never arrived
+  on a machine that had already bootstrapped, which looked exactly like "my
+  fix doesn't work". `python3 scriptsentry.py --update` now discards the cache
+  and fetches the current engine from GitHub before starting (a locked or
+  unwritable cache fails loudly with the reason instead of quietly rescanning
+  stale code). Running the launcher from inside a checkout tells you to
+  `git pull` instead, since there is no cache to refresh there.
+- **The startup banner says which build you are on.** When the cached engine
+  is used, the launcher prints when it was downloaded (recorded in
+  `.launcher-meta.json` inside the cache), so a stale engine is visible at a
+  glance. The README's quick start now documents the cache and `--update`.
+
 ### Visitor-level review: the tool explains itself to a first-timer
 
 - **Button links are no longer underlined.** `.btn` is used on `<a>` elements

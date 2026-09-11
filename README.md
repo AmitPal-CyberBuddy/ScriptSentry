@@ -41,6 +41,11 @@ cloud; there are no accounts and no API keys required for core analysis.
   the live page: network traffic, DOM sinks, `eval`, storage, cookies, and
   scripts loaded only after execution
 
+Every finding id, its plain-language meaning and the usual fix are documented
+in the **[rule reference](docs/RULES.md)** (same page, hosted:
+`https://<site>/rules/`) — generated from the engine's own rule registry, so
+the docs and the reports always agree.
+
 ## Why the results are trustworthy
 
 ScriptSentry is built to **avoid crying wolf**. It separates three things many
@@ -114,6 +119,14 @@ starts — everything stays local:
 python3 scriptsentry.py --port 8000
 ```
 
+The engine is cached under `~/.scriptsentry/bootstrap/` and reused on every
+later run — the launcher never re-downloads it on its own. After fixes land in
+the repository, refresh your local copy with:
+
+```bash
+python3 scriptsentry.py --update
+```
+
 You can also grab it straight from the hosted dashboard: the setup modal (shown
 when the local engine isn't running) has a **⬇️ Download scriptsentry.py**
 button.
@@ -183,8 +196,63 @@ browser tab only and is sent as an `X-ScriptSentry-Token` header.
 # Scan a live site (discovers & recursively analyzes every script)
 python3 main.py https://example.com --profile balanced --format all
 
-# Reports are written to output/ : report.txt / .json / .html / .csv / .sarif
+# Scan local files or a whole directory (same engine as the dashboard;
+# walks .js/.mjs/.cjs/.jsx/.ts/.tsx, skips node_modules and .git)
+python3 main.py ./dist bundle.js --format sarif txt
+
+# Reports are written to output/ by default, or wherever --output points:
+# report.txt / .json / .html / .csv / .sarif / api-surface.openapi.json
 ```
+
+Mix URLs and local paths in one command; a dead URL never discards the
+results of the other targets.
+
+**CI gate:** `--fail-on {critical,high,medium,low,none}` exits `1` when any
+*actionable* finding (observations excluded) reaches that severity — the hook
+a pipeline gates on. Exit `2` means an operational error (nothing was
+scanned), so a broken target never silently passes a gate:
+
+```bash
+python3 main.py ./dist --format sarif txt --fail-on high --output ci-report
+```
+
+**Baselines: fail only on what is new.** `--fail-on` alone answers "are there
+findings?" — the wrong question for a codebase that already has accepted
+ones. A baseline answers the question CI actually needs ("is this run worse
+than the accepted state?"):
+
+```bash
+# Once (e.g. on main, or locally): snapshot the current findings…
+python3 main.py ./dist --fail-on low --save-baseline scriptsentry-baseline.json
+
+# …commit the file, then gate every future run on what changed:
+python3 main.py ./dist --fail-on low --baseline scriptsentry-baseline.json
+```
+
+With `--baseline`, only findings that are **new** or **worsened** (severity
+raised, or an observation that came back actionable) count against the exit
+code; known findings stay in every report — the report never lies, only the
+gate narrows. Baselines are deterministic (sorted fingerprints, no
+timestamps), so they diff cleanly in review, and a missing baseline file
+behaves like an empty one: everything counts as new, the safe direction.
+Findings are identified by the same line-independent fingerprint the history
+diff uses, so an unrelated edit above a finding does not flip it to "new".
+Updating a baseline — accepting a finding — is a visible, reviewable act:
+commit the file.
+
+**Watch mode:** `--watch SECONDS` re-scans the target(s) on an interval and
+prints what changed between cycles — new, worse, improved and
+no-longer-detected findings, identified line-independently (the same
+fingerprint as baselines and the history diff), so cosmetic edits don't
+noise the diff:
+
+```bash
+python3 main.py https://example.com --watch 60 --fail-on high
+```
+
+Ctrl+C stops the watch (exit 0). With `--fail-on`, the first failing cycle
+exits 1 — watch mode is monitoring, and a gate that keeps running after
+turning red is a gate nobody watches.
 
 Launch the dashboard directly from the CLI:
 
@@ -250,13 +318,49 @@ After any analysis, use the header buttons (or the API/CLI) to export:
 
 ---
 
+### Use it in CI (GitHub Actions)
+
+The repo ships a composite action that installs the engine on the runner and
+scans your checkout — the scanned code never leaves the runner:
+
+```yaml
+name: ScriptSentry
+on: [push]
+permissions:
+  security-events: write   # for the SARIF upload
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan the JavaScript in this repository
+        uses: AmitPal-CyberBuddy/ScriptSentry/.github/actions/scan@main
+        with:
+          targets: .              # files, directories or URLs (space-separated)
+          fail-on: high           # critical|high|medium|low|none
+          format: sarif txt
+          output: scriptsentry-report
+          # baseline: scriptsentry-baseline.json   # gate only on new/worsened
+      - name: Upload findings to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: scriptsentry-report/report.sarif
+          category: scriptsentry
+```
+
+Local targets are reported with repository-relative paths, so SARIF findings
+map straight onto your files in the code scanning UI. This repository runs
+the same action on itself (`.github/workflows/self-scan.yml`) as a live
+example.
+
 ## Host the UI, keep the engine local
 
 You can host the dashboard front-end (for example on **GitHub Pages**) while the
 analysis engine stays entirely on your own machine:
 
 1. Publish the `webui/` folder (a ready-made workflow is in
-   `deployment/deploy-pages.yml`). It is a handful of static pages —
+   `.github/workflows/deploy-pages.yml`). It is a handful of static pages —
    `home/index.html` (overview, what it finds, how it works, setup, connect),
    `tool/index.html` (the console) and `changelog/index.html` (what's new) —
    plus `assets/` (favicons, app icons, web manifest, social card). GitHub
@@ -341,7 +445,7 @@ the detection rules are still being refined — treat findings as signals to
 investigate rather than a final verdict, and expect things to keep improving.
 
 Every change is recorded in the [changelog](webui/changelog/index.html), and
-the technical notes behind the design decisions live in [`AUDIT.md`](AUDIT.md).
+the technical notes behind the design decisions live in [`docs/AUDIT.md`](docs/AUDIT.md).
 
 ---
 

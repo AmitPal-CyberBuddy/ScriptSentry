@@ -3260,14 +3260,22 @@ main.wrap {
 
 .tool-hero {
   /* The console is the product; the hero is a strip, not a billboard.
-     One row on desktop: claim left, privacy note center, actions right. */
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-2xs) var(--space-md);
+     Copy column left, the landing page's demo signal card right on wide
+     screens (one visual language across both pages); stacked, card last,
+     where the viewport is too narrow to share the row. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-sm) var(--space-lg);
   padding: var(--space-md) 0 var(--space-sm);
   border-bottom: 1px solid var(--hairline);
   margin-bottom: var(--space-sm);
+}
+
+.tool-hero-copy {
+  display: grid;
+  gap: var(--space-2xs);
+  min-width: 0;
 }
 
 .tool-hero h1 {
@@ -3290,14 +3298,22 @@ main.wrap {
 
 .tool-hero p {
   margin: 0;
-  flex: 1 1 380px;
   color: var(--faint);
   font-size: var(--fs-sm);
   line-height: 1.5;
-  min-width: 0;
+  max-width: 62ch;
 }
 
 .tool-hero p b { color: var(--muted); }
+
+/* Same quiet mono meta row as the landing hero — capability facts, not
+   shouting pills (see the .hero .badges note above). */
+.tool-hero .badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 0;
+  margin: var(--space-2xs) 0 var(--space-2xs);
+}
 
 .tool-hero .hero-cta {
   margin: 0;
@@ -3307,6 +3323,22 @@ main.wrap {
 .tool-hero .hero-cta .btn { min-height: 40px; padding: 8px 14px; }
 
 .tool-hero .btn { text-decoration: none; }
+
+/* Stacked under the copy (below the two-column breakpoint) the card must
+   not stretch to the full content width; in the two-column range the grid
+   track (min(340px, 30vw)) is narrower, so this cap never binds. */
+.tool-hero .hero-signal { max-width: 560px; }
+
+/* Share the row only once the card fits beside the copy without squeezing
+   it; below this the card stacks under the copy, above the console. */
+@media (min-width: 1080px) {
+  .tool-hero {
+    grid-template-columns: minmax(0, 1fr) min(340px, 30vw);
+  }
+  /* Baseline-aligned to the copy so the strip stays compact — the card's
+     height must not push the console further down the page. */
+  .tool-hero .hero-signal { align-self: center; }
+}
 
 /* ============================================================
    Analysis-console ergonomics & accessibility
@@ -3867,6 +3899,98 @@ main[id] {
   text-decoration: underline;
   text-decoration-color: rgba(56, 189, 248, 0.4);
   text-underline-offset: 2px;
+}
+
+/* ============================================================
+   RULE REFERENCE PAGE (webui/rules/)
+   ------------------------------------------------------------
+   The rule reference shares the changelog's prose column and
+   release sections; it adds severity chips and a per-rule
+   card rhythm. Like the changelog page, nothing here invents
+   a new colour or type size -- severity colour is the shared
+   data palette, chips are hairline-outlined like the badges,
+   and examples reuse the console's .code-box treatment.
+   ============================================================ */
+
+.changelog-sub {
+  max-width: 60ch;
+  margin: var(--space-xs) auto 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.rule {
+  padding: var(--space-sm) 0 var(--space-md);
+  border-top: 1px solid var(--hairline);
+}
+
+.rule:first-of-type {
+  border-top: 0;
+  padding-top: var(--space-xs);
+}
+
+.rule h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs);
+  margin: 0 0 var(--space-2xs);
+  font-size: var(--fs-h4);
+}
+
+.rule h3 code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--primary);
+}
+
+.rule-meaning {
+  margin: 0 0 var(--space-2xs);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.65;
+}
+
+.rule .code-box {
+  margin: var(--space-2xs) 0 var(--space-xs);
+}
+
+.sev-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-strong);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sev-chip.sev-critical {
+  color: var(--danger);
+  border-color: rgba(255, 77, 109, 0.45);
+  background: rgba(255, 77, 109, 0.08);
+}
+
+.sev-chip.sev-high {
+  color: var(--danger);
+  border-color: rgba(255, 77, 109, 0.35);
+  background: rgba(255, 77, 109, 0.05);
+}
+
+.sev-chip.sev-medium {
+  color: var(--warning);
+  border-color: rgba(255, 159, 67, 0.4);
+  background: rgba(255, 159, 67, 0.06);
+}
+
+.sev-chip.sev-low,
+.sev-chip.sev-info {
+  color: var(--primary);
+  border-color: rgba(34, 211, 238, 0.35);
+  background: rgba(34, 211, 238, 0.05);
 }
 
 .changelog-back {

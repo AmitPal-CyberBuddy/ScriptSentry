@@ -31,13 +31,9 @@ class ReportRoutesMixin:
         self.wfile.write(data)
 
     def _handle_report(self, parsed, body):
-        query = {}
-        if parsed.query:
-            for part in parsed.query.split("&"):
-                if "=" in part:
-                    k, v = part.split("=", 1)
-                    query[k] = v
-        report_format = query.get("format", "html").lower()
+        # parse_qsl (via _query_param) URL-decodes; the previous hand-rolled
+        # splitter did not, and duplicated the logic in two places.
+        report_format = self._query_param(parsed, "format", "html").lower()
         if report_format not in _REPORT_FORMATS:
             self._send_error_json(
                 "format must be " + ", ".join(_REPORT_FORMATS[:-1]) + ", or " + _REPORT_FORMATS[-1],
