@@ -41,10 +41,13 @@ runs:
     - name: Install ScriptSentry engine
       shell: bash
       run: |
+        python --version
         python -m pip install --upgrade pip
-        # github.action_path is the ScriptSentry repository itself (this
-        # action lives inside it), so the engine is installed from source.
-        python -m pip install "${{ github.action_path }}"
+        # github.action_path is THIS action's directory (.github/actions/scan),
+        # not the repository -- pip-installing it fails with "not installable"
+        # (no pyproject.toml there). The engine lives at the checkout root,
+        # which is github.workspace.
+        python -m pip install "${{ github.workspace }}"
 
     - name: Scan targets
       shell: bash
