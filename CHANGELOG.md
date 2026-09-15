@@ -14,6 +14,33 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Presentation pass: SVG icons, a print theme, CWE in SARIF and the rule reference
+
+- **Icons that render everywhere.** The dashboard's emoji chrome (nav,
+  buttons, card headings, tab labels -- 95 spots across the console and
+  landing pages) is now a small set of stroke SVGs that inherit the text
+  color and stay crisp at any size, on every platform. Emoji render
+  differently per OS and read as decoration; the same is true for the
+  exported HTML report's headings. Text symbols that carry meaning
+  (checkmarks in capability lists, the status-message prefixes) are
+  deliberately untouched.
+- **Print themes.** Printing the dashboard used to produce a dark sheet
+  with invisible text and cards sliced mid-page; @media print now hides
+  the interaction chrome and prints the analysis content on white, one
+  card per block. The exported HTML report gains the same: a light
+  print theme where the gradient header no longer disappears into
+  white-on-white text, severity chips keep their colors
+  (print-color-adjust), and cards never split across pages.
+- **CWE in SARIF and the rule reference.** SARIF rules now carry the
+  standard CWE mapping as a tag and property (dom_injection -> CWE-79,
+  hardcoded_secret -> CWE-798, open_redirect -> CWE-601, ...), a
+  helpUri straight to the hosted per-rule reference, and plain-language
+  rule descriptions from the same registry the reference is generated
+  from. The rule reference (docs/RULES.md + /rules/) shows each rule's
+  CWE with a link to the MITRE definition; inventory observations stay
+  deliberately unmapped -- a forced CWE would be noise. The generator
+  refuses to build if a CWE mapping references an unknown rule.
+
 ### Triage that follows a finding: server-side decisions in history and exports
 
 The dashboard's status chips (open / needs review / confirmed / false

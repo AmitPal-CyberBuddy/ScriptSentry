@@ -20,10 +20,13 @@
     if (inline) inline.click();
   }
 
-  function showTransferNote(text, isWarning = false) {
+  function showTransferNote(text, isWarning = false, allowHtml = false) {
     const node = $("#transfer-note");
     if (!node) return;
-    node.textContent = text;
+    // textContent by default: dynamic messages must never inject markup.
+    // allowHtml is for static, engine-authored strings (icon + literal text).
+    if (allowHtml) node.innerHTML = text;
+    else node.textContent = text;
     node.classList.toggle("is-warn", !!isWarning);
     node.hidden = false;
     if (!isWarning) {
@@ -60,7 +63,7 @@
         if (req.max_depth) $("#max-depth").value = String(req.max_depth);
         if (req.max_files) $("#max-files").value = String(req.max_files);
         if (req.max_workers) $("#workers").value = String(req.max_workers);
-        showTransferNote(`✅ Scan carried over from the hosted page — target ${req.url}. Starting…`);
+        showTransferNote(`${svgIcon("check")} Scan carried over from the hosted page — target ${req.url}. Starting…`);
         $("#console").scrollIntoView({ behavior: "smooth", block: "start" });
         await new Promise((r) => setTimeout(r, 400));
         await analyzeUrl();
@@ -68,7 +71,7 @@
         selectInputPane("paste");
         $("#code-input").value = req.code;
         if (req.filename) $("#filename-input").value = req.filename;
-        showTransferNote("✅ Your pasted code was carried over from the hosted page. Starting…");
+        showTransferNote(svgIcon("check") + " Your pasted code was carried over from the hosted page. Starting…", false, true);
         $("#console").scrollIntoView({ behavior: "smooth", block: "start" });
         await new Promise((r) => setTimeout(r, 400));
         await analyzeCode();
@@ -80,7 +83,7 @@
           content: f.code,
         }));
         updateFileList();
-        showTransferNote(`✅ ${req.files.length} file(s) carried over from the hosted page. Starting…`);
+        showTransferNote(`${svgIcon("check")} ${req.files.length} file(s) carried over from the hosted page. Starting…`);
         $("#console").scrollIntoView({ behavior: "smooth", block: "start" });
         await new Promise((r) => setTimeout(r, 400));
         await analyzeFiles();

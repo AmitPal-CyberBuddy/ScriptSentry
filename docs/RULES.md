@@ -13,7 +13,7 @@ worth knowing about, not confirmed problems.
 
 ### `dom_injection` — DOM injection
 
-**Default severity:** HIGH · **Kind:** Actionable finding
+**Default severity:** HIGH · **Kind:** Actionable finding · **[CWE-79](https://cwe.mitre.org/data/definitions/79.html)**
 
 **What it means.** The code inserts information taken from the page address or user input directly into the page without cleaning it first. An attacker can craft a link that makes the page run their own script in a visitor's browser (a common attack called cross-site scripting).
 
@@ -34,7 +34,7 @@ el.textContent = q;  // or sanitize with DOMPurify before innerHTML
 
 ### `dom_injection_document_write` — DOM injection (document.write)
 
-**Default severity:** HIGH · **Kind:** Actionable finding
+**Default severity:** HIGH · **Kind:** Actionable finding · **[CWE-79](https://cwe.mitre.org/data/definitions/79.html)**
 
 **What it means.** The code writes information taken from the page address or user input straight into the document. A crafted link can make a visitor's browser run attacker-controlled script (cross-site scripting).
 
@@ -56,7 +56,7 @@ document.body.appendChild(el);
 
 ### `hardcoded_secret` — Hardcoded secret candidate
 
-**Default severity:** HIGH · **Kind:** Actionable finding
+**Default severity:** HIGH · **Kind:** Actionable finding · **[CWE-798](https://cwe.mitre.org/data/definitions/798.html)**
 
 **What it means.** A credential (password, API key or token) appears in plain text inside the shipped code. Anyone who can view or download the code - including this scan - can read it.
 
@@ -78,7 +78,7 @@ The usual fix:
 
 ### `data_exfiltration_flow` — Sensitive data sent to a network sink
 
-**Default severity:** HIGH · **Kind:** Actionable finding
+**Default severity:** HIGH · **Kind:** Actionable finding · **[CWE-200](https://cwe.mitre.org/data/definitions/200.html)**
 
 **What it means.** The code reads private information (login details, cookies, form input) and sends it to an external destination. If that destination is not yours or not expected, this is how data leaks happen.
 
@@ -99,7 +99,7 @@ The usual fix:
 
 ### `open_redirect` — Client-side open redirect
 
-**Default severity:** HIGH · **Kind:** Actionable finding
+**Default severity:** HIGH · **Kind:** Actionable finding · **[CWE-601](https://cwe.mitre.org/data/definitions/601.html)**
 
 **What it means.** The code sends visitors to whatever address is in the link, without checking it. Attackers use this to wrap phishing pages in your site's trusted name.
 
@@ -121,7 +121,7 @@ if (ALLOWED.has(next)) location = next;  // allowlist, never a raw value
 
 ### `dangerous_dynamic_code` — Dangerous dynamic code execution
 
-**Default severity:** HIGH · **Kind:** Actionable finding
+**Default severity:** HIGH · **Kind:** Actionable finding · **[CWE-95](https://cwe.mitre.org/data/definitions/95.html)**
 
 **What it means.** The code constructs program instructions from text at run time. If any part of that text comes from outside, an attacker may be able to run their own instructions.
 
@@ -144,7 +144,7 @@ setTimeout(() => go(input), 100);  // for behaviour: pass a function
 
 ### `vulnerable_dependency` — Vulnerable dependency (npm advisory)
 
-**Default severity:** HIGH · **Kind:** Actionable finding
+**Default severity:** HIGH · **Kind:** Actionable finding · **[CWE-1104](https://cwe.mitre.org/data/definitions/1104.html)**
 
 **What it means.** 
 
@@ -165,7 +165,7 @@ npm audit fix  // or pin a patched version and verify the upgrade
 
 ### `exposed_key_iv_pair` — Exposed key + IV pair
 
-**Default severity:** MEDIUM · **Kind:** Actionable finding
+**Default severity:** MEDIUM · **Kind:** Actionable finding · **[CWE-321](https://cwe.mitre.org/data/definitions/321.html)**
 
 **What it means.** Both the encryption key and its starting value are in the shipped code. Encryption with a visible key protects nothing.
 
@@ -187,7 +187,7 @@ The usual fix:
 
 ### `static_crypto_key` — Static cryptographic key
 
-**Default severity:** MEDIUM · **Kind:** Actionable finding
+**Default severity:** MEDIUM · **Kind:** Actionable finding · **[CWE-321](https://cwe.mitre.org/data/definitions/321.html)**
 
 **What it means.** A fixed encryption key is embedded in the code where anyone reading it can copy it.
 
@@ -208,7 +208,7 @@ The usual fix:
 
 ### `insecure_postmessage` — Insecure postMessage (wildcard origin)
 
-**Default severity:** MEDIUM · **Kind:** Actionable finding
+**Default severity:** MEDIUM · **Kind:** Actionable finding · **[CWE-359](https://cwe.mitre.org/data/definitions/359.html)**
 
 **What it means.** The code sends a message to another window and explicitly allows ANY origin to receive it. If the receiving page is ever embedded by an attacker-controlled page, that page receives the message too.
 
@@ -228,7 +228,7 @@ window.parent.postMessage(session, 'https://app.example.com');
 
 ### `prototype_pollution` — Prototype pollution pattern
 
-**Default severity:** MEDIUM · **Kind:** Actionable finding
+**Default severity:** MEDIUM · **Kind:** Actionable finding · **[CWE-1321](https://cwe.mitre.org/data/definitions/1321.html)**
 
 **What it means.** The code merges or writes objects in a way that can modify JavaScript's shared prototypes when the input comes from the page address or user data. Successful pollution can change application logic everywhere.
 
@@ -249,7 +249,7 @@ The usual fix:
 
 ### `jquery_dom_manipulation` — jQuery DOM manipulation with untrusted data
 
-**Default severity:** MEDIUM · **Kind:** Actionable finding
+**Default severity:** MEDIUM · **Kind:** Actionable finding · **[CWE-79](https://cwe.mitre.org/data/definitions/79.html)**
 
 **What it means.** jQuery DOM methods that interpret HTML are fed data that may come from the page address or user input -- the jQuery sibling of DOM injection.
 
@@ -271,7 +271,7 @@ $('#output').text(decodeURI(location.hash));
 
 ### `data_exfiltration_candidate` — URL-derived data sent to an external destination
 
-**Default severity:** LOW · **Kind:** Observation
+**Default severity:** LOW · **Kind:** Observation · **[CWE-200](https://cwe.mitre.org/data/definitions/200.html)**
 
 **What it means.** The code both reads private information and contacts external services. This is only a pattern match - it may be perfectly normal - but the combination is worth checking.
 
@@ -291,7 +291,7 @@ The usual fix:
 
 ### `sensitive_storage` — Sensitive value in browser storage
 
-**Default severity:** MEDIUM · **Kind:** Observation
+**Default severity:** MEDIUM · **Kind:** Observation · **[CWE-922](https://cwe.mitre.org/data/definitions/922.html)**
 
 **What it means.** The code stores sensitive-looking information in the browser's storage. Anything stored there can be read by other scripts on the page.
 
@@ -312,7 +312,7 @@ The usual fix:
 
 ### `unsafe_runtime` — Risky runtime pattern
 
-**Default severity:** LOW · **Kind:** Observation
+**Default severity:** LOW · **Kind:** Observation · **[CWE-95](https://cwe.mitre.org/data/definitions/95.html)**
 
 **What it means.** The code uses mechanisms that build or run instructions dynamically - legitimate in some cases, dangerous if the input is ever influenced by an outsider.
 

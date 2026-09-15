@@ -107,7 +107,7 @@
       const where = p.location ? ` · ${escapeHtml(p.location)}` : "";
       const detail = p.source ? `${escapeHtml(p.source)} → ${escapeHtml(p.sink || "")}` : escapeHtml(p.sink || "");
       const limits = (p.limitations || []).length
-        ? `<br><span style="color:#fbbf24;font-size:11px">⚠ ${escapeHtml(p.limitations[0])}</span>` : "";
+        ? `<br><span style="color:#fbbf24;font-size:11px">${svgIcon("alert")} ${escapeHtml(p.limitations[0])}</span>` : "";
       return `<li style="animation-delay:${i * 0.05}s">
         <span class="risk-dot" style="color:${color}"></span>
         <span><b>${escapeHtml(p.type)}</b> · ${escapeHtml(p.severity)} · confidence ${escapeHtml(CONF_LABEL[p.confidence] || p.confidence || "?")}${where}
@@ -377,7 +377,7 @@
           const color = SEV_COLOR[sev] || "#22d3ee";
           const path = (flow.flow || []).slice(0, 8).join(" → ");
           const quality = flow.analysis_quality ? `<span class="quality-chip quality-${flow.analysis_quality}">${escapeHtml(flow.analysis_quality)} quality</span>` : "";
-          const limits = (flow.limitations || []).slice(0, 2).map((l) => `<br><span style="color:#fbbf24;font-size:11px">⚠ ${escapeHtml(l)}</span>`).join("");
+          const limits = (flow.limitations || []).slice(0, 2).map((l) => `<br><span style="color:#fbbf24;font-size:11px">${svgIcon("alert")} ${escapeHtml(l)}</span>`).join("");
           return `<li style="animation-delay:${i * 0.04}s">
             <span class="risk-dot" style="color:${color}"></span>
             <span><b>${escapeHtml(flow.type || "Source→sink flow")}</b> · ${escapeHtml(STATUS_LABEL[getStatus(flow)] || flow.status || "open")} · conf ${escapeHtml(CONF_LABEL[flow.confidence] || flow.confidence || "?")} · ${escapeHtml(flow.file || "")} ${flow.line ? `· L${flow.line}` : ""}

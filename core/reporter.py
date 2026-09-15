@@ -567,6 +567,35 @@ PLAIN_TERMS = {
     },
 }
 
+# CWE mapping for the finding ids above (single source for SARIF exports and
+# the generated rule reference). Mappings are the standard, defensible ones;
+# inventory-only observations (api_surface, obfuscation, client_side_crypto)
+# are deliberately unmapped -- a forced CWE would be noise, not information.
+CWE_MAP = {
+    "dom_injection": 79,
+    "dom_injection_document_write": 79,
+    "dom_xss": 79,
+    "jquery_dom_manipulation": 79,
+    "hardcoded_secret": 798,
+    "secret": 798,
+    "data_exfiltration_flow": 200,
+    "data_exfiltration_candidate": 200,
+    "open_redirect": 601,
+    "dangerous_dynamic_code": 95,
+    "unsafe_runtime": 95,
+    "vulnerable_dependency": 1104,
+    "exposed_key_iv_pair": 321,
+    "static_crypto_key": 321,
+    "insecure_postmessage": 359,
+    "prototype_pollution": 1321,
+    "sensitive_storage": 922,
+}
+
+# Hosted rule reference anchor (tools/build_rules_page.py generates the page;
+# SARIF rules link straight to their per-rule section).
+RULES_PAGE = "https://amitpal-cyberbuddy.github.io/ScriptSentry/rules/"
+
+
 _PLAIN_PREFIXES = {
     "vulnerable_dependency": {
         "plain": "A known-vulnerable library",
@@ -1093,6 +1122,32 @@ def generate_report(results, ai_summary=None, metadata=None, triage=None):
     return "\n".join(report)
 
 
+# Report heading icons: the same stroke-SVG language the dashboard uses, kept
+# inline so the exported HTML stays a single self-contained file.
+_REPORT_ICONS = {
+    "shield": '<path d="M12 3l7 3v5c0 4.6-3 7.7-7 9.3C8 18.7 5 15.6 5 11V6z"/>',
+    "message": '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    "pin": '<path d="M12 21s-7-5.8-7-11a7 7 0 0 1 14 0c0 5.2-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+    "ruler": '<path d="M3 17.2L17.2 3 21 6.8 6.8 21z"/><path d="M8 16l1.5 1.5M11 13l1.5 1.5M14 10l1.5 1.5M17 7l1.5 1.5"/>',
+    "signal": '<rect x="8" y="2" width="8" height="20" rx="4"/><circle cx="12" cy="7" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="17" r="1.6"/>',
+    "book": '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+    "monitor": '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+    "search": '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/>',
+    "check": '<path d="M20 6L9 17l-5-5"/>',
+    "cpu": '<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="10" y="10" width="4" height="4"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+    "key": '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
+}
+
+
+def _icon(name):
+    body = _REPORT_ICONS.get(name)
+    if not body:
+        return ""
+    return ('<svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" '
+            'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+            f'stroke-linejoin="round">{body}</svg>')
+
+
 def generate_html_report(results, ai_summary=None, metadata=None, triage=None):
     """Generate a self-contained, modern HTML report (exportable/shareable)."""
     model = build_report_model(results, ai_summary=ai_summary, metadata=metadata,
@@ -1128,6 +1183,24 @@ def generate_html_report(results, ai_summary=None, metadata=None, triage=None):
     css = """
     @page { margin: 18mm; }
     * { box-sizing: border-box; }
+    .icon { display:inline-block; width:1em; height:1em; flex:none; vertical-align:-0.125em; }
+    @media print {
+      /* Browsers drop background colors by default: the dark gradient header
+         would print as light text on white paper. Print gets an explicit
+         light theme: dark text, no shadows, and severity chips keep their
+         colors via print-color-adjust (the one place color carries meaning). */
+      html, body { background: #fff; }
+      .page { box-shadow: none; border: none; border-radius: 0; max-width: 100%; margin: 0; }
+      .hd { background: #fff; color: #0f2550; border-bottom: 2px solid #0f2550; }
+      .hd .sub { color: #40516e; }
+      .card, .sig, .stat, .sec, .file { break-inside: avoid; }
+      h2 { break-after: avoid; }
+      .sev, .pill, .risk, .stat b {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      .sev-CRITICAL, .sev-HIGH { color: #fff; }
+    }
     body { margin:0; background:#eef2f7; color:#172033; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
     .page { max-width: 1040px; margin: 24px auto; background:#fff; box-shadow: 0 18px 60px rgba(15,23,42,.16); border-radius:18px; overflow:hidden; }
     .hd { padding: 30px 36px; background: linear-gradient(135deg,#0b1b3a,#102a4c 48%,#14365c); color:#eaf4ff; }
@@ -1175,7 +1248,7 @@ def generate_html_report(results, ai_summary=None, metadata=None, triage=None):
         f"<title>ScriptSentry Report — {esc(summary['risk_label'])}</title>",
         f"<style>{css}</style></head><body><div class=\"page\">",
         "<div class=\"hd\">",
-        "<h1>🛡️ ScriptSentry Analysis Report</h1>",
+        "<h1>" + _icon("shield") + " ScriptSentry Analysis Report</h1>",
         "<div class=\"sub\">JS Intelligence Studio · " + esc(model["meta"]["source"] or "inline snippet") + " · " + esc(model["meta"]["generated_at"] or "now") + "</div>",
         f"<span class=\"risk\">RISK: {esc(summary['risk_label'])} · SCORE {summary['total_score']}</span>",
         "</div>",
@@ -1186,7 +1259,7 @@ def generate_html_report(results, ai_summary=None, metadata=None, triage=None):
         f"<div class=\"stat\"><b>{len(summary['transport'])}</b><span>Transport</span></div>",
         "</div>",
         "<div class=\"body\">",
-        "<h2>🗣️ What This Result Means</h2>",
+        f"<h2>{_icon('message')} What This Result Means</h2>",
         "<div class=\"card\">"
         + f"<p><b>{esc(exec_summary['verdict'])}</b></p>"
         + f"<p>{esc(exec_summary['counts_in_words'])}</p>"
@@ -1201,7 +1274,7 @@ def generate_html_report(results, ai_summary=None, metadata=None, triage=None):
         )
         + "<p class=\"muted\">" + esc(" ".join(exec_summary["notes"])) + "</p>"
         + "</div>",
-        "<h2>📌 Executive Summary</h2>",
+        f"<h2>{_icon('pin')} Executive Summary</h2>",
         "<div class=\"card\"><p>" + esc(f"Risk posture is {summary['risk_label'].lower()} with {summary['total_findings']} findings across {summary['total_files']} file(s).") + "</p>",
         "<div class=\"bars\">",
     ]
@@ -1216,13 +1289,13 @@ def generate_html_report(results, ai_summary=None, metadata=None, triage=None):
     html.append("</div></div>")
 
     # Coverage / reliability: what we saw, what we could not, how sure we are.
-    html.append("<h2>📏 Scan Coverage &amp; Reliability</h2><div class=\"card\"><table class=\"kv\">")
+    html.append(f"<h2>{_icon('ruler')} Scan Coverage &amp; Reliability</h2><div class=\"card\"><table class=\"kv\">")
     for label, value in scan_reliability(model, results):
         html.append(f"<tr><th>{esc(label)}</th><td>{esc(value)}</td></tr>")
     html.append("</table></div>")
 
     # Signals
-    html.append("<h2>🚦 Top Risk Signals</h2><div class=\"card\">")
+    html.append(f"<h2>{_icon('signal')} Top Risk Signals</h2><div class=\"card\">")
     top = sorted(summary["signals"], key=lambda s: {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}.get(s.get("severity", "INFO"), 4))[:12]
     if not top:
         html.append("<p class=\"muted\">No structured risk signals raised.</p>")
@@ -1233,7 +1306,7 @@ def generate_html_report(results, ai_summary=None, metadata=None, triage=None):
 
     # Script inventory / behavior intelligence
     if model.get("script_inventory"):
-        html.append("<h2>📚 Script Inventory</h2>")
+        html.append(f"<h2>{_icon('book')} Script Inventory</h2>")
         for script in model["script_inventory"][:24]:
             caps = script.get("capabilities", {}) or {}
             risk = script.get("risk", {}) or {}
@@ -1257,7 +1330,7 @@ def generate_html_report(results, ai_summary=None, metadata=None, triage=None):
     # Runtime evidence
     runtime = model.get("runtime") or {}
     if runtime:
-        html.append("<h2>🖥️ Runtime Evidence</h2><div class=\"card\">")
+        html.append(f"<h2>{_icon('monitor')} Runtime Evidence</h2><div class=\"card\">")
         if runtime.get("captured"):
             runtime_reqs = runtime.get("requests", []) or []
             html.append(f"<p class=\"muted\">Local headless-browser run · {runtime.get('duration_ms', 0)} ms · {len(runtime_reqs)} requests · {len(runtime.get('console', []) or [])} console entries · {len(runtime.get('dom_sinks', []) or [])} DOM sink writes</p>")
@@ -1275,7 +1348,7 @@ def generate_html_report(results, ai_summary=None, metadata=None, triage=None):
         html.append("</div>")
 
     # Details per file
-    html.append("<h2>🔎 Detailed Analysis</h2>")
+    html.append(f"<h2>{_icon('search')} Detailed Analysis</h2>")
     for norm in model["files"]:
         html.append(f"<div class=\"card\"><div class=\"file-head\"><h3>{esc(norm['name'])}</h3><span class=\"pill\">{esc(norm['risk'])} · {norm['score']}</span></div>")
         if norm.get("origin") and norm["origin"] != norm["name"]:
@@ -1321,13 +1394,13 @@ def generate_html_report(results, ai_summary=None, metadata=None, triage=None):
         html.append("</div>")
 
     # Remediation
-    html.append("<h2>✅ Recommended Fixes</h2><div class=\"remed\"><ol>")
+    html.append(f"<h2>{_icon('check')} Recommended Fixes</h2><div class=\"remed\"><ol>")
     for step in _remediation(model):
         html.append(f"<li>{esc(step)}</li>")
     html.append("</ol></div>")
 
     if model["ai_summary"].get("executive_summary"):
-        html.append("<h2>🧠 AI Notes</h2><div class=\"card\"><ul>")
+        html.append(f"<h2>{_icon('cpu')} AI Notes</h2><div class=\"card\"><ul>")
         for line in model["ai_summary"]["executive_summary"][:5]:
             html.append(f"<li>{esc(line)}</li>")
         html.append("</ul></div>")
@@ -1424,18 +1497,32 @@ def generate_sarif_report(results, ai_summary=None, metadata=None, triage=None):
     for f in findings:
         rule_id = str(f.get("id") or f.get("type") or "unknown")
         if rule_id not in rules_map:
+            # Plain-language title/meaning come from the same registry the
+            # hosted rule reference is generated from; the CWE tag lets SARIF
+            # consumers (GitHub code scanning, SonarQube imports) group by
+            # weakness class, and helpUri points at the per-rule docs.
+            plain = _plain_entry_for(f) or {}
+            base_id = rule_id.split(":")[0].rstrip("_")
+            cwe = next((CWE_MAP[key] for key in (rule_id, base_id)
+                        if key in CWE_MAP), None)
+            tags = [str(f.get("severity", "")).lower(), "security", "javascript"]
+            if cwe:
+                tags.append(f"cwe-{cwe}")
             rules_map[rule_id] = {
                 "id": rule_id,
                 "name": rule_id,
-                "shortDescription": {"text": str(f.get("type") or rule_id)},
-                "fullDescription": {"text": str(f.get("type") or rule_id)},
+                "shortDescription": {"text": str(plain.get("plain") or f.get("type") or rule_id)},
+                "fullDescription": {"text": str(plain.get("meaning") or f.get("type") or rule_id)},
+                "helpUri": RULES_PAGE + "#" + rule_id.split(":")[0],
                 "help": {"text": f"ScriptSentry finding: {f.get('type', rule_id)}"},
                 "defaultConfiguration": {"level": _sarif_level(f.get("severity", "MEDIUM"))},
                 "properties": {
-                    "tags": [str(f.get("severity", "")).lower(), "security", "javascript"],
+                    "tags": tags,
                     "security-severity": _sarif_security_severity(f.get("severity", "MEDIUM")),
                 },
             }
+            if cwe:
+                rules_map[rule_id]["properties"]["cwe"] = f"CWE-{cwe}"
         # line numbers are typically 1-indexed in ESTree; SARIF expects 0-indexed.
         start_line = max(0, coerce_line(f.get("line", 1)) - 1)
         message = f.get("sink") or f.get("evidence") or f.get("type", rule_id)
@@ -1487,6 +1574,10 @@ def generate_sarif_report(results, ai_summary=None, metadata=None, triage=None):
         # property, and a false-positive decision additionally becomes a
         # SARIF suppression -- the standard way consumers (e.g. GitHub code
         # scanning) show a dismissed alert.
+        result_cwe = next((CWE_MAP[key] for key in (rule_id, rule_id.split(":")[0])
+                           if key in CWE_MAP), None)
+        if result_cwe:
+            result["properties"]["cwe"] = f"CWE-{result_cwe}"
         triage_status = str(f.get("triage_status") or "")
         if triage_status:
             result["properties"]["triage"] = triage_status

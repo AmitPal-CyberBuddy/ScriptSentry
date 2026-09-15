@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 
-from core.reporter import PLAIN_TERMS  # noqa: E402
+from core.reporter import CWE_MAP, PLAIN_TERMS  # noqa: E402
 import build_changelog as chrome  # noqa: E402
 
 WEBUI = ROOT / "webui"
@@ -145,6 +145,18 @@ def plain_entry(rule_id):
     return PLAIN_TERMS.get(prefix)
 
 
+def rule_cwe(rule_id):
+    """The CWE number for a rule id, or None (inventory rules stay unmapped)."""
+    base = rule_id.rstrip(":")
+    if base in CWE_MAP:
+        return CWE_MAP[base]
+    return CWE_MAP.get(rule_id)
+
+
+def cwe_link(number):
+    return f"https://cwe.mitre.org/data/definitions/{number}.html"
+
+
 def e(text):
     return html.escape(str(text or ""), quote=False)
 
@@ -170,10 +182,14 @@ def render_markdown():
             heading = "Actionable findings" if current_kind == "vulnerability" else "Observations"
             lines += [f"## {heading}", ""]
         entry = plain_entry(rule["id"]) or {}
+        cwe = rule_cwe(rule["id"])
+        meta = f"**Default severity:** {rule['severity']} · **Kind:** {KIND_LABEL[rule['kind']]}"
+        if cwe:
+            meta += f" · **[CWE-{cwe}]({cwe_link(cwe)})**"
         lines += [
             f"### `{rule['id'].rstrip(':')}` — {rule['title']}",
             "",
-            f"**Default severity:** {rule['severity']} · **Kind:** {KIND_LABEL[rule['kind']]}",
+            meta,
             "",
             f"**What it means.** {entry.get('meaning', rule.get('meaning', ''))}",
             "",
@@ -214,8 +230,11 @@ def render_sections():
         anchor = e(rule["id"].rstrip(":"))
         sev = e(rule["severity"].lower())
         out.append(f'        <article class="rule" id="rule-{anchor}">')
+        cwe = rule_cwe(rule["id"])
+        cwe_chip = (f' <a class="sev-chip sev-cwe" href="{cwe_link(cwe)}"'
+                    f' target="_blank" rel="noopener">CWE-{cwe}</a>') if cwe else ""
         out.append(f'          <h3><code>{anchor}</code> — {e(rule["title"])}'
-                   f' <span class="sev-chip sev-{sev}">{e(rule["severity"])}</span></h3>')
+                   f' <span class="sev-chip sev-{sev}">{e(rule["severity"])}</span>{cwe_chip}</h3>')
         out.append(f'          <p class="rule-meaning"><strong>What it means.</strong> {e(entry.get("meaning", rule.get("meaning", "")))}</p>')
         out.append(f'          <p class="rule-meaning"><strong>What to do.</strong> {e(entry.get("action", rule.get("action", "")))}</p>')
         out.append('          <div class="code-box">')
@@ -296,6 +315,11 @@ def main(argv=None):
     # Anti-drift: every plain-language entry must have a rule section (or be
     # an explicitly documented legacy alias).
     covered = {r["id"].rstrip(":") for r in RULES} | set(ALIASES)
+    # Anti-drift for the CWE mapping: every mapped id must be a rule the
+    # reference actually documents (a rule section or a legacy alias).
+    orphaned = sorted(k.rstrip(":") for k in CWE_MAP if k.rstrip(":") not in covered)
+    if orphaned:
+        raise SystemExit("CWE_MAP has ids with no rule section or alias: " + ", ".join(orphaned))
     missing = [key.rstrip(":") for key in PLAIN_TERMS if key.rstrip(":") not in covered]
     if missing:
         raise SystemExit("PLAIN_TERMS has entries with no rule section: " + ", ".join(sorted(missing)))

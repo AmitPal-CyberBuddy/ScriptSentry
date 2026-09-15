@@ -163,9 +163,9 @@
           const st = getStatus(f);
           const quality = f.analysis_quality ? `<span class="quality-chip quality-${f.analysis_quality}">${escapeHtml(f.analysis_quality)} quality</span>` : "";
           const limits = (f.limitations || []).length
-            ? `<br><span style="color:#fbbf24;font-size:11px">⚠ Analysis limit: ${escapeHtml(f.limitations[0])}</span>` : "";
+            ? `<br><span style="color:#fbbf24;font-size:11px">${svgIcon("alert")} Analysis limit: ${escapeHtml(f.limitations[0])}</span>` : "";
           const viaMap = f.via === "source_map"
-            ? ` <span title="Found by analyzing the original source code embedded in the bundle's source map" style="color:#60a5fa;font-size:11px">🔗 source map</span>` : "";
+            ? ` <span title="Found by analyzing the original source code embedded in the bundle's source map" style="color:#60a5fa;font-size:11px">${svgIcon("link")} source map</span>` : "";
           return `<li style="animation-delay:${i * 0.03}s">
             <span class="risk-dot" style="color:${color}"></span>
             <span><b>${escapeHtml(f.type || f.id || "finding")}</b> · ${escapeHtml(f.severity || "")} · conf ${escapeHtml(CONF_LABEL[f.confidence] || f.confidence || "?")} · ${escapeHtml(f.file || "")}${f.line ? ` · L${f.line}` : ""}${viaMap}<br>

@@ -133,6 +133,10 @@ class LinkTargetTest(unittest.TestCase):
         legacy = []
         for page, src in PAGES_SRC.items():
             for href, _ in links(src):
+                # External sites (e.g. cwe.mitre.org definitions) are out of
+                # scope: this gate is about *our* pages' URL hygiene.
+                if href.startswith(("http://", "https://")):
+                    continue
                 if ".html" in href:
                     legacy.append(f"{page}: {href}")
         self.assertEqual([], legacy,

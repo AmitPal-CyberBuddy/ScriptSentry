@@ -371,7 +371,7 @@
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || body.ok === false) throw new Error(body.error || "Delete failed.");
-      setStorageStatus(`✅ Deleted scan #${scanId}.`);
+      setStorageStatus(`${svgIcon("check")} Deleted scan #${scanId}.`);
       await refreshHistory();
       // Keep the storage list in the mode the user chose (all vs recent).
       if (storageScansAll) {
@@ -395,7 +395,7 @@
       const res = await fetch(apiUrl("/api/history"), { method: "DELETE", headers: authHeaders() });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || body.ok === false) throw new Error(body.error || "Delete failed.");
-      setStorageStatus(`✅ Deleted ${body.deleted_scans || 0} scan(s) and ${body.deleted_findings || 0} finding(s).`);
+      setStorageStatus(`${svgIcon("check")} Deleted ${body.deleted_scans || 0} scan(s) and ${body.deleted_findings || 0} finding(s).`);
       await refreshHistory();
       await refreshStoragePanel();
     } catch (err) {

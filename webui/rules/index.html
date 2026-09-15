@@ -73,7 +73,7 @@
       </nav>
 
       <div class="header-actions">
-        <a class="btn btn-sm go-to-tool" href="../tool/">⚡ Go to tool</a>
+        <a class="btn btn-sm go-to-tool" href="../tool/"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'</svg> Go to tool</a>
       </div>
       <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false"
               aria-controls="site-nav" aria-label="Open Navigation Menu">
@@ -93,7 +93,7 @@
       <section class="release" id="vulnerabilitys">
         <h2>Actionable findings</h2>
         <article class="rule" id="rule-dom_injection">
-          <h3><code>dom_injection</code> — DOM injection <span class="sev-chip sev-high">HIGH</span></h3>
+          <h3><code>dom_injection</code> — DOM injection <span class="sev-chip sev-high">HIGH</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/79.html" target="_blank" rel="noopener">CWE-79</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> The code inserts information taken from the page address or user input directly into the page without cleaning it first. An attacker can craft a link that makes the page run their own script in a visitor's browser (a common attack called cross-site scripting).</p>
           <p class="rule-meaning"><strong>What to do.</strong> Clean the value before it is inserted into the page, or use a safer rendering method. The security team should verify the listed lines.</p>
           <div class="code-box">
@@ -105,7 +105,7 @@ el.innerHTML = q;</pre>
           </div>
         </article>
         <article class="rule" id="rule-dom_injection_document_write">
-          <h3><code>dom_injection_document_write</code> — DOM injection (document.write) <span class="sev-chip sev-high">HIGH</span></h3>
+          <h3><code>dom_injection_document_write</code> — DOM injection (document.write) <span class="sev-chip sev-high">HIGH</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/79.html" target="_blank" rel="noopener">CWE-79</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> The code writes information taken from the page address or user input straight into the document. A crafted link can make a visitor's browser run attacker-controlled script (cross-site scripting).</p>
           <p class="rule-meaning"><strong>What to do.</strong> Avoid writing raw input into the document; render cleaned values only.</p>
           <div class="code-box">
@@ -118,7 +118,7 @@ document.body.appendChild(el);</pre>
           </div>
         </article>
         <article class="rule" id="rule-hardcoded_secret">
-          <h3><code>hardcoded_secret</code> — Hardcoded secret candidate <span class="sev-chip sev-high">HIGH</span></h3>
+          <h3><code>hardcoded_secret</code> — Hardcoded secret candidate <span class="sev-chip sev-high">HIGH</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/798.html" target="_blank" rel="noopener">CWE-798</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> A credential (password, API key or token) appears in plain text inside the shipped code. Anyone who can view or download the code - including this scan - can read it.</p>
           <p class="rule-meaning"><strong>What to do.</strong> Move the credential to a secure configuration store and replace the exposed one; assume it is compromised once it has shipped.</p>
           <div class="code-box">
@@ -131,7 +131,7 @@ fetch('https://api.example.com/v2?key=' + apiKey);</pre>
           </div>
         </article>
         <article class="rule" id="rule-data_exfiltration_flow">
-          <h3><code>data_exfiltration_flow</code> — Sensitive data sent to a network sink <span class="sev-chip sev-high">HIGH</span></h3>
+          <h3><code>data_exfiltration_flow</code> — Sensitive data sent to a network sink <span class="sev-chip sev-high">HIGH</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/200.html" target="_blank" rel="noopener">CWE-200</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> The code reads private information (login details, cookies, form input) and sends it to an external destination. If that destination is not yours or not expected, this is how data leaks happen.</p>
           <p class="rule-meaning"><strong>What to do.</strong> Confirm the destination is legitimate and intended; remove or gate the transfer if it is not.</p>
           <div class="code-box">
@@ -143,7 +143,7 @@ fetch('https://api.example.com/v2?key=' + apiKey);</pre>
           </div>
         </article>
         <article class="rule" id="rule-open_redirect">
-          <h3><code>open_redirect</code> — Client-side open redirect <span class="sev-chip sev-high">HIGH</span></h3>
+          <h3><code>open_redirect</code> — Client-side open redirect <span class="sev-chip sev-high">HIGH</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/601.html" target="_blank" rel="noopener">CWE-601</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> The code sends visitors to whatever address is in the link, without checking it. Attackers use this to wrap phishing pages in your site's trusted name.</p>
           <p class="rule-meaning"><strong>What to do.</strong> Only allow redirects to a list of approved addresses.</p>
           <div class="code-box">
@@ -156,7 +156,7 @@ if (ALLOWED.has(next)) location = next;  // allowlist, never a raw value</pre>
           </div>
         </article>
         <article class="rule" id="rule-dangerous_dynamic_code">
-          <h3><code>dangerous_dynamic_code</code> — Dangerous dynamic code execution <span class="sev-chip sev-high">HIGH</span></h3>
+          <h3><code>dangerous_dynamic_code</code> — Dangerous dynamic code execution <span class="sev-chip sev-high">HIGH</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/95.html" target="_blank" rel="noopener">CWE-95</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> The code constructs program instructions from text at run time. If any part of that text comes from outside, an attacker may be able to run their own instructions.</p>
           <p class="rule-meaning"><strong>What to do.</strong> Remove the dynamic execution, or make sure its input can never be influenced from outside.</p>
           <div class="code-box">
@@ -170,7 +170,7 @@ setTimeout(() =&gt; go(input), 100);  // for behaviour: pass a function</pre>
           </div>
         </article>
         <article class="rule" id="rule-vulnerable_dependency">
-          <h3><code>vulnerable_dependency</code> — Vulnerable dependency (npm advisory) <span class="sev-chip sev-high">HIGH</span></h3>
+          <h3><code>vulnerable_dependency</code> — Vulnerable dependency (npm advisory) <span class="sev-chip sev-high">HIGH</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/1104.html" target="_blank" rel="noopener">CWE-1104</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> </p>
           <p class="rule-meaning"><strong>What to do.</strong> </p>
           <div class="code-box">
@@ -182,7 +182,7 @@ setTimeout(() =&gt; go(input), 100);  // for behaviour: pass a function</pre>
           </div>
         </article>
         <article class="rule" id="rule-exposed_key_iv_pair">
-          <h3><code>exposed_key_iv_pair</code> — Exposed key + IV pair <span class="sev-chip sev-medium">MEDIUM</span></h3>
+          <h3><code>exposed_key_iv_pair</code> — Exposed key + IV pair <span class="sev-chip sev-medium">MEDIUM</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/321.html" target="_blank" rel="noopener">CWE-321</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> Both the encryption key and its starting value are in the shipped code. Encryption with a visible key protects nothing.</p>
           <p class="rule-meaning"><strong>What to do.</strong> Move the key somewhere safe; treat data encrypted with it as exposed.</p>
           <div class="code-box">
@@ -195,7 +195,7 @@ const iv  = 'abcdef9876543210';</pre>
           </div>
         </article>
         <article class="rule" id="rule-static_crypto_key">
-          <h3><code>static_crypto_key</code> — Static cryptographic key <span class="sev-chip sev-medium">MEDIUM</span></h3>
+          <h3><code>static_crypto_key</code> — Static cryptographic key <span class="sev-chip sev-medium">MEDIUM</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/321.html" target="_blank" rel="noopener">CWE-321</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> A fixed encryption key is embedded in the code where anyone reading it can copy it.</p>
           <p class="rule-meaning"><strong>What to do.</strong> Move the key to a secure store and rotate it.</p>
           <div class="code-box">
@@ -207,7 +207,7 @@ const iv  = 'abcdef9876543210';</pre>
           </div>
         </article>
         <article class="rule" id="rule-insecure_postmessage">
-          <h3><code>insecure_postmessage</code> — Insecure postMessage (wildcard origin) <span class="sev-chip sev-medium">MEDIUM</span></h3>
+          <h3><code>insecure_postmessage</code> — Insecure postMessage (wildcard origin) <span class="sev-chip sev-medium">MEDIUM</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/359.html" target="_blank" rel="noopener">CWE-359</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> The code sends a message to another window and explicitly allows ANY origin to receive it. If the receiving page is ever embedded by an attacker-controlled page, that page receives the message too.</p>
           <p class="rule-meaning"><strong>What to do.</strong> Name the exact origin instead of the wildcard, and validate the payload on the receiving side.</p>
           <div class="code-box">
@@ -218,7 +218,7 @@ const iv  = 'abcdef9876543210';</pre>
           </div>
         </article>
         <article class="rule" id="rule-prototype_pollution">
-          <h3><code>prototype_pollution</code> — Prototype pollution pattern <span class="sev-chip sev-medium">MEDIUM</span></h3>
+          <h3><code>prototype_pollution</code> — Prototype pollution pattern <span class="sev-chip sev-medium">MEDIUM</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/1321.html" target="_blank" rel="noopener">CWE-1321</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> The code merges or writes objects in a way that can modify JavaScript's shared prototypes when the input comes from the page address or user data. Successful pollution can change application logic everywhere.</p>
           <p class="rule-meaning"><strong>What to do.</strong> Validate untrusted objects against a schema and reject keys like __proto__ and constructor before merging.</p>
           <div class="code-box">
@@ -230,7 +230,7 @@ const iv  = 'abcdef9876543210';</pre>
           </div>
         </article>
         <article class="rule" id="rule-jquery_dom_manipulation">
-          <h3><code>jquery_dom_manipulation</code> — jQuery DOM manipulation with untrusted data <span class="sev-chip sev-medium">MEDIUM</span></h3>
+          <h3><code>jquery_dom_manipulation</code> — jQuery DOM manipulation with untrusted data <span class="sev-chip sev-medium">MEDIUM</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/79.html" target="_blank" rel="noopener">CWE-79</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> jQuery DOM methods that interpret HTML are fed data that may come from the page address or user input -- the jQuery sibling of DOM injection.</p>
           <p class="rule-meaning"><strong>What to do.</strong> Use .text() for plain values, or sanitize with DOMPurify before calling .html()/.append() with markup.</p>
           <div class="code-box">
@@ -244,7 +244,7 @@ const iv  = 'abcdef9876543210';</pre>
       <section class="release" id="observations">
         <h2>Observations</h2>
         <article class="rule" id="rule-data_exfiltration_candidate">
-          <h3><code>data_exfiltration_candidate</code> — URL-derived data sent to an external destination <span class="sev-chip sev-low">LOW</span></h3>
+          <h3><code>data_exfiltration_candidate</code> — URL-derived data sent to an external destination <span class="sev-chip sev-low">LOW</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/200.html" target="_blank" rel="noopener">CWE-200</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> The code both reads private information and contacts external services. This is only a pattern match - it may be perfectly normal - but the combination is worth checking.</p>
           <p class="rule-meaning"><strong>What to do.</strong> Have the security team confirm where the data actually goes.</p>
           <div class="code-box">
@@ -255,7 +255,7 @@ const iv  = 'abcdef9876543210';</pre>
           </div>
         </article>
         <article class="rule" id="rule-sensitive_storage">
-          <h3><code>sensitive_storage</code> — Sensitive value in browser storage <span class="sev-chip sev-medium">MEDIUM</span></h3>
+          <h3><code>sensitive_storage</code> — Sensitive value in browser storage <span class="sev-chip sev-medium">MEDIUM</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/922.html" target="_blank" rel="noopener">CWE-922</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> The code stores sensitive-looking information in the browser's storage. Anything stored there can be read by other scripts on the page.</p>
           <p class="rule-meaning"><strong>What to do.</strong> Store only what is necessary, and prefer server-side sessions.</p>
           <div class="code-box">
@@ -267,7 +267,7 @@ const iv  = 'abcdef9876543210';</pre>
           </div>
         </article>
         <article class="rule" id="rule-unsafe_runtime">
-          <h3><code>unsafe_runtime</code> — Risky runtime pattern <span class="sev-chip sev-low">LOW</span></h3>
+          <h3><code>unsafe_runtime</code> — Risky runtime pattern <span class="sev-chip sev-low">LOW</span> <a class="sev-chip sev-cwe" href="https://cwe.mitre.org/data/definitions/95.html" target="_blank" rel="noopener">CWE-95</a></h3>
           <p class="rule-meaning"><strong>What it means.</strong> The code uses mechanisms that build or run instructions dynamically - legitimate in some cases, dangerous if the input is ever influenced by an outsider.</p>
           <p class="rule-meaning"><strong>What to do.</strong> Security team: check whether outside input can reach these calls.</p>
           <div class="code-box">
@@ -357,20 +357,20 @@ const iv  = 'abcdef9876543210';</pre>
 
       <nav class="footer-col" aria-label="Product">
         <h3>Product</h3>
-        <a href="../tool/">⚡ Open the Analyzer</a>
-        <a href="../changelog/">📜 What's New</a>
+        <a href="../tool/"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'</svg> Open the Analyzer</a>
+        <a href="../changelog/"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>'</svg> What's New</a>
       </nav>
 
       <nav class="footer-col" aria-label="Connect">
         <h3>Connect</h3>
-        <a href="https://github.com/AmitPal-CyberBuddy/ScriptSentry/issues/new/choose" target="_blank" rel="noopener noreferrer">🐞 Report a bug or a wrong finding</a>
-        <a href="https://www.linkedin.com/in/amitpal-wb/" target="_blank" rel="noopener noreferrer">💼 LinkedIn</a>
+        <a href="https://github.com/AmitPal-CyberBuddy/ScriptSentry/issues/new/choose" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'<path d="M8 6l-1-2M16 6l1-2"/><rect x="8" y="6" width="8" height="12" rx="4"/><path d="M8 12H3M21 12h-5M8 8L5 6M16 8l3-2M8 16l-3 2M16 16l3 2"/>'</svg> Report a bug or a wrong finding</a>
+        <a href="https://www.linkedin.com/in/amitpal-wb/" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 13h18"/>'</svg> LinkedIn</a>
       </nav>
     </div>
 
     <div class="footer-legal">
       <p>
-        ⚖️ <b>Authorized testing only.</b> Scan only what you own or have written permission
+        <svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'<path d="M12 3v18M5 21h14M6 3h12"/><path d="M6 3L3 10a3.2 3.2 0 0 0 6 0z"/><path d="M18 3l-3 7a3.2 3.2 0 0 0 6 0z"/>'</svg> <b>Authorized testing only.</b> Scan only what you own or have written permission
         to test. ScriptSentry gives you triage signals, not proof — verify every finding before
         you act on it. You are responsible for complying with all applicable laws and the
         target's terms of service.

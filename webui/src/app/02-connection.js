@@ -242,7 +242,7 @@
     if (!cap) return;
     if (!backendConnected || !lastHealth) {
       strip.hidden = false;
-      cap.textContent = "🔌 Start the engine first — see the 2-minute guide";
+      cap.innerHTML = svgIcon("plug") + " Start the engine first — see the 2-minute guide";
       cap.classList.add("is-off");
       cap.title = "This page is only the interface. The actual scanner runs on YOUR machine. Click for the setup guide: download one file, run one command, paste the token it prints.";
       if (!cap.dataset.wired) {
@@ -256,11 +256,11 @@
     strip.hidden = false;
     const rt = lastHealth.runtime_evidence || {};
     if (rt.enabled && rt.playwright) {
-      cap.textContent = "🖥️ Runtime: on for URL scans";
+      cap.innerHTML = svgIcon("monitor") + " Runtime: on for URL scans";
       cap.classList.remove("is-off");
       cap.title = "URL scans are watched by a local headless browser — network, DOM sinks, eval, storage keys, runtime-loaded scripts. Pasting or uploading code stays static. Enabled automatically; no toggle needed.";
     } else {
-      cap.textContent = "🚫 Runtime: static only";
+      cap.innerHTML = svgIcon("blocked") + " Runtime: static only";
       cap.classList.add("is-off");
       cap.title = "Playwright/Chromium is not installed on this machine (or runtime evidence is disabled). URL scans still work; the Runtime tab will say why. Install with: python -m playwright install chromium";
     }
@@ -317,7 +317,7 @@
     // One honest sentence about pairing: the local dashboard asks for the
     // token once — it is printed in the terminal where the engine runs.
     const carriedNote = currentScanRequest
-      ? `<p class="modal-note" style="margin:0 0 10px">✅ Your scan travels with that link — the local page fills in `
+      ? `<p class="modal-note" style="margin:0 0 10px">${svgIcon("check")} Your scan travels with that link — the local page fills in `
         + `${currentScanRequest.mode === "url" ? "the target URL and scan settings"
             : currentScanRequest.mode === "files" ? "your uploaded files"
             : "your pasted code"} automatically and starts right after pairing.</p>`
@@ -334,7 +334,7 @@
       + `Open it, then paste the <b>pairing token</b> once when it asks — the token is printed in the `
       + `terminal where the engine is running:</p>` +
       `<a class="btn" id="open-local-dashboard" href="${escapeHtml(url)}" target="_blank" rel="noopener">` +
-      `🚀 Open ${escapeHtml(localDashboardUrl())}</a>`;
+      `${svgIcon("launch")} Open ${escapeHtml(localDashboardUrl())}</a>`;
 
     const status = $("#engine-status-aside");
     if (status) aside.insertBefore(note, status);

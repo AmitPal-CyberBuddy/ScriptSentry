@@ -30,11 +30,11 @@
       const text = await res.text();
       if (!text.trim()) throw new Error("empty file");
       saveBlob(new Blob([text], { type: "text/x-python;charset=utf-8" }), filename);
-      if (hint) hint.textContent = `✅ Downloaded ${filename}`;
-      btn.textContent = "✅ Downloaded";
+      if (hint) hint.textContent = `${svgIcon("check")} Downloaded ${filename}`;
+      btn.innerHTML = svgIcon("check") + " Downloaded";
     } catch {
       // Last resort: open it so the user can still save it manually.
-      if (hint) hint.textContent = "⚠️ Couldn't save automatically — opened in a new tab.";
+      if (hint) hint.innerHTML = svgIcon("alert") + " Couldn't save automatically — opened in a new tab.";
       window.open(url, "_blank", "noopener,noreferrer");
     } finally {
       setTimeout(() => {

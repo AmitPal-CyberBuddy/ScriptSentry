@@ -304,6 +304,10 @@ providers are deliberately unsupported.
 
 ## Reading the dashboard
 
+The console prints, too: File → Print (or `Ctrl/Cmd+P`) hides the input
+chrome and outputs the analysis content on white — the same light print
+theme the HTML export uses.
+
 The interface is organized into five focused views:
 
 1. **📊 Overview** — answers three questions up front: *is this app risky?*,
@@ -325,11 +329,17 @@ The interface is organized into five focused views:
 
 After any analysis, use the header buttons (or the API/CLI) to export:
 
-- **HTML** — polished, shareable report
+- **HTML** — polished, shareable report; prints as a clean light-surface
+  report (severity colors kept, cards never split across pages)
 - **TXT** — triage-friendly text report
 - **CSV** — spreadsheet of findings (severity, confidence, status, source→sink,
   flow, quality, limitations)
-- **SARIF** — SARIF 2.1.0 for GitHub code scanning / CI
+- **SARIF** — SARIF 2.1.0 for GitHub code scanning / CI. Rules carry their CWE
+  mapping (`cwe-79` …), a `helpUri` into the hosted [rule reference][rules-page],
+  plain-language descriptions and a CVSS-style `security-severity`, so code
+  scanning shows *why* a finding matters, not just an opaque rule id.
+
+[rules-page]: https://amitpal-cyberbuddy.github.io/ScriptSentry/rules/
 
 ---
 

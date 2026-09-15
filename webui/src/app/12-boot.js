@@ -103,7 +103,7 @@
           ta.remove();
         }
         const original = btn.textContent;
-        btn.textContent = "✅ Copied";
+        btn.innerHTML = svgIcon("check") + " Copied";
         setTimeout(() => (btn.textContent = original), 1600);
       });
     });

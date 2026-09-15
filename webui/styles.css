@@ -1824,6 +1824,22 @@ svg.chart {
   display: none;
 }
 
+/* ---- inline SVG icon system (replaces emoji chrome) ----
+   Icons inherit the current text color and scale with the font: 1em square,
+   optically centered on the text baseline. */
+.icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex: none;
+  vertical-align: -0.125em;
+}
+
+.step-ico .icon {
+  width: 22px;
+  height: 22px;
+}
+
 .step-ico {
   flex: 0 0 46px;
   width: 46px;
@@ -3968,6 +3984,18 @@ main[id] {
   color: var(--muted);
 }
 
+/* CWE chip on the rules page: a link, so it must not inherit link chrome. */
+a.sev-chip.sev-cwe {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+a.sev-chip.sev-cwe:hover,
+a.sev-chip.sev-cwe:focus-visible {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
 .sev-chip.sev-critical {
   color: var(--danger);
   border-color: rgba(255, 77, 109, 0.45);
@@ -4229,4 +4257,65 @@ main[id] {
 .history-row .btn {
   padding: 2px 10px;
   font-size: 0.85em;
+}
+
+/* ---- print: the console prints as a light, ink-cheap report ----------------
+   Printing the dashboard used to produce a dark sheet: heavy background ink,
+   invisible text where browsers drop background colors, and cards sliced
+   mid-row across pages. Print gets its own light theme instead: chrome
+   (nav, hero, the input console, buttons, filters) is hidden and only the
+   analysis content prints, one card per block. */
+@media print {
+  /* Hide everything that is interaction, not content. */
+  .site-nav,
+  .tool-hero,
+  #console,
+  .footer,
+  .btn,
+  .view-tabs,
+  .history-diff-row,
+  #finding-filters,
+  #finding-search,
+  .inline-tabs,
+  .privacy-modal-backdrop,
+  .toast {
+    display: none !important;
+  }
+
+  /* Light theme: white paper, dark text, hairline borders. */
+  html, body {
+    background: #fff !important;
+    color: #14181f !important;
+  }
+  .wrap, main, section, .card, .console-caps, .results, .history-card {
+    background: #fff !important;
+    color: #14181f !important;
+    border-color: #d7dde5 !important;
+    box-shadow: none !important;
+    animation: none !important;
+  }
+  .card {
+    border: 1px solid #d7dde5 !important;
+    break-inside: avoid;
+  }
+  h1, h2, h3, h4, p, li, span, b, td, th, code {
+    color: #14181f !important;
+  }
+  a { color: #0b3d91 !important; text-decoration: underline; }
+
+  /* Cards must not split mid-row; headings stay with their content. */
+  .card, .sig, .history-row, .finding-row, .storage-fact, .bar {
+    break-inside: avoid;
+  }
+  h2, h3 { break-after: avoid; }
+
+  /* Full width, no decorative layout caps. */
+  .wrap, .wrap--wide {
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .results {
+    display: block !important;
+  }
 }
