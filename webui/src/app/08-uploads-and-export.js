@@ -11,10 +11,10 @@
       return;
     }
     list.innerHTML = pendingFiles.map((f, i) => `<div class="file-item">
-      <span>📄</span>
+      <span>${svgIcon("file")}</span>
       <span class="fname">${escapeHtml(f.name)}</span>
       <span class="fsize">${formatBytes(f.size)}</span>
-      <button class="fremove" data-i="${i}" title="Remove" type="button">✖</button>
+      <button class="fremove" data-i="${i}" title="Remove" type="button">${svgIcon("x")}</button>
     </div>`).join("");
     list.querySelectorAll(".fremove").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -232,9 +232,9 @@
       const totalSources = mappedFiles.reduce((n, f) => n + Number(f.source_map.analyzed_sources || 0), 0);
       const mapFindings = mappedFiles.reduce((n, f) => n + Number(f.source_map.sources_findings || 0), 0);
       notes.push(
-        `<b>🔗 Source maps analyzed.</b> ${totalSources} original source file(s) across ${mappedFiles.length} bundle(s) `
+        `<b>${svgIcon("link")} Source maps analyzed.</b> ${totalSources} original source file(s) across ${mappedFiles.length} bundle(s) `
         + `were recovered from source maps and analyzed; ${mapFindings} finding(s) are attributed to their `
-        + "original pre-build file names (marked with 🔗 in the Findings view).",
+        + "original pre-build file names (marked with the link icon in the Findings view).",
       );
     }
     const warnings = new Set();

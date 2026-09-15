@@ -1,0 +1,92 @@
+{
+  "name": "scriptsentry",
+  "displayName": "ScriptSentry",
+  "description": "Client-side JavaScript security findings from the ScriptSentry engine, in the Problems panel. Everything runs locally.",
+  "version": "0.1.0",
+  "publisher": "amitpal-cyberbuddy",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AmitPal-CyberBuddy/ScriptSentry"
+  },
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "security",
+    "static analysis",
+    "xss",
+    "javascript",
+    "sarif"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "scriptsentry.scanWorkspace",
+        "title": "ScriptSentry: Scan Workspace"
+      },
+      {
+        "command": "scriptsentry.scanFile",
+        "title": "ScriptSentry: Scan Current File"
+      },
+      {
+        "command": "scriptsentry.clear",
+        "title": "ScriptSentry: Clear Findings"
+      },
+      {
+        "command": "scriptsentry.showOutput",
+        "title": "ScriptSentry: Show Engine Output"
+      }
+    ],
+    "configuration": {
+      "title": "ScriptSentry",
+      "properties": {
+        "scriptsentry.engineCommand": {
+          "type": [
+            "string",
+            "array"
+          ],
+          "default": "",
+          "description": "Command that runs the engine CLI, e.g. \"python3 /path/to/ScriptSentry/main.py\". Paths with spaces: use an array [\"python3\", \"/path with spaces/main.py\"]. Leave empty to auto-detect (the launcher cache at ~/.scriptsentry/bootstrap, or a ScriptSentry checkout open in the workspace)."
+        },
+        "scriptsentry.scanOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run a scan of the saved file automatically (JavaScript/TypeScript files)."
+        },
+        "scriptsentry.profile": {
+          "type": "string",
+          "enum": [
+            "balanced",
+            "fast",
+            "strict"
+          ],
+          "default": "balanced",
+          "description": "Engine analysis profile."
+        },
+        "scriptsentry.showSuppressed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also show findings you marked as false positives in the dashboard (as hints, prefixed [false positive])."
+        },
+        "scriptsentry.engineTimeoutSeconds": {
+          "type": "number",
+          "default": 180,
+          "minimum": 10,
+          "description": "Kill the engine after this many seconds."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -6,6 +6,7 @@ escape the extraction directory, and its dependency list must actually cover
 the importable modules it checks for.
 """
 import io
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -106,6 +107,75 @@ class ExtractEngineTest(unittest.TestCase):
         ])
         with self.assertRaises(RuntimeError):
             self._extract(archive)
+
+
+class UpdateFlagTest(unittest.TestCase):
+    """The launcher's cache contract.
+
+    A plain run reuses a previously downloaded engine forever and never hits
+    the network again — which is exactly why 'my fix never arrived' looked
+    like the fix not working. ``--update`` is the explicit way out, and the
+    startup banner must say which build is being served.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="scriptsentry-upd-")
+        self.addCleanup(self._tmp.cleanup)
+        self.cache = Path(self._tmp.name) / "cache"
+        # A launcher location that has no engine next to it, so main() takes
+        # the bootstrap/cache path instead of "engine found next to launcher".
+        self.launcher_dir = Path(self._tmp.name) / "elsewhere"
+        self.launcher_dir.mkdir()
+
+    def _seed_cache(self, marker: str) -> Path:
+        cached = self.cache / "bootstrap" / "main"
+        (cached / "core").mkdir(parents=True)
+        (cached / "server.py").write_text(marker, encoding="utf-8")
+        (cached / "core" / "analyzer_service.py").write_text(marker, encoding="utf-8")
+        return cached
+
+    def _run_main(self, argv):
+        engine_dirs = []
+        archive = _tar_gz([
+            ("ScriptSentry-main/server.py", tarfile.REGTYPE, "NEW ENGINE", ""),
+            ("ScriptSentry-main/core/analyzer_service.py", tarfile.REGTYPE, "NEW ENGINE", ""),
+        ])
+        with mock.patch.object(scriptsentry, "BOOTSTRAP_DIR", self.cache / "bootstrap"), \
+             mock.patch.object(scriptsentry, "__file__", str(self.launcher_dir / "scriptsentry.py")), \
+             mock.patch.object(scriptsentry, "download_archive", return_value=archive) as download, \
+             mock.patch.object(scriptsentry, "install_dependencies"), \
+             mock.patch.object(
+                 scriptsentry, "run_server",
+                 side_effect=lambda engine_dir, server_args: engine_dirs.append(engine_dir),
+             ), \
+             mock.patch.object(sys, "argv", argv):
+            rc = scriptsentry.main()
+        return rc, download.call_count, engine_dirs
+
+    def test_plain_run_reuses_cache_without_downloading(self):
+        cached = self._seed_cache("OLD ENGINE")
+        rc, downloads, engine_dirs = self._run_main(["scriptsentry.py"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(downloads, 0, "a plain run must not re-download the engine")
+        self.assertEqual(engine_dirs, [cached])
+        self.assertEqual((cached / "server.py").read_text(encoding="utf-8"), "OLD ENGINE")
+
+    def test_update_discards_cache_and_downloads_fresh_engine(self):
+        cached = self._seed_cache("OLD ENGINE")
+        rc, downloads, engine_dirs = self._run_main(["scriptsentry.py", "--update"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(downloads, 1)
+        self.assertEqual(engine_dirs, [cached], "the fresh engine must land at the cache path")
+        self.assertEqual((cached / "server.py").read_text(encoding="utf-8"), "NEW ENGINE")
+        self.assertTrue((cached / scriptsentry.META_NAME).is_file())
+
+    def test_download_meta_roundtrip(self):
+        engine = self._seed_cache("OLD ENGINE")
+        self.assertEqual(scriptsentry._downloaded_at(engine), "unknown")
+        scriptsentry._write_download_meta(engine)
+        stamp = scriptsentry._downloaded_at(engine)
+        self.assertNotEqual(stamp, "unknown")
+        self.assertIn("T", stamp, "timestamp should be ISO-8601")
 
 
 class DependenciesTest(unittest.TestCase):

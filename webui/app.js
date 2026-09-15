@@ -5,22 +5,77 @@
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-  const ICONS = {
-    shield: "🛡️",
-    key: "🔑",
-    vial: "🧪",
-    lock: "🔒",
-    route: "🌐",
-    bolt: "⚡",
-    database: "💾",
-    bug: "🐞",
-    alert: "⚠️",
-    gear: "⚙️",
-    sparkles: "✨",
-    layers: "🧰",
-    star: "🌟",
-    search: "🔎",
+  // Icon set: small stroke SVGs (feather-style geometry, 24x24, currentColor)
+  // replacing the emoji chrome. Emoji render differently on every platform
+  // and read as decoration; these are crisp at any size and inherit the
+  // text color. All UI icons live here so the set stays coherent.
+  const ICON_PATHS = {
+    shield: '<path d="M12 3l7 3v5c0 4.6-3 7.7-7 9.3C8 18.7 5 15.6 5 11V6z"/>',
+    key: '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
+    vial: '<path d="M10 2v6.3L4.6 17.9A2 2 0 0 0 6.4 21h11.2a2 2 0 0 0 1.8-3.1L14 8.3V2"/><path d="M8.5 2h7"/><path d="M7 15h10"/>',
+    lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a13.5 13.5 0 0 1 0 18 13.5 13.5 0 0 1 0-18z"/>',
+    bolt: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+    database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
+    bug: '<path d="M8 6l-1-2M16 6l1-2"/><rect x="8" y="6" width="8" height="12" rx="4"/><path d="M8 12H3M21 12h-5M8 8L5 6M16 8l3-2M8 16l-3 2M16 16l3 2"/>',
+    alert: '<path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/>',
+    sparkles: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M18.5 14.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/>',
+    layers: '<path d="M12 2l10 5-10 5L2 7z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/>',
+    star: '<path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z"/>',
+    search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/>',
+    scale: '<path d="M12 3v18M5 21h14M6 3h12"/><path d="M6 3L3 10a3.2 3.2 0 0 0 6 0z"/><path d="M18 3l-3 7a3.2 3.2 0 0 0 6 0z"/>',
+    tool: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+    check: '<path d="M20 6L9 17l-5-5"/>',
+    x: '<path d="M18 6L6 18M6 6l12 12"/>',
+    download: '<path d="M12 3v12"/><path d="M6 11l6 6 6-6"/><path d="M4 21h16"/>',
+    palette: '<path d="M12 3a9 9 0 1 0 0 18h1.5a2.5 2.5 0 0 0 0-5H12a2 2 0 0 1 0-4h6.5A3.5 3.5 0 0 0 22 8.5C22 5.5 17.5 3 12 3z"/><path d="M7.5 10.5h.01M10.5 7h.01M15 7h.01"/>',
+    target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5.5"/><circle cx="12" cy="12" r="2"/>',
+    home: '<path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/>',
+    "git-branch": '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/><path d="M6 9v6"/>',
+    container: '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>',
+    eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
+    briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 13h18"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    file: '<path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/>',
+    "file-text": '<path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6"/>',
+    chart: '<path d="M3 3v18h18"/><path d="M8 17v-5M13 17V7M18 17v-8"/>',
+    clipboard: '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/>',
+    pin: '<path d="M12 21s-7-5.8-7-11a7 7 0 0 1 14 0c0 5.2-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+    ruler: '<path d="M3 17.2L17.2 3 21 6.8 6.8 21z"/><path d="M8 16l1.5 1.5M11 13l1.5 1.5M14 10l1.5 1.5M17 7l1.5 1.5"/>',
+    book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+    "book-open": '<path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/>',
+    edit: '<path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
+    refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>',
+    plug: '<path d="M9 7V2M15 7V2"/><path d="M6 7h12v4a6 6 0 0 1-12 0z"/><path d="M12 17v5"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1-1"/>',
+    flame: '<path d="M12 2c1 3-2 4.5-2 8a2.5 2.5 0 0 0 5 .5C17 12 19 13 19 16a7 7 0 0 1-14 0c0-5 4-6.5 7-14z"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+    trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 15h10l1-15"/><path d="M10 11v6M14 11v6"/>',
+    message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    launch: '<path d="M5 19L19 5"/><path d="M8 5h11v11"/>',
+    signal: '<rect x="8" y="2" width="8" height="20" rx="4"/><circle cx="12" cy="7" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="17" r="1.6"/>',
+    blocked: '<circle cx="12" cy="12" r="9"/><path d="M5.5 5.5l13 13"/>',
+    cpu: '<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="10" y="10" width="4" height="4"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+    compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
+    code: '<path d="M8 6L2 12l6 6M16 6l6 6-6 6"/>',
+    save: '<path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h7V3"/><path d="M8 21v-7h8v7"/>',
   };
+
+  function svgIcon(name, cls) {
+    const body = ICON_PATHS[name];
+    if (!body) return "";
+    return `<svg class="icon${cls ? " " + cls : ""}" aria-hidden="true" focusable="false" `
+      + `viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" `
+      + `stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+  }
+
+  // Legacy keyed lookups (ICONS[c.icon] in charts/steps) keep working.
+  const ICONS = {};
+  Object.keys(ICON_PATHS).forEach((name) => { ICONS[name] = svgIcon(name); });
+  // The dashboard's category chips call the globe "route".
+  ICONS.route = svgIcon("globe");
 
   let payload = null;
   let lastQuery = null;
@@ -300,7 +355,7 @@
     if (!cap) return;
     if (!backendConnected || !lastHealth) {
       strip.hidden = false;
-      cap.textContent = "🔌 Start the engine first — see the 2-minute guide";
+      cap.innerHTML = svgIcon("plug") + " Start the engine first — see the 2-minute guide";
       cap.classList.add("is-off");
       cap.title = "This page is only the interface. The actual scanner runs on YOUR machine. Click for the setup guide: download one file, run one command, paste the token it prints.";
       if (!cap.dataset.wired) {
@@ -314,11 +369,11 @@
     strip.hidden = false;
     const rt = lastHealth.runtime_evidence || {};
     if (rt.enabled && rt.playwright) {
-      cap.textContent = "🖥️ Runtime: on for URL scans";
+      cap.innerHTML = svgIcon("monitor") + " Runtime: on for URL scans";
       cap.classList.remove("is-off");
       cap.title = "URL scans are watched by a local headless browser — network, DOM sinks, eval, storage keys, runtime-loaded scripts. Pasting or uploading code stays static. Enabled automatically; no toggle needed.";
     } else {
-      cap.textContent = "🚫 Runtime: static only";
+      cap.innerHTML = svgIcon("blocked") + " Runtime: static only";
       cap.classList.add("is-off");
       cap.title = "Playwright/Chromium is not installed on this machine (or runtime evidence is disabled). URL scans still work; the Runtime tab will say why. Install with: python -m playwright install chromium";
     }
@@ -375,7 +430,7 @@
     // One honest sentence about pairing: the local dashboard asks for the
     // token once — it is printed in the terminal where the engine runs.
     const carriedNote = currentScanRequest
-      ? `<p class="modal-note" style="margin:0 0 10px">✅ Your scan travels with that link — the local page fills in `
+      ? `<p class="modal-note" style="margin:0 0 10px">${svgIcon("check")} Your scan travels with that link — the local page fills in `
         + `${currentScanRequest.mode === "url" ? "the target URL and scan settings"
             : currentScanRequest.mode === "files" ? "your uploaded files"
             : "your pasted code"} automatically and starts right after pairing.</p>`
@@ -392,7 +447,7 @@
       + `Open it, then paste the <b>pairing token</b> once when it asks — the token is printed in the `
       + `terminal where the engine is running:</p>` +
       `<a class="btn" id="open-local-dashboard" href="${escapeHtml(url)}" target="_blank" rel="noopener">` +
-      `🚀 Open ${escapeHtml(localDashboardUrl())}</a>`;
+      `${svgIcon("launch")} Open ${escapeHtml(localDashboardUrl())}</a>`;
 
     const status = $("#engine-status-aside");
     if (status) aside.insertBefore(note, status);
@@ -518,11 +573,11 @@
       const text = await res.text();
       if (!text.trim()) throw new Error("empty file");
       saveBlob(new Blob([text], { type: "text/x-python;charset=utf-8" }), filename);
-      if (hint) hint.textContent = `✅ Downloaded ${filename}`;
-      btn.textContent = "✅ Downloaded";
+      if (hint) hint.textContent = `${svgIcon("check")} Downloaded ${filename}`;
+      btn.innerHTML = svgIcon("check") + " Downloaded";
     } catch {
       // Last resort: open it so the user can still save it manually.
-      if (hint) hint.textContent = "⚠️ Couldn't save automatically — opened in a new tab.";
+      if (hint) hint.innerHTML = svgIcon("alert") + " Couldn't save automatically — opened in a new tab.";
       window.open(url, "_blank", "noopener,noreferrer");
     } finally {
       setTimeout(() => {
@@ -685,6 +740,34 @@
 
     const heroSetup = $("#hero-setup");
     if (heroSetup) heroSetup.addEventListener("click", openPrivacyModal);
+
+    // Demo report: renders a real engine report for a labelled example
+    // bundle through the exact same pipeline a live scan uses. This is how
+    // a first-time visitor on the hosted page sees the product before
+    // installing anything -- and it can never advertise detections the
+    // engine does not actually make, because the payload is generated by
+    // the engine itself (tools/build_demo_payload.py).
+    const demoBtn = $("#demo-report");
+    if (demoBtn) demoBtn.addEventListener("click", () => {
+      const show = () => {
+        const demo = window.SS_DEMO_REPORT;
+        if (!demo || !demo.summary) {
+          showTransferNote("The demo report could not be loaded.", true);
+          return;
+        }
+        payload = demo;
+        renderDashboard();
+        updateRescanButton();  // the demo is not re-runnable: hide the rescan affordance
+        const results = $("#results");
+        if (results) results.scrollIntoView({ behavior: "smooth", block: "start" });
+      };
+      if (window.SS_DEMO_REPORT) return show();
+      const script = document.createElement("script");
+      script.src = "../demo/report.js";
+      script.onload = show;
+      script.onerror = () => showTransferNote("The demo report could not be loaded.", true);
+      document.head.appendChild(script);
+    });
 
     const closeX = $("#close-modal-x");
     if (closeX) closeX.addEventListener("click", closePrivacyModal);
@@ -876,10 +959,13 @@
     if (inline) inline.click();
   }
 
-  function showTransferNote(text, isWarning = false) {
+  function showTransferNote(text, isWarning = false, allowHtml = false) {
     const node = $("#transfer-note");
     if (!node) return;
-    node.textContent = text;
+    // textContent by default: dynamic messages must never inject markup.
+    // allowHtml is for static, engine-authored strings (icon + literal text).
+    if (allowHtml) node.innerHTML = text;
+    else node.textContent = text;
     node.classList.toggle("is-warn", !!isWarning);
     node.hidden = false;
     if (!isWarning) {
@@ -916,7 +1002,7 @@
         if (req.max_depth) $("#max-depth").value = String(req.max_depth);
         if (req.max_files) $("#max-files").value = String(req.max_files);
         if (req.max_workers) $("#workers").value = String(req.max_workers);
-        showTransferNote(`✅ Scan carried over from the hosted page — target ${req.url}. Starting…`);
+        showTransferNote(`${svgIcon("check")} Scan carried over from the hosted page — target ${req.url}. Starting…`);
         $("#console").scrollIntoView({ behavior: "smooth", block: "start" });
         await new Promise((r) => setTimeout(r, 400));
         await analyzeUrl();
@@ -924,7 +1010,7 @@
         selectInputPane("paste");
         $("#code-input").value = req.code;
         if (req.filename) $("#filename-input").value = req.filename;
-        showTransferNote("✅ Your pasted code was carried over from the hosted page. Starting…");
+        showTransferNote(svgIcon("check") + " Your pasted code was carried over from the hosted page. Starting…", false, true);
         $("#console").scrollIntoView({ behavior: "smooth", block: "start" });
         await new Promise((r) => setTimeout(r, 400));
         await analyzeCode();
@@ -936,7 +1022,7 @@
           content: f.code,
         }));
         updateFileList();
-        showTransferNote(`✅ ${req.files.length} file(s) carried over from the hosted page. Starting…`);
+        showTransferNote(`${svgIcon("check")} ${req.files.length} file(s) carried over from the hosted page. Starting…`);
         $("#console").scrollIntoView({ behavior: "smooth", block: "start" });
         await new Promise((r) => setTimeout(r, 400));
         await analyzeFiles();
@@ -1602,6 +1688,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
 
   function renderHistoryChip() {
     const box = $("#history-diff");
+    updateRescanButton();
     if (!box) return;
     const link = $("#history-storage-link");
     const h = payload && payload.history;
@@ -1610,6 +1697,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       if (link) link.hidden = true;
       return;
     }
+    // Counts first (immediate), then the finding-level revalidation summary
+    // (verdicts, severity moves, coverage honesty) once it arrives.
     const parts = [];
     if (h.new_count) parts.push(`<strong>${h.new_count}</strong> new`);
     if (h.resolved_count) parts.push(`<strong>${h.resolved_count}</strong> resolved`);
@@ -1617,6 +1706,71 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     box.innerHTML = `vs previous scan of this target: ${parts.join(" · ")}`;
     box.hidden = false;
     if (link) link.hidden = false;
+    refreshRevalidation(h.previous_scan_id, h.scan_id);
+  }
+
+  /* Finding-level revalidation: what happened to the INITIAL findings on
+     this re-scan — still there? worse? really fixed? Fetches the engine's
+     comparison and renders the plain summary plus the top verdict rows. */
+  async function refreshRevalidation(fromId, toId) {
+    const box = $("#history-diff");
+    if (!box || !fromId || !toId) return;
+    try {
+      const data = await getJSON(
+        `/api/history/diff?from=${encodeURIComponent(fromId)}&to=${encodeURIComponent(toId)}`);
+      const rv = data && (data.revalidation || data.diff);
+      if (!rv || !Array.isArray(rv.summary_lines)) return;
+      const verdictRows = (rv.verdicts || []).slice(0, 4).map((v) => {
+        const label = { worsened: "▲ worse", persisted: "● still there", new: "＋ new",
+                        improved: "▼ improved", resolved: "✓ no longer detected" }[v.verdict] || v.verdict;
+        const change = v.change ? ` <i>(${escapeHtml(v.change)})</i>` : "";
+        return `<div class="history-row"><span class="meta">${label}</span>` +
+               `<span>${escapeHtml(v.title || v.finding_id)}${change}</span></div>`;
+      }).join("");
+      box.innerHTML = `revalidation vs previous scan:<br/>` +
+        rv.summary_lines.map((l) => `<div>${escapeHtml(l)}</div>`).join("") +
+        (verdictRows ? `<div style="margin-top:6px">${verdictRows}</div>` : "");
+    } catch {
+      /* The counts rendered above remain; revalidation is an enhancement. */
+    }
+  }
+
+  /* "Scan again & compare": re-runs the last scan submitted from this tab
+     (the request — URL with its settings, pasted code, or uploaded files —
+     lives in memory) so the history chip can render the per-finding
+     revalidation against the previous run of the same target. After a page
+     reload the request is gone and the button honestly disappears: files
+     cannot be re-scanned from history alone. */
+  function updateRescanButton() {
+    const btn = $("#rescan-compare");
+    if (!btn) return;
+    const demo = !!(payload && payload.meta && payload.meta.demo);
+    btn.hidden = !(lastQuery && !viewedScanNote && !demo);
+  }
+
+  async function rescanAndCompare() {
+    if (!lastQuery) return;
+    const btn = $("#rescan-compare");
+    if (btn) btn.disabled = true;
+    if (!(await ensureBackend())) {
+      if (btn) btn.disabled = false;
+      return;
+    }
+    showLoading(lastQuery.mode === "url"
+      ? "Re-scanning the target — stages below."
+      : "Re-scanning the submitted files…");
+    try {
+      const data = await postJSON("/api/analyze", lastQuery);
+      lastJobId = data.job_id;
+      renderProgress(data.job || { percent: 0, message: "Starting…" });
+      await pollJob(data.job_id);
+      await finishJob(data.job_id);
+    } catch (err) {
+      await handleAnalysisError(err, { urlMode: lastQuery.mode === "url" });
+    } finally {
+      hideLoading();
+      if (btn) btn.disabled = false;
+    }
   }
 
   async function refreshHistory() {
@@ -1664,6 +1818,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       renderDashboard();
       const chip = $("#history-diff");
       if (chip) chip.hidden = true;
+      updateRescanButton();
       refreshHistory().catch(() => {});
     } finally {
       if (btn) btn.disabled = false;
@@ -1825,6 +1980,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       row("WAL size", formatBytes(storage.wal_size_bytes)),
       row("Scans", String(storage.scan_count || 0)),
       row("Findings", String(storage.finding_count || 0)),
+      row("Triage decisions", String(storage.triage_count || 0)),
       row("Oldest", when(storage.oldest_scan_at)),
       row("Newest", when(storage.newest_scan_at)),
       row("Retention", `newest ${storage.retention_limit || 200} scans`),
@@ -1892,7 +2048,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || body.ok === false) throw new Error(body.error || "Delete failed.");
-      setStorageStatus(`✅ Deleted scan #${scanId}.`);
+      setStorageStatus(`${svgIcon("check")} Deleted scan #${scanId}.`);
       await refreshHistory();
       // Keep the storage list in the mode the user chose (all vs recent).
       if (storageScansAll) {
@@ -1916,7 +2072,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       const res = await fetch(apiUrl("/api/history"), { method: "DELETE", headers: authHeaders() });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || body.ok === false) throw new Error(body.error || "Delete failed.");
-      setStorageStatus(`✅ Deleted ${body.deleted_scans || 0} scan(s) and ${body.deleted_findings || 0} finding(s).`);
+      setStorageStatus(`${svgIcon("check")} Deleted ${body.deleted_scans || 0} scan(s) and ${body.deleted_findings || 0} finding(s).`);
       await refreshHistory();
       await refreshStoragePanel();
     } catch (err) {
@@ -2008,10 +2164,10 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       return;
     }
     list.innerHTML = pendingFiles.map((f, i) => `<div class="file-item">
-      <span>📄</span>
+      <span>${svgIcon("file")}</span>
       <span class="fname">${escapeHtml(f.name)}</span>
       <span class="fsize">${formatBytes(f.size)}</span>
-      <button class="fremove" data-i="${i}" title="Remove" type="button">✖</button>
+      <button class="fremove" data-i="${i}" title="Remove" type="button">${svgIcon("x")}</button>
     </div>`).join("");
     list.querySelectorAll(".fremove").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -2229,9 +2385,9 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       const totalSources = mappedFiles.reduce((n, f) => n + Number(f.source_map.analyzed_sources || 0), 0);
       const mapFindings = mappedFiles.reduce((n, f) => n + Number(f.source_map.sources_findings || 0), 0);
       notes.push(
-        `<b>🔗 Source maps analyzed.</b> ${totalSources} original source file(s) across ${mappedFiles.length} bundle(s) `
+        `<b>${svgIcon("link")} Source maps analyzed.</b> ${totalSources} original source file(s) across ${mappedFiles.length} bundle(s) `
         + `were recovered from source maps and analyzed; ${mapFindings} finding(s) are attributed to their `
-        + "original pre-build file names (marked with 🔗 in the Findings view).",
+        + "original pre-build file names (marked with the link icon in the Findings view).",
       );
     }
     const warnings = new Set();
@@ -2284,6 +2440,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       : /file\(s\)$/.test(metaSource) ? "Uploaded files" : "Source snippet";
     $("#result-meta").textContent = `${payload.meta.engine} · ${modeLabel} · ${payload.meta.generated_at || ""}`;
     renderSummary();
+    renderExecutiveSummary();
     renderPriorities();
     renderRiskBreakdown();
     renderSignals();
@@ -2304,6 +2461,41 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
   const SEV_COLOR = { CRITICAL: "#ff4d6d", HIGH: "#ff9f43", MEDIUM: "#ffd166", LOW: "#22d3ee", INFO: "#a78bfa" };
   const CONF_LABEL = { confirmed: "confirmed", high: "high", medium: "medium", low: "low" };
 
+  /* Overview, plain language: what a non-technical reader needs to know.
+     The same evidence as the technical sections, said in sentences —
+     verdict, counts, one block per distinct finding kind, honest notes. */
+  function renderExecutiveSummary() {
+    const card = $("#exec-card");
+    if (!card) return;
+    const es = payload.executive_summary;
+    if (!es) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    const verdict = $("#exec-verdict");
+    const counts = $("#exec-counts");
+    const list = $("#exec-findings");
+    const notes = $("#exec-notes");
+    if (verdict) verdict.textContent = es.verdict || "";
+    if (counts) counts.textContent = es.counts_in_words || "";
+    if (notes) notes.textContent = (es.notes || []).join(" ");
+    if (!list) return;
+    const items = es.findings_in_plain_terms || [];
+    if (!items.length) {
+      list.innerHTML = `<li><span class="risk-dot" style="color:#34d399"></span><span>No findings need explanation — nothing actionable was detected.</span></li>`;
+      return;
+    }
+    list.innerHTML = items.map((item) => {
+      const color = SEV_COLOR[item.severity] || "#22d3ee";
+      const where = item.where ? ` <i>(${escapeHtml(item.where)})</i>` : "";
+      return `<li><span class="risk-dot" style="color:${color}"></span>` +
+        `<span><b>${escapeHtml(item.title)}</b>${where}<br/>` +
+        `<span class="meta">${escapeHtml(item.meaning)}</span><br/>` +
+        `<span><b>What to do:</b> ${escapeHtml(item.action)}</span></span></li>`;
+    }).join("");
+  }
+
   /* Overview: answer "is it risky / why / what first" immediately. */
   function renderPriorities() {
     const priorities = (payload.summary.priorities || []).filter(Boolean);
@@ -2318,7 +2510,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       const where = p.location ? ` · ${escapeHtml(p.location)}` : "";
       const detail = p.source ? `${escapeHtml(p.source)} → ${escapeHtml(p.sink || "")}` : escapeHtml(p.sink || "");
       const limits = (p.limitations || []).length
-        ? `<br><span style="color:#fbbf24;font-size:11px">⚠ ${escapeHtml(p.limitations[0])}</span>` : "";
+        ? `<br><span style="color:#fbbf24;font-size:11px">${svgIcon("alert")} ${escapeHtml(p.limitations[0])}</span>` : "";
       return `<li style="animation-delay:${i * 0.05}s">
         <span class="risk-dot" style="color:${color}"></span>
         <span><b>${escapeHtml(p.type)}</b> · ${escapeHtml(p.severity)} · confidence ${escapeHtml(CONF_LABEL[p.confidence] || p.confidence || "?")}${where}
@@ -2341,7 +2533,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
       const color = c.tier >= 3 ? "#ff4d6d" : c.tier === 2 ? "#ff9f43" : c.tier === 1 ? "#ffd166" : "#22d3ee";
       return `<div class="category">
         <div class="name"><span>+${c.points} · ${escapeHtml(c.label)}</span><b style="color:${color}">${c.points}</b></div>
-        <div class="cat-bar"><i style="--cat:${color};width:${width}%"></i></div>
+        <div class="cat-bar" aria-hidden="true"><i style="--cat:${color};width:${width}%"></i></div>
       </div>`;
     }).join("");
   }
@@ -2588,7 +2780,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
           const color = SEV_COLOR[sev] || "#22d3ee";
           const path = (flow.flow || []).slice(0, 8).join(" → ");
           const quality = flow.analysis_quality ? `<span class="quality-chip quality-${flow.analysis_quality}">${escapeHtml(flow.analysis_quality)} quality</span>` : "";
-          const limits = (flow.limitations || []).slice(0, 2).map((l) => `<br><span style="color:#fbbf24;font-size:11px">⚠ ${escapeHtml(l)}</span>`).join("");
+          const limits = (flow.limitations || []).slice(0, 2).map((l) => `<br><span style="color:#fbbf24;font-size:11px">${svgIcon("alert")} ${escapeHtml(l)}</span>`).join("");
           return `<li style="animation-delay:${i * 0.04}s">
             <span class="risk-dot" style="color:${color}"></span>
             <span><b>${escapeHtml(flow.type || "Source→sink flow")}</b> · ${escapeHtml(STATUS_LABEL[getStatus(flow)] || flow.status || "open")} · conf ${escapeHtml(CONF_LABEL[flow.confidence] || flow.confidence || "?")} · ${escapeHtml(flow.file || "")} ${flow.line ? `· L${flow.line}` : ""}
@@ -2650,32 +2842,86 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     return `${f.id || f.type || "finding"}|${f.file || ""}|${f.line || 0}|${String(f.sink || "").slice(0, 80)}`;
   }
 
+  /* Triage decisions live SERVER-SIDE (core.triage), keyed by the engine's
+     line-independent fingerprint: a decision follows a finding across scans
+     and line edits, into exports, and off this browser. The old
+     localStorage map (line-dependent keys, browser-only) is read only as a
+     fallback and migrated to the server on sight. */
+  function readLegacyTriage() {
+    try { return JSON.parse(localStorage.getItem("scriptsentry-triage") || "{}"); }
+    catch { return {}; }
+  }
+
   function getStatus(f) {
-    const key = findingKey(f);
-    const stored = (localStorage.getItem("scriptsentry-triage") || "{}");
-    try {
-      const map = JSON.parse(stored);
-      return map[key] || f.status || "needs_review";
-    } catch {
-      return f.status || "needs_review";
-    }
+    if (f.triage_status) return f.triage_status;
+    const legacy = readLegacyTriage()[findingKey(f)];
+    if (legacy) return legacy;
+    return f.status || "needs_review";
   }
 
   function setStatus(f) {
-    const key = findingKey(f);
     const cur = STATUS_CYCLE.indexOf(getStatus(f));
     const next = STATUS_CYCLE[(cur + 1) % STATUS_CYCLE.length];
-    let map;
-    try { map = JSON.parse(localStorage.getItem("scriptsentry-triage") || "{}"); } catch { map = {}; }
-    map[key] = next;
-    localStorage.setItem("scriptsentry-triage", JSON.stringify(map));
+    const previous = f.triage_status || null;
+    const isDemo = !!(payload && payload.meta && payload.meta.demo);
+
+    if (!f.triage_fp || isDemo) {
+      // No engine fingerprint to address (demo report / offline hosted page):
+      // keep the old local-only behaviour so the button still works.
+      const map = readLegacyTriage();
+      map[findingKey(f)] = next;
+      localStorage.setItem("scriptsentry-triage", JSON.stringify(map));
+      renderUnifiedFindings();
+      return;
+    }
+
+    // Optimistic update, then persist server-side; revert with a note if the
+    // engine refuses (offline, disabled history, invalid status).
+    f.triage_status = next;
     renderUnifiedFindings();
+    postJSON("/api/triage", { fingerprint: f.triage_fp, status: next })
+      .then(() => {})
+      .catch(() => {
+        if (previous === null) delete f.triage_status; else f.triage_status = previous;
+        renderUnifiedFindings();
+        showTransferNote("The triage decision could not be saved to the engine.", true);
+      });
+  }
+
+  /* One-time migration: findings that have a legacy localStorage decision but
+     no server decision get pushed to the engine, then the legacy entry is
+     dropped. Runs on every render, but only acts on unmigrated leftovers. */
+  function migrateLegacyTriage(findings) {
+    const legacy = readLegacyTriage();
+    const keys = Object.keys(legacy);
+    if (!keys.length || !findings.length) return;
+    const isDemo = !!(payload && payload.meta && payload.meta.demo);
+    if (isDemo) return;
+    let migrated = false;
+    for (const f of findings) {
+      if (!f.triage_fp || f.triage_status) continue;
+      const hit = legacy[findingKey(f)];
+      if (!hit) continue;
+      postJSON("/api/triage", { fingerprint: f.triage_fp, status: hit })
+        .then(() => {
+          delete legacy[findingKey(f)];
+          localStorage.setItem("scriptsentry-triage", JSON.stringify(legacy));
+          f.triage_status = hit;
+          renderUnifiedFindings();
+        })
+        .catch(() => {});
+      migrated = true;
+    }
+    if (migrated) renderUnifiedFindings();
   }
 
   function renderUnifiedFindings() {
     const all = (payload.summary.findings || []).concat(payload.summary.dataflows || []).map((f) => ({ ...f, file: f.file || payload.meta.source }));
     const unique = new Map();
     all.forEach((f) => unique.set(findingKey(f), f));
+    // Migrate any legacy browser-only triage decisions to the engine before
+    // rendering, so this render already shows the persisted state.
+    migrateLegacyTriage(Array.from(unique.values()));
     // Actionable findings only; pure observations are shown separately under
     // "Security Observations".
     const findings = Array.from(unique.values()).filter((f) => {
@@ -2729,9 +2975,9 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
           const st = getStatus(f);
           const quality = f.analysis_quality ? `<span class="quality-chip quality-${f.analysis_quality}">${escapeHtml(f.analysis_quality)} quality</span>` : "";
           const limits = (f.limitations || []).length
-            ? `<br><span style="color:#fbbf24;font-size:11px">⚠ Analysis limit: ${escapeHtml(f.limitations[0])}</span>` : "";
+            ? `<br><span style="color:#fbbf24;font-size:11px">${svgIcon("alert")} Analysis limit: ${escapeHtml(f.limitations[0])}</span>` : "";
           const viaMap = f.via === "source_map"
-            ? ` <span title="Found by analyzing the original source code embedded in the bundle's source map" style="color:#60a5fa;font-size:11px">🔗 source map</span>` : "";
+            ? ` <span title="Found by analyzing the original source code embedded in the bundle's source map" style="color:#60a5fa;font-size:11px">${svgIcon("link")} source map</span>` : "";
           return `<li style="animation-delay:${i * 0.03}s">
             <span class="risk-dot" style="color:${color}"></span>
             <span><b>${escapeHtml(f.type || f.id || "finding")}</b> · ${escapeHtml(f.severity || "")} · conf ${escapeHtml(CONF_LABEL[f.confidence] || f.confidence || "?")} · ${escapeHtml(f.file || "")}${f.line ? ` · L${f.line}` : ""}${viaMap}<br>
@@ -3291,6 +3537,8 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
     $("#code-input").value = SAMPLE;
     $("#analyze-code").addEventListener("click", analyzeCode);
     $("#analyze-url").addEventListener("click", analyzeUrl);
+    const rescanBtn = $("#rescan-compare");
+    if (rescanBtn) rescanBtn.addEventListener("click", rescanAndCompare);
     $("#export-html").addEventListener("click", () => exportReport("html"));
     $("#export-txt").addEventListener("click", () => exportReport("txt"));
     $("#export-csv").addEventListener("click", () => exportReport("csv"));
@@ -3332,7 +3580,7 @@ CryptoJS.AES.encrypt(payload, key, { iv: iv, mode: CryptoJS.mode.CBC });
           ta.remove();
         }
         const original = btn.textContent;
-        btn.textContent = "✅ Copied";
+        btn.innerHTML = svgIcon("check") + " Copied";
         setTimeout(() => (btn.textContent = original), 1600);
       });
     });

@@ -37,6 +37,7 @@
       : /file\(s\)$/.test(metaSource) ? "Uploaded files" : "Source snippet";
     $("#result-meta").textContent = `${payload.meta.engine} · ${modeLabel} · ${payload.meta.generated_at || ""}`;
     renderSummary();
+    renderExecutiveSummary();
     renderPriorities();
     renderRiskBreakdown();
     renderSignals();
@@ -57,6 +58,41 @@
   const SEV_COLOR = { CRITICAL: "#ff4d6d", HIGH: "#ff9f43", MEDIUM: "#ffd166", LOW: "#22d3ee", INFO: "#a78bfa" };
   const CONF_LABEL = { confirmed: "confirmed", high: "high", medium: "medium", low: "low" };
 
+  /* Overview, plain language: what a non-technical reader needs to know.
+     The same evidence as the technical sections, said in sentences —
+     verdict, counts, one block per distinct finding kind, honest notes. */
+  function renderExecutiveSummary() {
+    const card = $("#exec-card");
+    if (!card) return;
+    const es = payload.executive_summary;
+    if (!es) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    const verdict = $("#exec-verdict");
+    const counts = $("#exec-counts");
+    const list = $("#exec-findings");
+    const notes = $("#exec-notes");
+    if (verdict) verdict.textContent = es.verdict || "";
+    if (counts) counts.textContent = es.counts_in_words || "";
+    if (notes) notes.textContent = (es.notes || []).join(" ");
+    if (!list) return;
+    const items = es.findings_in_plain_terms || [];
+    if (!items.length) {
+      list.innerHTML = `<li><span class="risk-dot" style="color:#34d399"></span><span>No findings need explanation — nothing actionable was detected.</span></li>`;
+      return;
+    }
+    list.innerHTML = items.map((item) => {
+      const color = SEV_COLOR[item.severity] || "#22d3ee";
+      const where = item.where ? ` <i>(${escapeHtml(item.where)})</i>` : "";
+      return `<li><span class="risk-dot" style="color:${color}"></span>` +
+        `<span><b>${escapeHtml(item.title)}</b>${where}<br/>` +
+        `<span class="meta">${escapeHtml(item.meaning)}</span><br/>` +
+        `<span><b>What to do:</b> ${escapeHtml(item.action)}</span></span></li>`;
+    }).join("");
+  }
+
   /* Overview: answer "is it risky / why / what first" immediately. */
   function renderPriorities() {
     const priorities = (payload.summary.priorities || []).filter(Boolean);
@@ -71,7 +107,7 @@
       const where = p.location ? ` · ${escapeHtml(p.location)}` : "";
       const detail = p.source ? `${escapeHtml(p.source)} → ${escapeHtml(p.sink || "")}` : escapeHtml(p.sink || "");
       const limits = (p.limitations || []).length
-        ? `<br><span style="color:#fbbf24;font-size:11px">⚠ ${escapeHtml(p.limitations[0])}</span>` : "";
+        ? `<br><span style="color:#fbbf24;font-size:11px">${svgIcon("alert")} ${escapeHtml(p.limitations[0])}</span>` : "";
       return `<li style="animation-delay:${i * 0.05}s">
         <span class="risk-dot" style="color:${color}"></span>
         <span><b>${escapeHtml(p.type)}</b> · ${escapeHtml(p.severity)} · confidence ${escapeHtml(CONF_LABEL[p.confidence] || p.confidence || "?")}${where}
@@ -94,7 +130,7 @@
       const color = c.tier >= 3 ? "#ff4d6d" : c.tier === 2 ? "#ff9f43" : c.tier === 1 ? "#ffd166" : "#22d3ee";
       return `<div class="category">
         <div class="name"><span>+${c.points} · ${escapeHtml(c.label)}</span><b style="color:${color}">${c.points}</b></div>
-        <div class="cat-bar"><i style="--cat:${color};width:${width}%"></i></div>
+        <div class="cat-bar" aria-hidden="true"><i style="--cat:${color};width:${width}%"></i></div>
       </div>`;
     }).join("");
   }
@@ -341,7 +377,7 @@
           const color = SEV_COLOR[sev] || "#22d3ee";
           const path = (flow.flow || []).slice(0, 8).join(" → ");
           const quality = flow.analysis_quality ? `<span class="quality-chip quality-${flow.analysis_quality}">${escapeHtml(flow.analysis_quality)} quality</span>` : "";
-          const limits = (flow.limitations || []).slice(0, 2).map((l) => `<br><span style="color:#fbbf24;font-size:11px">⚠ ${escapeHtml(l)}</span>`).join("");
+          const limits = (flow.limitations || []).slice(0, 2).map((l) => `<br><span style="color:#fbbf24;font-size:11px">${svgIcon("alert")} ${escapeHtml(l)}</span>`).join("");
           return `<li style="animation-delay:${i * 0.04}s">
             <span class="risk-dot" style="color:${color}"></span>
             <span><b>${escapeHtml(flow.type || "Source→sink flow")}</b> · ${escapeHtml(STATUS_LABEL[getStatus(flow)] || flow.status || "open")} · conf ${escapeHtml(CONF_LABEL[flow.confidence] || flow.confidence || "?")} · ${escapeHtml(flow.file || "")} ${flow.line ? `· L${flow.line}` : ""}

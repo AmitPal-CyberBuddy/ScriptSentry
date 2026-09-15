@@ -41,6 +41,11 @@ cloud; there are no accounts and no API keys required for core analysis.
   the live page: network traffic, DOM sinks, `eval`, storage, cookies, and
   scripts loaded only after execution
 
+Every finding id, its plain-language meaning and the usual fix are documented
+in the **[rule reference](docs/RULES.md)** (same page, hosted:
+`https://<site>/rules/`) — generated from the engine's own rule registry, so
+the docs and the reports always agree.
+
 ## Why the results are trustworthy
 
 ScriptSentry is built to **avoid crying wolf**. It separates three things many
@@ -114,6 +119,14 @@ starts — everything stays local:
 python3 scriptsentry.py --port 8000
 ```
 
+The engine is cached under `~/.scriptsentry/bootstrap/` and reused on every
+later run — the launcher never re-downloads it on its own. After fixes land in
+the repository, refresh your local copy with:
+
+```bash
+python3 scriptsentry.py --update
+```
+
 You can also grab it straight from the hosted dashboard: the setup modal (shown
 when the local engine isn't running) has a **⬇️ Download scriptsentry.py**
 button.
@@ -183,8 +196,78 @@ browser tab only and is sent as an `X-ScriptSentry-Token` header.
 # Scan a live site (discovers & recursively analyzes every script)
 python3 main.py https://example.com --profile balanced --format all
 
-# Reports are written to output/ : report.txt / .json / .html / .csv / .sarif
+# Scan local files or a whole directory (same engine as the dashboard;
+# walks .js/.mjs/.cjs/.jsx/.ts/.tsx, skips node_modules and .git)
+python3 main.py ./dist bundle.js --format sarif txt
+
+# Reports are written to output/ by default, or wherever --output points:
+# report.txt / .json / .html / .csv / .sarif / api-surface.openapi.json
 ```
+
+Mix URLs and local paths in one command; a dead URL never discards the
+results of the other targets.
+
+**CI gate:** `--fail-on {critical,high,medium,low,none}` exits `1` when any
+*actionable* finding (observations excluded) reaches that severity — the hook
+a pipeline gates on. Exit `2` means an operational error (nothing was
+scanned), so a broken target never silently passes a gate:
+
+```bash
+python3 main.py ./dist --format sarif txt --fail-on high --output ci-report
+```
+
+**Baselines: fail only on what is new.** `--fail-on` alone answers "are there
+findings?" — the wrong question for a codebase that already has accepted
+ones. A baseline answers the question CI actually needs ("is this run worse
+than the accepted state?"):
+
+```bash
+# Once (e.g. on main, or locally): snapshot the current findings…
+python3 main.py ./dist --fail-on low --save-baseline scriptsentry-baseline.json
+
+# …commit the file, then gate every future run on what changed:
+python3 main.py ./dist --fail-on low --baseline scriptsentry-baseline.json
+```
+
+With `--baseline`, only findings that are **new** or **worsened** (severity
+raised, or an observation that came back actionable) count against the exit
+code; known findings stay in every report — the report never lies, only the
+gate narrows. Baselines are deterministic (sorted fingerprints, no
+timestamps), so they diff cleanly in review, and a missing baseline file
+behaves like an empty one: everything counts as new, the safe direction.
+Findings are identified by the same line-independent fingerprint the history
+diff uses, so an unrelated edit above a finding does not flip it to "new".
+Updating a baseline — accepting a finding — is a visible, reviewable act:
+commit the file.
+
+**Watch mode:** `--watch SECONDS` re-scans the target(s) on an interval and
+prints what changed between cycles — new, worse, improved and
+no-longer-detected findings, identified line-independently (the same
+fingerprint as baselines and the history diff), so cosmetic edits don't
+noise the diff:
+
+```bash
+python3 main.py https://example.com --watch 60 --fail-on high
+```
+
+Ctrl+C stops the watch (exit 0). With `--fail-on`, the first failing cycle
+exits 1 — watch mode is monitoring, and a gate that keeps running after
+turning red is a gate nobody watches.
+
+**Triage that follows a finding.** On the dashboard's Findings tab, the status
+chip cycles a finding through *open → needs review → confirmed → false
+positive → informational*. Decisions are stored by the engine (not the
+browser), keyed by the same line-independent fingerprint the diff and
+baselines use — so a decision follows a finding across scans and line edits,
+and it ships in exports: CSV gains `triage_status`/`triage_note` columns, a
+false positive becomes a SARIF suppression (GitHub code scanning shows it as
+dismissed), and reports mark triaged findings in plain language. The CLI can
+annotate its written reports the same way with `--triage` (off by default — a
+report is hermetic unless you ask). Triage does **not** change `--fail-on`
+exit codes: gating is the baseline file's job, and a local database silently
+changing CI results would be a nasty surprise. Your decisions are your data:
+they appear in the storage panel's inventory, ride along in the history
+export, and are deleted by "delete all data".
 
 Launch the dashboard directly from the CLI:
 
@@ -221,6 +304,10 @@ providers are deliberately unsupported.
 
 ## Reading the dashboard
 
+The console prints, too: File → Print (or `Ctrl/Cmd+P`) hides the input
+chrome and outputs the analysis content on white — the same light print
+theme the HTML export uses.
+
 The interface is organized into five focused views:
 
 1. **📊 Overview** — answers three questions up front: *is this app risky?*,
@@ -242,13 +329,69 @@ The interface is organized into five focused views:
 
 After any analysis, use the header buttons (or the API/CLI) to export:
 
-- **HTML** — polished, shareable report
+- **HTML** — polished, shareable report; prints as a clean light-surface
+  report (severity colors kept, cards never split across pages)
 - **TXT** — triage-friendly text report
 - **CSV** — spreadsheet of findings (severity, confidence, status, source→sink,
   flow, quality, limitations)
-- **SARIF** — SARIF 2.1.0 for GitHub code scanning / CI
+- **SARIF** — SARIF 2.1.0 for GitHub code scanning / CI. Rules carry their CWE
+  mapping (`cwe-79` …), a `helpUri` into the hosted [rule reference][rules-page],
+  plain-language descriptions and a CVSS-style `security-severity`, so code
+  scanning shows *why* a finding matters, not just an opaque rule id.
+
+[rules-page]: https://amitpal-cyberbuddy.github.io/ScriptSentry/rules/
 
 ---
+
+### Use it in CI (GitHub Actions)
+
+The repo ships a composite action that installs the engine on the runner and
+scans your checkout — the scanned code never leaves the runner:
+
+```yaml
+name: ScriptSentry
+on: [push]
+permissions:
+  security-events: write   # for the SARIF upload
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan the JavaScript in this repository
+        uses: AmitPal-CyberBuddy/ScriptSentry/.github/actions/scan@main
+        with:
+          targets: .              # files, directories or URLs (space-separated)
+          fail-on: high           # critical|high|medium|low|none
+          format: sarif txt
+          output: scriptsentry-report
+          # baseline: scriptsentry-baseline.json   # gate only on new/worsened
+      - name: Upload findings to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: scriptsentry-report/report.sarif
+          category: scriptsentry
+```
+
+Local targets are reported with repository-relative paths, so SARIF findings
+map straight onto your files in the code scanning UI. This repository runs
+the same action on itself (`.github/workflows/self-scan.yml`) as a live
+example.
+
+## In your editor (VS Code)
+
+The [`vscode-extension/`](vscode-extension/) directory packages the same
+engine findings into VS Code's Problems panel — commands
+(`ScriptSentry: Scan Workspace` / `Scan Current File`), optional scan-on-save,
+severity + CWE on every finding, a "Learn more" link into the hosted rule
+reference, and findings you triaged as false positives in the dashboard stay
+hidden. It's zero-dependency JavaScript; it finds the engine the same way you
+run it (an explicit `scriptsentry.engineCommand` setting, the launcher's
+`~/.scriptsentry/bootstrap/` cache, or a ScriptSentry checkout open in the
+workspace) and everything stays local. See
+[vscode-extension/README.md](vscode-extension/README.md) for setup and
+settings.
 
 ## Host the UI, keep the engine local
 
@@ -256,7 +399,7 @@ You can host the dashboard front-end (for example on **GitHub Pages**) while the
 analysis engine stays entirely on your own machine:
 
 1. Publish the `webui/` folder (a ready-made workflow is in
-   `deployment/deploy-pages.yml`). It is a handful of static pages —
+   `.github/workflows/deploy-pages.yml`). It is a handful of static pages —
    `home/index.html` (overview, what it finds, how it works, setup, connect),
    `tool/index.html` (the console) and `changelog/index.html` (what's new) —
    plus `assets/` (favicons, app icons, web manifest, social card). GitHub
@@ -341,7 +484,7 @@ the detection rules are still being refined — treat findings as signals to
 investigate rather than a final verdict, and expect things to keep improving.
 
 Every change is recorded in the [changelog](webui/changelog/index.html), and
-the technical notes behind the design decisions live in [`AUDIT.md`](AUDIT.md).
+the technical notes behind the design decisions live in [`docs/AUDIT.md`](docs/AUDIT.md).
 
 ---
 

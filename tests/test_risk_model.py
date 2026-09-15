@@ -4,7 +4,104 @@ import unittest
 
 from core.analyzer_service import analyze_content
 from core.reporter import build_report_model, generate_csv_report, generate_sarif_report
-from core.risk_model import file_risk, overall_risk, top_priorities
+from core.risk_model import (
+    CONFIRMED_SEVERITY_FLOOR,
+    THIRD_PARTY_CAP,
+    file_risk,
+    overall_risk,
+    top_priorities,
+)
+
+
+def _confirmed(severity, **extra):
+    return {
+        "id": extra.pop("id", "runtime_effect"), "type": "t", "severity": severity,
+        "confidence": "confirmed", "status": "confirmed",
+        "evidence_type": "runtime_effect", **extra,
+    }
+
+
+def _third_party(script_score=60, reads=True):
+    return {
+        "party": "third_party", "risk": {"score": script_score},
+        "capabilities": {
+            "reads": ["document.cookie"] if reads else [],
+            "external_destinations": ["https://analytics.example.net"],
+        },
+    }
+
+
+class CalibrationTest(unittest.TestCase):
+    """The numeric score must agree with the evidence and its own label.
+
+    Pre-calibration, one runtime-proven CRITICAL read 30/100 next to a HIGH
+    label, while twelve unproven third-party behavioral correlations
+    saturated the score to 100/CRITICAL -- exactly backwards.
+    """
+
+    def test_single_confirmed_critical_reaches_the_critical_band(self):
+        result = overall_risk(findings=[_confirmed("CRITICAL")])
+        self.assertGreaterEqual(result["score"], CONFIRMED_SEVERITY_FLOOR["CRITICAL"])
+        self.assertEqual(result["label"], "CRITICAL")
+
+    def test_single_confirmed_high_reaches_the_high_band(self):
+        result = overall_risk(findings=[_confirmed("HIGH")])
+        self.assertGreaterEqual(result["score"], CONFIRMED_SEVERITY_FLOOR["HIGH"])
+        self.assertLess(result["score"], CONFIRMED_SEVERITY_FLOOR["CRITICAL"])
+        self.assertEqual(result["label"], "HIGH")
+
+    def test_confirmed_medium_gets_no_severity_floor(self):
+        # The floor is reserved for demonstrated HIGH/CRITICAL effects; a
+        # confirmed MEDIUM keeps its evidence-weighted points untouched.
+        result = overall_risk(findings=[_confirmed("MEDIUM")])
+        self.assertLess(result["score"], CONFIRMED_SEVERITY_FLOOR["HIGH"])
+        self.assertFalse(any(
+            "severity floor" in c["label"] for c in result["contributors"]))
+
+    def test_severity_floor_is_an_explainable_contributor(self):
+        # The lift must be a visible contributor, never a silent clamp, so
+        # "why is this 75?" still has an answer that adds up.
+        result = overall_risk(findings=[_confirmed("CRITICAL")])
+        floor = [c for c in result["contributors"] if "severity floor" in c["label"]]
+        self.assertTrue(floor, "the floor lift must appear in the contributor list")
+        explained = sum(c["points"] for c in result["contributors"])
+        self.assertEqual(result["score"], max(0, min(100, round(explained))))
+
+    def test_floor_never_lowers_a_score_that_already_earned_more(self):
+        # Several confirmed findings already sum past the floor: the lift
+        # must be zero, not a pull-down.
+        result = overall_risk(findings=[_confirmed("CRITICAL", id="rt_eval"),
+                                        _confirmed("CRITICAL", id="rt_dom_xss"),
+                                        _confirmed("HIGH", id="rt_storage")])
+        self.assertFalse(any("severity floor" in c["label"] for c in result["contributors"]))
+        self.assertGreaterEqual(result["score"], CONFIRMED_SEVERITY_FLOOR["CRITICAL"])
+
+    def test_third_party_bucket_is_capped(self):
+        # Twenty trackers reading cookies and beaconing externally are strong
+        # posture signals, but unproven: they must not outrank one
+        # demonstrated vulnerability or saturate the score.
+        scripts = [_third_party() for _ in range(20)]
+        result = overall_risk(script_inventory=scripts)
+        self.assertLessEqual(result["score"], THIRD_PARTY_CAP)
+        self.assertNotEqual(result["label"], "CRITICAL")
+        self.assertNotEqual(result["label"], "HIGH")
+        # Every script still counts; only the points are capped.
+        self.assertEqual(result["counts"]["third_party_exfil"], 20)
+        self.assertEqual(result["counts"]["third_party_points"], THIRD_PARTY_CAP)
+
+    def test_one_confirmed_critical_outranks_twenty_trackers(self):
+        trackers = overall_risk(script_inventory=[_third_party() for _ in range(20)])
+        proven = overall_risk(findings=[_confirmed("CRITICAL")])
+        self.assertGreater(proven["score"], trackers["score"])
+
+    def test_mixed_proven_and_trackers_stay_explainable(self):
+        result = overall_risk(
+            findings=[_confirmed("CRITICAL")],
+            script_inventory=[_third_party() for _ in range(20)],
+        )
+        explained = sum(c["points"] for c in result["contributors"])
+        self.assertEqual(result["score"], max(0, min(100, round(explained))))
+        self.assertEqual(result["label"], "CRITICAL")
 
 
 class RiskModelTest(unittest.TestCase):

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from core.js_parser import parser_status
-from core.analysis_model import deduplicate_findings, split_findings
+from core.analysis_model import coerce_line, deduplicate_findings, split_findings
 from core.risk_model import file_risk, overall_risk, top_priorities
 from core.script_intel import build_script_intel, data_exfiltration_candidates
 from core.version import ENGINE_NAME, RELEASE_STATUS, SARIF_TOOL_VERSION, __version__ as ENGINE_VERSION, is_dev_build
@@ -226,7 +226,7 @@ def _dedupe_signals(signals):
     return out
 
 
-def build_report_model(results, ai_summary=None, metadata=None):
+def build_report_model(results, ai_summary=None, metadata=None, triage=None):
     """Build a normalized, structured report model used by TXT, HTML and GUI."""
     files = []
     all_signals = []
@@ -421,7 +421,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
             uniq.append(item)
         dedup_attack[key] = uniq[:80]
 
-    return {
+    model = {
         "meta": {
             "generated_at": (metadata or {}).get("generated_at", ""),
             "engine": ENGINE_NAME,
@@ -466,6 +466,281 @@ def build_report_model(results, ai_summary=None, metadata=None):
         "exfil_candidates": deduplicate_findings(exfil_candidates),
         "scan_summary": scan_summary,
         "ai_summary": ai_summary or {},
+    }
+    # Server-side triage decisions (core.triage), joined by the engine's
+    # line-independent finding fingerprint: a decision follows a finding
+    # across scans and line edits, into every export built from this model.
+    if triage:
+        from core.triage import annotate_findings
+        for key in ("findings", "dataflows", "actionable_findings", "observations"):
+            # split_findings/deduplicate build copies, so every findings-ish
+            # list in the summary needs the stamp, not just "findings".
+            annotate_findings(model["summary"].get(key) or [], triage)
+    return model
+
+
+# ============================================================
+# Plain-language layer (managers / non-technical stakeholders)
+# ============================================================
+
+# One plain-terms entry per known finding id: what it means for a non-technical
+# reader, and what the fix usually looks like. Written to be read aloud.
+PLAIN_TERMS = {
+    "dom_injection": {
+        "plain": "Unsafe use of page content",
+        "meaning": "The code inserts information taken from the page address or user input "
+                   "directly into the page without cleaning it first. An attacker can craft a "
+                   "link that makes the page run their own script in a visitor's browser "
+                   "(a common attack called cross-site scripting).",
+        "action": "Clean the value before it is inserted into the page, or use a safer "
+                  "rendering method. The security team should verify the listed lines.",
+    },
+    "dom_injection_document_write": {
+        "plain": "Unsafe use of page content",
+        "meaning": "The code writes information taken from the page address or user input "
+                   "straight into the document. A crafted link can make a visitor's browser "
+                   "run attacker-controlled script (cross-site scripting).",
+        "action": "Avoid writing raw input into the document; render cleaned values only.",
+    },
+    "hardcoded_secret": {
+        "plain": "A password or key written into the code",
+        "meaning": "A credential (password, API key or token) appears in plain text inside the "
+                   "shipped code. Anyone who can view or download the code - including this "
+                   "scan - can read it.",
+        "action": "Move the credential to a secure configuration store and replace the "
+                  "exposed one; assume it is compromised once it has shipped.",
+    },
+    "data_exfiltration_flow": {
+        "plain": "Sensitive information is sent somewhere else",
+        "meaning": "The code reads private information (login details, cookies, form input) "
+                   "and sends it to an external destination. If that destination is not "
+                   "yours or not expected, this is how data leaks happen.",
+        "action": "Confirm the destination is legitimate and intended; remove or gate the "
+                  "transfer if it is not.",
+    },
+    "data_exfiltration_candidate": {
+        "plain": "Possible data sending",
+        "meaning": "The code both reads private information and contacts external services. "
+                   "This is only a pattern match - it may be perfectly normal - but the "
+                   "combination is worth checking.",
+        "action": "Have the security team confirm where the data actually goes.",
+    },
+    "open_redirect": {
+        "plain": "Open door to another website",
+        "meaning": "The code sends visitors to whatever address is in the link, without "
+                   "checking it. Attackers use this to wrap phishing pages in your site's "
+                   "trusted name.",
+        "action": "Only allow redirects to a list of approved addresses.",
+    },
+    "dangerous_dynamic_code": {
+        "plain": "Code that builds and runs new code",
+        "meaning": "The code constructs program instructions from text at run time. If any "
+                   "part of that text comes from outside, an attacker may be able to run "
+                   "their own instructions.",
+        "action": "Remove the dynamic execution, or make sure its input can never be "
+                  "influenced from outside.",
+    },
+    "exposed_key_iv_pair": {
+        "plain": "Encryption recipe written into the code",
+        "meaning": "Both the encryption key and its starting value are in the shipped code. "
+                   "Encryption with a visible key protects nothing.",
+        "action": "Move the key somewhere safe; treat data encrypted with it as exposed.",
+    },
+    "static_crypto_key": {
+        "plain": "Encryption key written into the code",
+        "meaning": "A fixed encryption key is embedded in the code where anyone reading it "
+                   "can copy it.",
+        "action": "Move the key to a secure store and rotate it.",
+    },
+    "sensitive_storage": {
+        "plain": "Private data stored in the browser",
+        "meaning": "The code stores sensitive-looking information in the browser's storage. "
+                   "Anything stored there can be read by other scripts on the page.",
+        "action": "Store only what is necessary, and prefer server-side sessions.",
+    },
+    "unsafe_runtime": {
+        "plain": "Risky run-time behaviour",
+        "meaning": "The code uses mechanisms that build or run instructions dynamically - "
+                   "legitimate in some cases, dangerous if the input is ever influenced by "
+                   "an outsider.",
+        "action": "Security team: check whether outside input can reach these calls.",
+    },
+}
+
+# CWE mapping for the finding ids above (single source for SARIF exports and
+# the generated rule reference). Mappings are the standard, defensible ones;
+# inventory-only observations (api_surface, obfuscation, client_side_crypto)
+# are deliberately unmapped -- a forced CWE would be noise, not information.
+CWE_MAP = {
+    "dom_injection": 79,
+    "dom_injection_document_write": 79,
+    "dom_xss": 79,
+    "jquery_dom_manipulation": 79,
+    "hardcoded_secret": 798,
+    "secret": 798,
+    "data_exfiltration_flow": 200,
+    "data_exfiltration_candidate": 200,
+    "open_redirect": 601,
+    "dangerous_dynamic_code": 95,
+    "unsafe_runtime": 95,
+    "vulnerable_dependency": 1104,
+    "exposed_key_iv_pair": 321,
+    "static_crypto_key": 321,
+    "insecure_postmessage": 359,
+    "prototype_pollution": 1321,
+    "sensitive_storage": 922,
+}
+
+# Hosted rule reference anchor (tools/build_rules_page.py generates the page;
+# SARIF rules link straight to their per-rule section).
+RULES_PAGE = "https://amitpal-cyberbuddy.github.io/ScriptSentry/rules/"
+
+
+_PLAIN_PREFIXES = {
+    "vulnerable_dependency": {
+        "plain": "A known-vulnerable library",
+        "meaning": "The bundle includes a library version with publicly known security "
+                   "problems. The problems are documented, which also means attackers know "
+                   "them.",
+        "action": "Update the library to a fixed version.",
+    },
+    "dom_xss": None,  # filled after PLAIN_TERMS is complete
+    "secret": None,
+}
+
+_VERDICT_SENTENCES = {
+    "CRITICAL": "Critical risk - serious, evidenced problems were found. Treat fixing them "
+                "as a priority before this code is relied on.",
+    "HIGH": "High risk - real problems were found that should be fixed before this code "
+            "ships or is trusted further.",
+    "MEDIUM": "Medium risk - several things need a closer look. Nothing is proven broken, "
+              "but the warning signs should not be ignored.",
+    "LOW": "Low risk - no serious issues were found. Only minor observations remain.",
+    "INFO": "No significant risk identified - only informational notes.",
+}
+_PLAIN_PREFIXES["dom_xss"] = PLAIN_TERMS["dom_injection"]
+_PLAIN_PREFIXES["secret"] = PLAIN_TERMS["hardcoded_secret"]
+
+
+def _plain_entry_for(finding):
+    """Plain-terms entry for one finding, or None when unknown."""
+    fid = str(finding.get("id") or finding.get("type") or "")
+    if fid in PLAIN_TERMS:
+        return PLAIN_TERMS[fid]
+    prefix = fid.split(":", 1)[0]
+    return _PLAIN_PREFIXES.get(prefix)
+
+
+def executive_summary(model, results=None):
+    """A report layer a non-technical reader can act on.
+
+    The detailed sections stay as they are (evidence, file:line, remediation)
+    for the security team; this layer answers, in plain sentences, the three
+    questions a manager asks: *what is the result*, *what does it mean* and
+    *what happens next*. Deterministic - never dependent on the optional AI
+    summary - and honest about what was and was not checked.
+    """
+    summary = model.get("summary") or {}
+    # The text/HTML model calls it total_score; the dashboard payload calls it
+    # overall_score. Accept either.
+    score = summary.get("total_score", summary.get("overall_score", 0))
+    label = str(summary.get("risk_label") or "INFO")
+    findings = list(summary.get("actionable_findings") or [])
+    observations = list(summary.get("observations") or [])
+    priorities = list(summary.get("priorities") or [])
+
+    plain_findings = []
+    seen_kinds = set()
+    for finding in findings:
+        fid = str(finding.get("id") or finding.get("type") or "")
+        if fid in seen_kinds:
+            continue
+        seen_kinds.add(fid)
+        entry = _plain_entry_for(finding) or {
+            "plain": str(finding.get("type") or fid or "Finding"),
+            "meaning": "The security team should review the details of this finding; "
+                       "a plain-language description is not yet available for this type.",
+            "action": "See the detailed findings section.",
+        }
+        location = ""
+        if finding.get("file"):
+            location = str(finding.get("file"))
+            if finding.get("line"):
+                location += f" (line {finding.get('line')})"
+        triage_note = ""
+        triage_label = ""
+        if finding.get("triage_status"):
+            triage_label = str(finding["triage_status"]).replace("_", " ")
+            triage_note = str(finding.get("triage_note") or "")
+        plain_findings.append({
+            "finding_id": fid,
+            "title": entry["plain"],
+            "severity": str(finding.get("severity") or "MEDIUM").upper(),
+            "meaning": entry["meaning"],
+            "action": entry["action"],
+            "where": location,
+            "triage": triage_label,
+            "triage_note": triage_note,
+            # The technical anchor for the security team.
+            "for_security_team": {
+                "id": fid,
+                "type": finding.get("type") or fid,
+                "file": finding.get("file", ""),
+                "line": finding.get("line", 0),
+                "severity": finding.get("severity", ""),
+                "confidence": finding.get("confidence", ""),
+                "status": finding.get("status", ""),
+                "evidence_type": finding.get("evidence_type", ""),
+            },
+        })
+        if len(plain_findings) >= 5:
+            break
+
+    # What was checked, in words a reader can retell.
+    reliability = dict(scan_reliability(model, results))
+    checks = []
+    files_total = int(summary.get("total_files") or 0)
+    if files_total:
+        checks.append(f"{files_total} JavaScript file(s) shipped by the target were analyzed "
+                      "on this machine - nothing was uploaded anywhere.")
+    coverage = reliability.get("Coverage", "")
+    if "of" in str(coverage):
+        checks.append(f"Coverage: {coverage}.")
+    engine = reliability.get("Analysis engine", "")
+    if engine:
+        checks.append(f"How: {engine}.")
+    runtime = reliability.get("Runtime verification", "")
+    if runtime:
+        checks.append(f"Behaviour check in a real browser: {runtime}.")
+    if not checks:
+        checks.append("The target was analyzed locally; see the reliability section for scope.")
+
+    if findings or observations:
+        counts_in_words = (
+            f"{len(findings)} issue(s) needing attention and {len(observations)} background "
+            f"observation(s) across {files_total} file(s), rated {label} "
+            f"({score}/100)."
+        )
+    else:
+        counts_in_words = (
+            f"No issues were found across {files_total} file(s). Rated {label} "
+            f"({score}/100)."
+        )
+
+    return {
+        "verdict_label": label,
+        "verdict": _VERDICT_SENTENCES.get(label, _VERDICT_SENTENCES["INFO"]),
+        "counts_in_words": counts_in_words,
+        "what_was_checked": checks,
+        "findings_in_plain_terms": plain_findings,
+        "what_to_do_first": list(dict.fromkeys(
+            p.get("type", "") for p in priorities[:6] if p.get("type")))[:3],
+        "notes": [
+            "This is an automated static review: it reports what the code makes possible, "
+            "not proof that an attack succeeded. The security team should verify each item "
+            "before acting on it.",
+            "Only scan applications you own or are explicitly authorized to test.",
+        ],
     }
 
 
@@ -586,9 +861,10 @@ def _remediation(model):
     return steps
 
 
-def generate_report(results, ai_summary=None, metadata=None):
+def generate_report(results, ai_summary=None, metadata=None, triage=None):
     """Generate a polished, structured text report."""
-    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
+    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata,
+                               triage=triage)
     summary = model["summary"]
     report = []
 
@@ -604,6 +880,23 @@ def generate_report(results, ai_summary=None, metadata=None):
     report.append(f" Signals     : {summary['total_findings']}")
     report.append(f" Overall Risk: {summary['risk_label']} ({summary['total_score']})")
     report.append("============================================================\n")
+
+    # Plain-language layer first: a manager reads this far and no further.
+    exec_summary = executive_summary(model, results)
+    report.append("========== WHAT THIS RESULT MEANS (PLAIN LANGUAGE) ==========")
+    report.append(f"  {exec_summary['verdict']}")
+    report.append(f"  {exec_summary['counts_in_words']}")
+    for item in exec_summary["findings_in_plain_terms"]:
+        where = f" [{item['where']}]" if item["where"] else ""
+        triage = f" [triaged: {item['triage']}]" if item.get("triage") else ""
+        report.append(f"  - {item['title']} ({item['severity'].lower()}){where}{triage}")
+        report.append(f"    What it means: {item['meaning']}")
+        report.append(f"    What to do:    {item['action']}")
+        if item.get("triage_note"):
+            report.append(f"    Triage note:  {item['triage_note']}")
+    if exec_summary["what_to_do_first"]:
+        report.append("  Do these first: " + "; ".join(exec_summary["what_to_do_first"]) + ".")
+    report.append("")
 
     report.append("========== EXECUTIVE SUMMARY ==========")
     report.append(f"  - Risk posture: {summary['risk_label']} with {summary['total_findings']} findings across {summary['total_files']} file(s).")
@@ -829,10 +1122,38 @@ def generate_report(results, ai_summary=None, metadata=None):
     return "\n".join(report)
 
 
-def generate_html_report(results, ai_summary=None, metadata=None):
+# Report heading icons: the same stroke-SVG language the dashboard uses, kept
+# inline so the exported HTML stays a single self-contained file.
+_REPORT_ICONS = {
+    "shield": '<path d="M12 3l7 3v5c0 4.6-3 7.7-7 9.3C8 18.7 5 15.6 5 11V6z"/>',
+    "message": '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    "pin": '<path d="M12 21s-7-5.8-7-11a7 7 0 0 1 14 0c0 5.2-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+    "ruler": '<path d="M3 17.2L17.2 3 21 6.8 6.8 21z"/><path d="M8 16l1.5 1.5M11 13l1.5 1.5M14 10l1.5 1.5M17 7l1.5 1.5"/>',
+    "signal": '<rect x="8" y="2" width="8" height="20" rx="4"/><circle cx="12" cy="7" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="17" r="1.6"/>',
+    "book": '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+    "monitor": '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+    "search": '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/>',
+    "check": '<path d="M20 6L9 17l-5-5"/>',
+    "cpu": '<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="10" y="10" width="4" height="4"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+    "key": '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
+}
+
+
+def _icon(name):
+    body = _REPORT_ICONS.get(name)
+    if not body:
+        return ""
+    return ('<svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" '
+            'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+            f'stroke-linejoin="round">{body}</svg>')
+
+
+def generate_html_report(results, ai_summary=None, metadata=None, triage=None):
     """Generate a self-contained, modern HTML report (exportable/shareable)."""
-    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
+    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata,
+                               triage=triage)
     summary = model["summary"]
+    exec_summary = executive_summary(model, results)
     risk_color = summary["risk_color"]
 
     def esc(v):
@@ -862,6 +1183,24 @@ def generate_html_report(results, ai_summary=None, metadata=None):
     css = """
     @page { margin: 18mm; }
     * { box-sizing: border-box; }
+    .icon { display:inline-block; width:1em; height:1em; flex:none; vertical-align:-0.125em; }
+    @media print {
+      /* Browsers drop background colors by default: the dark gradient header
+         would print as light text on white paper. Print gets an explicit
+         light theme: dark text, no shadows, and severity chips keep their
+         colors via print-color-adjust (the one place color carries meaning). */
+      html, body { background: #fff; }
+      .page { box-shadow: none; border: none; border-radius: 0; max-width: 100%; margin: 0; }
+      .hd { background: #fff; color: #0f2550; border-bottom: 2px solid #0f2550; }
+      .hd .sub { color: #40516e; }
+      .card, .sig, .stat, .sec, .file { break-inside: avoid; }
+      h2 { break-after: avoid; }
+      .sev, .pill, .risk, .stat b {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      .sev-CRITICAL, .sev-HIGH { color: #fff; }
+    }
     body { margin:0; background:#eef2f7; color:#172033; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
     .page { max-width: 1040px; margin: 24px auto; background:#fff; box-shadow: 0 18px 60px rgba(15,23,42,.16); border-radius:18px; overflow:hidden; }
     .hd { padding: 30px 36px; background: linear-gradient(135deg,#0b1b3a,#102a4c 48%,#14365c); color:#eaf4ff; }
@@ -909,7 +1248,7 @@ def generate_html_report(results, ai_summary=None, metadata=None):
         f"<title>ScriptSentry Report — {esc(summary['risk_label'])}</title>",
         f"<style>{css}</style></head><body><div class=\"page\">",
         "<div class=\"hd\">",
-        "<h1>🛡️ ScriptSentry Analysis Report</h1>",
+        "<h1>" + _icon("shield") + " ScriptSentry Analysis Report</h1>",
         "<div class=\"sub\">JS Intelligence Studio · " + esc(model["meta"]["source"] or "inline snippet") + " · " + esc(model["meta"]["generated_at"] or "now") + "</div>",
         f"<span class=\"risk\">RISK: {esc(summary['risk_label'])} · SCORE {summary['total_score']}</span>",
         "</div>",
@@ -920,7 +1259,22 @@ def generate_html_report(results, ai_summary=None, metadata=None):
         f"<div class=\"stat\"><b>{len(summary['transport'])}</b><span>Transport</span></div>",
         "</div>",
         "<div class=\"body\">",
-        "<h2>📌 Executive Summary</h2>",
+        f"<h2>{_icon('message')} What This Result Means</h2>",
+        "<div class=\"card\">"
+        + f"<p><b>{esc(exec_summary['verdict'])}</b></p>"
+        + f"<p>{esc(exec_summary['counts_in_words'])}</p>"
+        + "".join(
+            "<div class=\"sig\"><span class=\"sev sev-" + esc(item["severity"]) + "\">" + esc(item["severity"]) + "</span>"
+            + "<div><b>" + esc(item["title"]) + ("</b> — <i>" + esc(item["where"]) + "</i>" if item["where"] else "</b>")
+            + (" <span class=\"muted\">[triaged: " + esc(item["triage"]) + "]</span>" if item.get("triage") else "")
+            + "<br><span>" + esc(item["meaning"]) + "</span>"
+            + ("<br><span class=\"muted\"><b>Triage note:</b> " + esc(item["triage_note"]) + "</span>" if item.get("triage_note") else "")
+            + "<br><span><b>What to do:</b> " + esc(item["action"]) + "</span></div></div>"
+            for item in exec_summary["findings_in_plain_terms"]
+        )
+        + "<p class=\"muted\">" + esc(" ".join(exec_summary["notes"])) + "</p>"
+        + "</div>",
+        f"<h2>{_icon('pin')} Executive Summary</h2>",
         "<div class=\"card\"><p>" + esc(f"Risk posture is {summary['risk_label'].lower()} with {summary['total_findings']} findings across {summary['total_files']} file(s).") + "</p>",
         "<div class=\"bars\">",
     ]
@@ -935,13 +1289,13 @@ def generate_html_report(results, ai_summary=None, metadata=None):
     html.append("</div></div>")
 
     # Coverage / reliability: what we saw, what we could not, how sure we are.
-    html.append("<h2>📏 Scan Coverage &amp; Reliability</h2><div class=\"card\"><table class=\"kv\">")
+    html.append(f"<h2>{_icon('ruler')} Scan Coverage &amp; Reliability</h2><div class=\"card\"><table class=\"kv\">")
     for label, value in scan_reliability(model, results):
         html.append(f"<tr><th>{esc(label)}</th><td>{esc(value)}</td></tr>")
     html.append("</table></div>")
 
     # Signals
-    html.append("<h2>🚦 Top Risk Signals</h2><div class=\"card\">")
+    html.append(f"<h2>{_icon('signal')} Top Risk Signals</h2><div class=\"card\">")
     top = sorted(summary["signals"], key=lambda s: {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}.get(s.get("severity", "INFO"), 4))[:12]
     if not top:
         html.append("<p class=\"muted\">No structured risk signals raised.</p>")
@@ -952,7 +1306,7 @@ def generate_html_report(results, ai_summary=None, metadata=None):
 
     # Script inventory / behavior intelligence
     if model.get("script_inventory"):
-        html.append("<h2>📚 Script Inventory</h2>")
+        html.append(f"<h2>{_icon('book')} Script Inventory</h2>")
         for script in model["script_inventory"][:24]:
             caps = script.get("capabilities", {}) or {}
             risk = script.get("risk", {}) or {}
@@ -976,7 +1330,7 @@ def generate_html_report(results, ai_summary=None, metadata=None):
     # Runtime evidence
     runtime = model.get("runtime") or {}
     if runtime:
-        html.append("<h2>🖥️ Runtime Evidence</h2><div class=\"card\">")
+        html.append(f"<h2>{_icon('monitor')} Runtime Evidence</h2><div class=\"card\">")
         if runtime.get("captured"):
             runtime_reqs = runtime.get("requests", []) or []
             html.append(f"<p class=\"muted\">Local headless-browser run · {runtime.get('duration_ms', 0)} ms · {len(runtime_reqs)} requests · {len(runtime.get('console', []) or [])} console entries · {len(runtime.get('dom_sinks', []) or [])} DOM sink writes</p>")
@@ -994,7 +1348,7 @@ def generate_html_report(results, ai_summary=None, metadata=None):
         html.append("</div>")
 
     # Details per file
-    html.append("<h2>🔎 Detailed Analysis</h2>")
+    html.append(f"<h2>{_icon('search')} Detailed Analysis</h2>")
     for norm in model["files"]:
         html.append(f"<div class=\"card\"><div class=\"file-head\"><h3>{esc(norm['name'])}</h3><span class=\"pill\">{esc(norm['risk'])} · {norm['score']}</span></div>")
         if norm.get("origin") and norm["origin"] != norm["name"]:
@@ -1040,13 +1394,13 @@ def generate_html_report(results, ai_summary=None, metadata=None):
         html.append("</div>")
 
     # Remediation
-    html.append("<h2>✅ Recommended Fixes</h2><div class=\"remed\"><ol>")
+    html.append(f"<h2>{_icon('check')} Recommended Fixes</h2><div class=\"remed\"><ol>")
     for step in _remediation(model):
         html.append(f"<li>{esc(step)}</li>")
     html.append("</ol></div>")
 
     if model["ai_summary"].get("executive_summary"):
-        html.append("<h2>🧠 AI Notes</h2><div class=\"card\"><ul>")
+        html.append(f"<h2>{_icon('cpu')} AI Notes</h2><div class=\"card\"><ul>")
         for line in model["ai_summary"]["executive_summary"][:5]:
             html.append(f"<li>{esc(line)}</li>")
         html.append("</ul></div>")
@@ -1064,17 +1418,36 @@ def _all_unified_findings(model):
     return deduplicate_findings(list(findings) + list(flows))
 
 
-def generate_csv_report(results, ai_summary=None, metadata=None):
+def _csv_safe(value):
+    """Neutralize spreadsheet formula injection in one CSV cell.
+
+    Evidence, sources, sinks and file names come from the *scanned* (untrusted)
+    code: a bundle can deliberately ship a value like ``=HYPERLINK(...)`` or
+    ``=2+5|cmd|...`` and a paste can name its file ``=cmd|' /C calc'!A0.js``.
+    Excel, Google Sheets and LibreOffice execute a cell that starts with
+    ``=``, ``+``, ``-``, ``@`` or a tab/CR as a formula when the export is
+    opened -- the standard OWASP mitigation is to prefix such cells with an
+    apostrophe so they render as text.
+    """
+    text = str(value)
+    if text[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + text
+    return text
+
+
+def generate_csv_report(results, ai_summary=None, metadata=None, triage=None):
     """Generate a CSV export of unified findings."""
     import csv
     import io
 
-    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
+    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata,
+                               triage=triage)
     findings = _all_unified_findings(model)
     fields = [
         "id", "type", "severity", "confidence", "status", "origin", "file", "line",
         "source", "sink", "flow", "evidence", "sanitization_detected", "framework",
         "evidence_type", "analysis_quality", "limitations", "observation",
+        "triage_status", "triage_note",
     ]
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
@@ -1088,53 +1461,72 @@ def generate_csv_report(results, ai_summary=None, metadata=None):
         if isinstance(evidence, (list, tuple)):
             evidence = " | ".join(str(x) for x in evidence)
         writer.writerow({
-            "id": f.get("id", ""),
-            "type": f.get("type", ""),
-            "severity": f.get("severity", ""),
-            "confidence": f.get("confidence", ""),
-            "status": f.get("status", ""),
-            "origin": f.get("origin", "") or f.get("file", ""),
-            "file": f.get("file", ""),
+            "id": _csv_safe(f.get("id", "")),
+            "type": _csv_safe(f.get("type", "")),
+            "severity": _csv_safe(f.get("severity", "")),
+            "confidence": _csv_safe(f.get("confidence", "")),
+            "status": _csv_safe(f.get("status", "")),
+            "origin": _csv_safe(f.get("origin", "") or f.get("file", "")),
+            "file": _csv_safe(f.get("file", "")),
             "line": f.get("line", 0),
-            "source": f.get("source", ""),
-            "sink": f.get("sink", ""),
-            "flow": flow,
-            "evidence": evidence,
+            "source": _csv_safe(f.get("source", "")),
+            "sink": _csv_safe(f.get("sink", "")),
+            "flow": _csv_safe(flow),
+            "evidence": _csv_safe(evidence),
             "sanitization_detected": f.get("sanitization_detected", False),
-            "framework": f.get("framework", ""),
-            "evidence_type": f.get("evidence_type", ""),
-            "analysis_quality": f.get("analysis_quality", ""),
-            "limitations": limitations,
+            "framework": _csv_safe(f.get("framework", "")),
+            "evidence_type": _csv_safe(f.get("evidence_type", "")),
+            "analysis_quality": _csv_safe(f.get("analysis_quality", "")),
+            "limitations": _csv_safe(limitations),
             "observation": f.get("observation", False),
+            "triage_status": _csv_safe(f.get("triage_status", "")),
+            "triage_note": _csv_safe(f.get("triage_note", "")),
         })
     return buf.getvalue()
 
 
-def generate_sarif_report(results, ai_summary=None, metadata=None):
+def generate_sarif_report(results, ai_summary=None, metadata=None, triage=None):
     """Generate a SARIF 2.1.0 export of unified findings."""
     import json
 
-    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
+    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata,
+                               triage=triage)
     findings = _all_unified_findings(model)
     rules_map = {}
     results_out = []
     for f in findings:
         rule_id = str(f.get("id") or f.get("type") or "unknown")
         if rule_id not in rules_map:
+            # Plain-language title/meaning come from the same registry the
+            # hosted rule reference is generated from; the CWE tag lets SARIF
+            # consumers (GitHub code scanning, SonarQube imports) group by
+            # weakness class, and helpUri points at the per-rule docs.
+            plain = _plain_entry_for(f) or {}
+            base_id = rule_id.split(":")[0].rstrip("_")
+            cwe = next((CWE_MAP[key] for key in (rule_id, base_id)
+                        if key in CWE_MAP), None)
+            tags = [str(f.get("severity", "")).lower(), "security", "javascript"]
+            if cwe:
+                tags.append(f"cwe-{cwe}")
             rules_map[rule_id] = {
                 "id": rule_id,
                 "name": rule_id,
-                "shortDescription": {"text": str(f.get("type") or rule_id)},
-                "fullDescription": {"text": str(f.get("type") or rule_id)},
+                "shortDescription": {"text": str(plain.get("plain") or f.get("type") or rule_id)},
+                "fullDescription": {"text": str(plain.get("meaning") or f.get("type") or rule_id)},
+                "helpUri": RULES_PAGE + "#" + rule_id.split(":")[0],
                 "help": {"text": f"ScriptSentry finding: {f.get('type', rule_id)}"},
                 "defaultConfiguration": {"level": _sarif_level(f.get("severity", "MEDIUM"))},
                 "properties": {
-                    "tags": [str(f.get("severity", "")).lower(), "security", "javascript"],
+                    "tags": tags,
                     "security-severity": _sarif_security_severity(f.get("severity", "MEDIUM")),
                 },
             }
-        # line numbers are typically 1-indexed in ESTree; SARIF expects 0-indexed.
-        start_line = max(0, int(f.get("line", 1) or 1) - 1)
+            if cwe:
+                rules_map[rule_id]["properties"]["cwe"] = f"CWE-{cwe}"
+        # SARIF 2.1.3 §3.30.13: startLine is 1-based (line 1 is the first
+        # line). Unknown lines omit the region entirely -- a file-level
+        # finding -- rather than claiming a line the engine does not know.
+        start_line = coerce_line(f.get("line", 1))
         message = f.get("sink") or f.get("evidence") or f.get("type", rule_id)
         if f.get("source"):
             message = f"{f.get('source')} -> {message}"
@@ -1158,7 +1550,8 @@ def generate_sarif_report(results, ai_summary=None, metadata=None):
             "locations": [{
                 "physicalLocation": {
                     "artifactLocation": {"uri": str(f.get("origin") or f.get("file", ""))},
-                    "region": {"startLine": start_line},
+                    # Only claim a line when the engine actually knows it.
+                    **({"region": {"startLine": start_line}} if start_line >= 1 else {}),
                 }
             }],
             "properties": {
@@ -1180,6 +1573,26 @@ def generate_sarif_report(results, ai_summary=None, metadata=None):
         # apart from findings that were found in the shipped bundle itself.
         if f.get("via"):
             result["properties"]["via"] = str(f["via"])
+        # Server-side triage (core.triage): the workflow state ships as a
+        # property, and a false-positive decision additionally becomes a
+        # SARIF suppression -- the standard way consumers (e.g. GitHub code
+        # scanning) show a dismissed alert.
+        result_cwe = next((CWE_MAP[key] for key in (rule_id, rule_id.split(":")[0])
+                           if key in CWE_MAP), None)
+        if result_cwe:
+            result["properties"]["cwe"] = f"CWE-{result_cwe}"
+        triage_status = str(f.get("triage_status") or "")
+        if triage_status:
+            result["properties"]["triage"] = triage_status
+            if f.get("triage_note"):
+                result["properties"]["triageNote"] = str(f["triage_note"])[:300]
+            if triage_status == "false_positive":
+                result["suppressions"] = [{
+                    "kind": "external",
+                    "status": "rejected",
+                    "justification": str(f.get("triage_note")
+                                         or "Marked false positive in ScriptSentry triage")[:300],
+                }]
         results_out.append(result)
     return json.dumps({
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
@@ -1343,7 +1756,7 @@ def _file_diagnostic(file_name, data):
     }
 
 
-def build_dashboard_payload(results, ai_summary=None, metadata=None):
+def build_dashboard_payload(results, ai_summary=None, metadata=None, triage=None):
     files = []
     totals = {}
     findings = []
@@ -1561,11 +1974,32 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         # disabled or the scan was not recorded.
         "history": history_info,
     }
+    # Stamp every finding (and flow) with its server-side triage state and
+    # the engine fingerprint, so the UI can render and *address* decisions.
+    # Always runs: with no decisions yet, findings still get triage_fp.
+    from core.triage import annotate_findings
+    annotate_findings(payload["summary"].get("findings") or [], triage or {})
+    annotate_findings(payload["summary"].get("dataflows") or [], triage or {})
+
+    # Plain-language layer for the Overview card (managers/stakeholders).
+    # Built from the same evidence the payload already carries, via the same
+    # model contract the text/HTML exports use.
+    actionable, observation_rows = split_findings(payload["summary"]["findings"])
+    exec_model = {
+        "summary": {**payload["summary"],
+                    "actionable_findings": actionable,
+                    "observations": observation_rows},
+        "meta": payload["meta"],
+        "scan_summary": scan_summary,
+        "runtime": runtime_evidence,
+        "files": files,
+    }
+    payload["executive_summary"] = executive_summary(exec_model, results)
     return payload
 
 
 
-def generate_json_report(results, ai_summary=None, metadata=None):
+def generate_json_report(results, ai_summary=None, metadata=None, triage=None):
     """Complete machine-readable export: raw results + both report models."""
     payload = {
         "metadata": metadata or {},
@@ -1573,10 +2007,14 @@ def generate_json_report(results, ai_summary=None, metadata=None):
                     if not str(key).startswith("__")},
         "runtime_evidence": (results or {}).get("__runtime_evidence__"),
         "runtime_findings": (results or {}).get("__runtime_findings__", []),
-        "report_model": build_report_model(results, ai_summary=ai_summary, metadata=metadata),
-        "dashboard": build_dashboard_payload(results, ai_summary=ai_summary, metadata=metadata),
+        "report_model": build_report_model(results, ai_summary=ai_summary,
+                                           metadata=metadata, triage=triage),
+        "dashboard": build_dashboard_payload(results, ai_summary=ai_summary,
+                                             metadata=metadata, triage=triage),
         "ai_summary": ai_summary or {},
     }
+    # The plain-language layer, from the already-built report model.
+    payload["executive_summary"] = executive_summary(payload["report_model"], results)
     return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
 
 

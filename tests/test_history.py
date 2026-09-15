@@ -170,6 +170,17 @@ class HistoryUiContractTest(unittest.TestCase):
         for needle in ("history-card", "history-diff", "history-list"):
             self.assertIn(needle, self.tool)
 
+    def test_rescan_and_compare_is_wired(self):
+        """P1: re-running the last scan and showing the diff is one click."""
+        for needle in ("rescanAndCompare", "updateRescanButton", "rescan-compare",
+                       "lastQuery && !viewedScanNote"):
+            self.assertIn(needle, self.app)
+        self.assertIn('id="rescan-compare"', self.tool)
+        # The demo report is not re-runnable: the button must hide for it.
+        self.assertIn("updateRescanButton();  // the demo is not re-runnable", self.app)
+        # And the listener is actually attached.
+        self.assertIn('$("#rescan-compare")', self.app)
+
     def test_history_views_are_busy_disabled(self):
         self.assertIn('querySelectorAll(".history-view")', self.app,
                       "history View buttons must be disabled while a scan runs")

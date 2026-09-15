@@ -10,8 +10,13 @@ Weights reflect the review's priority ordering:
   * demonstrated/strong evidence (source->sink flows, runtime effects) weighs
     far more than a regex signal;
   * third-party scripts reading sensitive data and sending it externally is a
-    top contributor;
-  * capability/inventory observations (API surface, obfuscation) weigh least.
+    top contributor, but the whole third-party bucket is capped
+    (``THIRD_PARTY_CAP``) so tracker count can never saturate the score;
+  * capability/inventory observations (API surface, obfuscation) weigh least
+    and are capped as a group (``OBSERVATION_CAP``);
+  * a demonstrated (confirmed/runtime) HIGH or CRITICAL effect puts the score
+    in that severity band at minimum (``CONFIRMED_SEVERITY_FLOOR``), applied
+    as an explicit contributor so the number stays explainable.
 
 Everything here is deterministic and pure, so it is trivially testable.
 """
@@ -56,6 +61,23 @@ _TIER_MULTIPLIER = {3: 1.0, 2: 0.75, 1: 0.45, 0: 0.2}
 # inventory volume can never outrank actual findings.
 OBSERVATION_CAP = 15
 
+# Hard ceiling on the combined contribution of third-party *behavioral
+# correlations* (a script that reads sensitive data and also sends data
+# externally, or a high per-script risk score).  Strong enough to matter,
+# never proven: a page loading twenty trackers must not outrank one
+# demonstrated vulnerability, for the same reason observations are capped.
+THIRD_PARTY_CAP = 30
+
+# A demonstrated effect (confirmed status / runtime evidence) is the strongest
+# evidence the engine can produce, and the numeric score must agree with what
+# the label rules already say: one demonstrated CRITICAL is a CRITICAL result
+# (>= 75), one demonstrated HIGH is a HIGH result (>= 50).  Without this floor
+# a single confirmed CRITICAL read 30/100 next to a HIGH label -- the number
+# contradicted both the evidence and the label.  The lift is added as an
+# explicit "severity floor" contributor, so points still sum to the score and
+# the model stays fully explainable.
+CONFIRMED_SEVERITY_FLOOR = {"CRITICAL": 75, "HIGH": 50}
+
 
 def overall_risk(
     findings: Optional[List[Dict[str, Any]]] = None,
@@ -97,6 +119,13 @@ def overall_risk(
     # high-confidence DOM injection scored 14 -- exactly backwards.
     observation_points = 0
 
+    # Highest severity rank among demonstrated (confirmed/runtime) findings,
+    # used by the CONFIRMED_SEVERITY_FLOOR at assembly time.
+    confirmed_max_rank = 0
+    # Combined points already granted to third-party behavioral correlations
+    # (see THIRD_PARTY_CAP).
+    third_party_points = 0
+
     # ---- Per-finding contributions ------------------------------------
     seen = set()
     for f in findings:
@@ -131,6 +160,10 @@ def overall_risk(
 
         if status == "confirmed" or evidence == "runtime_effect":
             counts["confirmed"] += 1
+            confirmed_max_rank = max(
+                confirmed_max_rank,
+                SEVERITY_RANK.get(str(f.get("severity", "")).upper(), 1),
+            )
             counts["runtime_effects"] += 1 if "runtime" in evidence else 0
             add("Confirmed/demonstrated dangerous behavior", int(round(base)) + 10, tier=3)
         elif tier >= 2:
@@ -168,10 +201,22 @@ def overall_risk(
         external = caps.get("external_destinations", []) or []
         if party == "third_party" and reads and external:
             counts["third_party_exfil"] += 1
-            add("Third-party script reads sensitive data and sends data externally", min(18, 6 + score // 6), tier=1)
+            # Behavioral correlation only (tier 1): the combined bucket is
+            # capped so tracker count cannot saturate the score (see
+            # THIRD_PARTY_CAP). Scripts beyond the cap still count in
+            # counts["third_party_exfil"] -- they are just not paid points.
+            points = min(18, 6 + score // 6)
+            points = max(0, min(points, THIRD_PARTY_CAP - third_party_points))
+            third_party_points += points
+            if points > 0:
+                add("Third-party script reads sensitive data and sends data externally", points, tier=1)
         elif party == "third_party" and score >= 40:
             counts["third_party_risky"] += 1
-            add("High-risk third-party script", min(12, 4 + score // 10), tier=1)
+            points = min(12, 4 + score // 10)
+            points = max(0, min(points, THIRD_PARTY_CAP - third_party_points))
+            third_party_points += points
+            if points > 0:
+                add("High-risk third-party script", points, tier=1)
 
     # ---- Runtime contributions ------------------------------------------
     if runtime.get("captured"):
@@ -181,6 +226,20 @@ def overall_risk(
             add("Runtime DOM sink writes observed", 5, count=len(runtime.get("dom_sinks", [])), tier=2)
 
     # ---- Assemble & normalize ------------------------------------------
+    # A demonstrated HIGH/CRITICAL effect puts the result in that band at
+    # minimum. The lift is an explicit contributor (not a silent clamp), so
+    # "why is this 75?" still has an answer that adds up.
+    if confirmed_max_rank >= SEVERITY_RANK["CRITICAL"]:
+        floor, floor_sev = CONFIRMED_SEVERITY_FLOOR["CRITICAL"], "CRITICAL"
+    elif confirmed_max_rank >= SEVERITY_RANK["HIGH"]:
+        floor, floor_sev = CONFIRMED_SEVERITY_FLOOR["HIGH"], "HIGH"
+    else:
+        floor, floor_sev = 0, ""
+    if floor:
+        raw_so_far = sum(c["points"] for c in contributions.values())
+        if floor > raw_so_far:
+            add(f"Demonstrated {floor_sev} effect (severity floor)", floor - raw_so_far, tier=3)
+
     contributors = sorted(contributions.values(), key=lambda c: c["points"], reverse=True)
     raw = sum(c["points"] for c in contributors)
     score = max(0, min(100, int(round(raw))))
@@ -200,6 +259,8 @@ def overall_risk(
 
     counts["observation_points"] = observation_points
     counts["observation_cap"] = OBSERVATION_CAP
+    counts["third_party_points"] = third_party_points
+    counts["third_party_cap"] = THIRD_PARTY_CAP
     return {
         "score": score,
         "label": label,

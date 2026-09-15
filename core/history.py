@@ -30,7 +30,8 @@ from core.state import state_dir
 
 __all__ = [
     "delete_scan", "diff_scans", "enabled", "export_history", "fingerprint",
-    "get_scan", "list_scans", "record_scan", "storage_info", "wipe_history",
+    "finding_rows", "get_scan", "list_scans", "record_scan", "storage_info",
+    "wipe_history",
 ]
 
 #: Findings/observations stored per scan; beyond this we keep the counts.
@@ -67,6 +68,16 @@ CREATE TABLE IF NOT EXISTS findings (
 );
 CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id);
 CREATE INDEX IF NOT EXISTS idx_scans_target ON scans(target, id);
+-- Triage decisions (core.triage): keyed by the same line-independent
+-- finding fingerprint as the findings table, so a decision follows a
+-- finding across scans and line edits. It lives in the same DB so the
+-- wipe/delete-all contract covers it too.
+CREATE TABLE IF NOT EXISTS triage (
+    fingerprint TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    note TEXT,
+    updated_at REAL NOT NULL
+);
 """
 
 _LOCK = threading.Lock()
@@ -85,6 +96,16 @@ def enabled():
 
 def db_path():
     return os.path.join(state_dir(), "history.db")
+
+
+def connection():
+    """The shared DB handle. core.triage stores in the same database."""
+    return _connect()
+
+
+def db_lock():
+    """The lock guarding the shared connection (see core.triage)."""
+    return _LOCK
 
 
 def _create_schema(conn):
@@ -340,6 +361,33 @@ def get_scan(scan_id, include_report=False):
             return None
 
 
+def finding_rows(scan_id):
+    """Every stored finding row of one scan, as plain dicts.
+
+    Returns ``None`` for an unknown scan id (so callers can distinguish "no
+    findings" from "no such scan"). Powers the finding-level revalidation in
+    :mod:`core.revalidation`.
+    """
+    try:
+        with _LOCK:
+            conn = _connect()
+            cur = conn.execute(
+                "SELECT fingerprint, finding_id, severity, confidence, title,"
+                " file, detail, observation FROM findings WHERE scan_id = ?"
+                " ORDER BY fingerprint",
+                (int(scan_id),))
+            return [
+                {
+                    "fingerprint": row[0], "finding_id": row[1], "severity": row[2],
+                    "confidence": row[3], "title": row[4], "file": row[5],
+                    "detail": row[6], "observation": bool(row[7]),
+                }
+                for row in cur.fetchall()
+            ]
+    except Exception:
+        return None
+
+
 def diff_scans(from_id, to_id):
     """Compare two stored scans by fingerprint (order-independent ids)."""
     try:
@@ -400,6 +448,7 @@ def storage_info():
         "wal_size_bytes": _file_size(path + "-wal"),
         "scan_count": 0,
         "finding_count": 0,
+        "triage_count": 0,
         "oldest_scan_at": None,
         "newest_scan_at": None,
         "retention_limit": _retention_limit(),
@@ -424,6 +473,8 @@ def storage_info():
                 info["newest_scan_at"] = scan_row[2]
                 info["finding_count"] = int(conn.execute(
                     "SELECT COUNT(*) FROM findings").fetchone()[0])
+                info["triage_count"] = int(conn.execute(
+                    "SELECT COUNT(*) FROM triage").fetchone()[0])
                 info["report_bytes_stored"] = int(row[3] or 0)
             except Exception:
                 pass
@@ -511,7 +562,7 @@ def export_history(include_payload=False):
     scans = []
     if not os.path.isfile(db_path()):
         return {"exported_at": int(time.time()), "scan_count": 0,
-                "finding_count": 0, "scans": scans}
+                "finding_count": 0, "scans": scans, "triage": []}
     with _LOCK:
         try:
             conn = _connect()
@@ -525,9 +576,13 @@ def export_history(include_payload=False):
                 " title, file, detail, observation FROM findings ORDER BY scan_id,"
                 " rowid ASC"
             ).fetchall()
+            triage_rows = conn.execute(
+                "SELECT fingerprint, status, note, updated_at FROM triage"
+                " ORDER BY updated_at ASC"
+            ).fetchall()
         except Exception:
             return {"exported_at": int(time.time()), "scan_count": 0,
-                    "finding_count": 0, "scans": scans}
+                    "finding_count": 0, "scans": scans, "triage": []}
     by_scan = {}
     for row in finding_rows:
         scan_id, fingerprint_v, finding_id, severity, confidence, title, file, detail, observation = row
@@ -563,4 +618,10 @@ def export_history(include_payload=False):
         "scan_count": len(scans),
         "finding_count": sum(len(s["findings"]) for s in scans),
         "scans": scans,
+        # Triage decisions are the user's own data: they outlive scans and
+        # must ship with the export exactly like the scans do.
+        "triage": [
+            {"fingerprint": r[0], "status": r[1], "note": r[2], "updated_at": r[3]}
+            for r in triage_rows
+        ],
     }

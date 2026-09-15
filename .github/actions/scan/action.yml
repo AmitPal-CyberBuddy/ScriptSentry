@@ -1,0 +1,72 @@
+name: "ScriptSentry JavaScript scan"
+description: >-
+  Static JavaScript security scan of a checkout: hardcoded secrets and API
+  keys, DOM XSS flows, open redirects, data-exfiltration candidates, attack
+  surface and obfuscation. Runs fully on the runner -- scanned code never
+  leaves your machine.
+
+inputs:
+  targets:
+    description: "File(s) or directory to scan, space-separated (public http(s) URLs also accepted)"
+    required: false
+    default: "."
+  fail-on:
+    description: "Exit 1 when actionable findings reach this severity (critical|high|medium|low|none)"
+    required: false
+    default: "high"
+  format:
+    description: "Report format(s): txt json html csv sarif openapi, space-separated"
+    required: false
+    default: "sarif txt"
+  output:
+    description: "Directory the reports are written to"
+    required: false
+    default: "scriptsentry-report"
+  baseline:
+    description: >-
+      Path to a baseline file (written by 'scriptsentry --save-baseline' and
+      typically committed): the fail-on gate then counts only findings that
+      are new or worsened since it. Empty disables baseline mode.
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install ScriptSentry engine
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        # github.action_path is the ScriptSentry repository itself (this
+        # action lives inside it), so the engine is installed from source.
+        python -m pip install "${{ github.action_path }}"
+
+    - name: Scan targets
+      shell: bash
+      run: |
+        set -o pipefail
+        BASELINE_ARGS=()
+        if [ -n "${{ inputs.baseline }}" ]; then
+          BASELINE_ARGS=(--baseline "${{ inputs.baseline }}")
+        fi
+        # shellcheck disable=SC2086 -- targets are intentionally word-split
+        scriptsentry ${{ inputs.targets }} \
+          --format ${{ inputs.format }} \
+          --output "${{ inputs.output }}" \
+          --fail-on ${{ inputs.fail-on }} \
+          "${BASELINE_ARGS[@]}"
+
+    - name: Report locations
+      shell: bash
+      run: |
+        echo "### ScriptSentry report" >> "$GITHUB_STEP_SUMMARY"
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+        echo "Reports written to \`${{ inputs.output }}/\`:" >> "$GITHUB_STEP_SUMMARY"
+        for f in "${{ inputs.output }}"/*; do
+          echo "- \`$f\`" >> "$GITHUB_STEP_SUMMARY"
+        done

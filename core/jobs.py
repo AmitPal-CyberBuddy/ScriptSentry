@@ -6,15 +6,28 @@ nested chunks. Instead of holding the HTTP request open, the server returns a
 polls ``/api/status`` and finally fetches ``/api/result``.
 
 Only metadata and progress counters are kept here; the raw result is retained
-until the job is explicitly cleared so report exports can reuse a completed
-scan without re-crawling the remote site.
+until the job is pruned (see :class:`JobManager`) so report exports can reuse
+a completed scan without re-crawling the remote site.
+
+Timestamps: every ``*_at`` field is an **epoch float (seconds)**, including
+``created_at`` (which used to be an ISO string, forcing every consumer to
+handle both formats). Human-readable twins (``created_at_iso`` ...) are
+derived in :meth:`Job.snapshot` for display only.
 """
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 
+from core.diag import note as diag_note
 from core.eta import CostModel
+
+
+def _iso(epoch):
+    """ISO-8601 UTC string for an epoch float, or None."""
+    if not isinstance(epoch, (int, float)):
+        return None
+    return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat(timespec="seconds")
 
 
 class Job:
@@ -48,7 +61,10 @@ class Job:
         self.stages = []
         self.result = None
         self.error = ""
-        self.created_at = datetime.now(timezone.utc).isoformat()
+        # Epoch floats (seconds) for every timestamp; ISO twins are derived
+        # in snapshot(). The old mixed ISO/epoch format forced every
+        # consumer to handle both.
+        self.created_at = time.time()
         self.started_at = None
         self.finished_at = None
         # Heartbeat: wall-clock time of the last progress event. The UI uses
@@ -373,8 +389,8 @@ class Job:
                 workers=self.max_workers,
                 base_cost=base_cost,
             )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - calibration must never fail a scan
+            diag_note("eta", f"stage calibration not recorded: {exc!r}")
 
     def cancel(self):
         """Request cooperative cancellation; in-flight work stops at the next check.
@@ -442,6 +458,11 @@ class Job:
                 "started_at": self.started_at,
                 "finished_at": self.finished_at,
             }
+            # Display twins: ISO-8601 (UTC) for humans, derived, read-only.
+            # The raw fields above stay epoch floats for arithmetic.
+            data["created_at_iso"] = _iso(self.created_at)
+            data["started_at_iso"] = _iso(self.started_at)
+            data["finished_at_iso"] = _iso(self.finished_at)
             if include_result:
                 data["result"] = self.result
             return data
@@ -514,7 +535,8 @@ class JobManager:
                         history_info = record_scan(
                             result, mode=job.mode, target=job.source,
                             duration_ms=(time.monotonic() - started) * 1000.0)
-                except Exception:  # noqa: BLE001 - bookkeeping is best-effort
+                except Exception as exc:  # noqa: BLE001 - bookkeeping is best-effort
+                    diag_note("history", f"scan history recording failed: {exc!r}")
                     history_info = None
                 if history_info and isinstance(result, dict):
                     result.setdefault("__history__", history_info)
@@ -527,7 +549,12 @@ class JobManager:
         return thread
 
     def get(self, job_id):
+        # Prune on every access, not only on create: a long-lived engine
+        # that finishes its last scan holds every finished job's full result
+        # in memory until a *new* job is created. status/result/cancel all
+        # funnel through here, so retention is enforced continuously.
         with self._lock:
+            self._prune_locked()
             return self._jobs.get(job_id)
 
     def status(self, job_id):

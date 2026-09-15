@@ -17,7 +17,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEBUI = os.path.join(os.path.dirname(HERE), "webui")
-PAGES = ["home/index.html", "tool/index.html", "changelog/index.html"]
+PAGES = ["home/index.html", "tool/index.html", "changelog/index.html", "rules/index.html"]
 
 with open(os.path.join(WEBUI, "home", "index.html"), encoding="utf-8") as fh:
     INDEX = fh.read()
@@ -25,11 +25,14 @@ with open(os.path.join(WEBUI, "tool", "index.html"), encoding="utf-8") as fh:
     TOOL = fh.read()
 with open(os.path.join(WEBUI, "changelog", "index.html"), encoding="utf-8") as fh:
     CHANGELOG = fh.read()
+with open(os.path.join(WEBUI, "rules", "index.html"), encoding="utf-8") as fh:
+    RULES = fh.read()
 
 PAGES_SRC = {
     "home/index.html": INDEX,
     "tool/index.html": TOOL,
     "changelog/index.html": CHANGELOG,
+    "rules/index.html": RULES,
 }
 
 # Anchors can legitimately live in any page when linked cross-page,
@@ -130,6 +133,10 @@ class LinkTargetTest(unittest.TestCase):
         legacy = []
         for page, src in PAGES_SRC.items():
             for href, _ in links(src):
+                # External sites (e.g. cwe.mitre.org definitions) are out of
+                # scope: this gate is about *our* pages' URL hygiene.
+                if href.startswith(("http://", "https://")):
+                    continue
                 if ".html" in href:
                     legacy.append(f"{page}: {href}")
         self.assertEqual([], legacy,

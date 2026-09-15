@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, unquote
 
 from config import FILE_RULES, JS_DIR, REQUEST_HEADERS
+from core.diag import note as diag_note
 from core.url_policy import read_response_text, safe_get
 
 # Crawl politeness lives in core.url_policy.safe_get -- the single choke
@@ -68,7 +69,8 @@ def download_file(url, output_dir=None, timeout=15, cancel_check=None):
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(content)
             return path
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - one failed asset must not fail the batch
+            diag_note("download", f"{url!r} failed: {exc!r}")
             continue
     return None
 
@@ -88,7 +90,8 @@ def download_js(js_links, progress_callback=None, output_dir=None, timeout=15, c
         for done, future in enumerate(as_completed(futures), start=1):
             try:
                 path = future.result()
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 - one worker error must not fail the batch
+                diag_note("download", f"worker for {futures[future]!r} raised: {exc!r}")
                 path = None
             if path:
                 results.append(path)

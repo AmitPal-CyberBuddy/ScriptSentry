@@ -136,9 +136,34 @@ class ParseCacheTest(unittest.TestCase):
         self.assertEqual(second_error, first_error)
         self.assertEqual(calls["n"], 1, "a failed parse must not be retried per consumer")
 
+    def test_large_bundle_is_parsed_once_and_cached(self):
+        """The per-entry cap is 2 MB: every realistic single script caches.
+
+        Multi-hundred-KB minified bundles are exactly where a repeated parse
+        hurts (taint, attack surface, module discovery and the AST summary
+        all parse through this cache), so a 500 KB document must be parsed
+        once and served from the cache afterwards.
+        """
+        from core import js_parser
+        big = "const x = 1;\n" * 40_000  # ~520 KB, under the 2 MB entry cap
+        self.assertLess(len(big.encode()), js_parser._RAW_CACHE_MAX_SOURCE_BYTES)
+        calls = {"n": 0}
+        real_parse = js_parser._parse
+
+        def counting(source):
+            calls["n"] += 1
+            return real_parse(source)
+
+        with mock.patch.object(js_parser, "_parse", counting):
+            first = js_parser.parse_raw(big)
+            second = js_parser.parse_raw(big)
+        self.assertIsNotNone(first)
+        self.assertIs(first, second, "identical content must share one tree")
+        self.assertEqual(calls["n"], 1, "a large document parses once, not per consumer")
+
     def test_oversize_content_bypasses_the_cache(self):
         from core import js_parser
-        big = "const x = 1;\n" * 40_000  # > _RAW_CACHE_MAX_SOURCE_BYTES
+        big = "const x = 1;\n" * 220_000  # > 2 MB per-entry cap
         self.assertGreater(len(big.encode()), js_parser._RAW_CACHE_MAX_SOURCE_BYTES)
         tree = js_parser.parse_raw(big)
         self.assertIsNotNone(tree)

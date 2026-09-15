@@ -15,6 +15,7 @@ from core.decoder import decode_candidate_strings, extract_hidden_values
 from core.framework_rules import analyze_framework
 from core.taint import analyze_taint
 from core.source_maps import source_map_reference
+from core.secret_validation import validate as _validate_secret_value
 from core.dependency_intel import check_dependencies
 
 
@@ -103,28 +104,278 @@ def _secret_context(content, secret, before=120, after=180):
     return ""
 
 
+# Two or more string literals joined by '+', e.g. "AKIA" + "IOSFODNN7EXAMPLE".
+# Minified and defensively-written bundles really do split credentials across
+# a concatenation, and every name- and value-based pattern is blind to that.
+# Each literal is bounded ({0,4096}): after a failed chain match the engine
+# would otherwise shrink a multi-megabyte embedded literal (inline base64
+# source maps) one character at a time -- quadratic backtracking. A real
+# credential is never longer than 4096 chars (JWTs and PEMs fit comfortably).
+_LITERAL_PATTERN = r"'(?:[^'\\\n]|\\.){0,4096}'|\"(?:[^\"\\\n]|\\.){0,4096}\""
+# Identifiers and whitespace runs are bounded for the same reason: a
+# multi-megabyte run of word characters (or spaces) must not be shrunk one
+# character at a time after a failed match. Real names are far under 64 chars.
+_NAME_PATTERN = r"[A-Za-z_$][\w$]{0,63}"
+_GAP = r"\s{0,64}"
+_CHAIN_LINK = "(?:" + _LITERAL_PATTERN + ")"
+_CONCAT_CHAIN_RE = re.compile(
+    r"(?P<chain>" + _CHAIN_LINK + r"(?:" + _GAP + r"\+" + _GAP + _CHAIN_LINK + r")+)"
+)
+# An assignment target immediately left of a chain, so `apiKey = "a" + "b"`
+# can be re-synthesized as the candidate `apiKey = "ab"`.
+_ASSIGN_BEFORE_RE = re.compile(r"([A-Za-z_$][\w$.\\]['\\\"]{0,60})" + _GAP + r"[:=]" + _GAP + r"$")
+# Node-style buffer assembly: Buffer.concat([Buffer.from("a"), "b", ...]).
+_BUFFER_CONCAT_RE = re.compile(r"Buffer" + _GAP + r"\." + _GAP + r"concat" + _GAP + r"\(" + _GAP + r"\[([^\]]{0,2000})\]")
+# A single pure string-literal assignment (`const p = "AKIA"`), the building
+# block for cross-statement folding.
+_PURE_LITERAL_ASSIGN_RE = re.compile(
+    r"(?:const|let|var)" + r"\s{1,64}" + r"(" + _NAME_PATTERN + r")" + _GAP + r"=" + _GAP
+    + r"(" + _LITERAL_PATTERN + r")" + _GAP + r"[,;\n]"
+)
+# A variable-name or string-literal operand inside a concatenation.
+_CONCAT_OPERAND = "(?:" + _NAME_PATTERN + r"|'[^'\n]{0,4096}'|\"[^\"\n]{0,4096}\")"
+
+
+def _line_counter(content):
+    """Incremental 1-based line lookup for ordered matches.
+
+    ``content.count("\n", 0, pos)`` per match is quadratic when a file has
+    thousands of foldable sites; this closure only counts the newline delta
+    since the previous lookup. Each regex pass iterates matches in ascending
+    order, so the state never rewinds within a pass.
+    """
+    state = {"pos": 0, "line": 1}
+
+    def at(offset):
+        if offset < state["pos"]:
+            state["pos"], state["line"] = 0, 1
+        state["line"] += content.count("\n", state["pos"], offset)
+        state["pos"] = offset
+        return state["line"]
+
+    return at
+
+
+# Anchored scanning: every fold-relevant match contains an `=` or `:` (the
+# assignment itself), so the passes below iterate those rare characters and
+# inspect a bounded window around each, instead of attempting the full
+# pattern at every position -- on a multi-MB run of word characters the
+# per-position name-shrink was quadratic.
+_ASSIGN_ANCHOR_RE = re.compile(r"[=:]")
+# A name ending right before an assignment operator (`k =`, `k +=`, `k:`).
+_NAME_BEFORE_ASSIGN_RE = re.compile(
+    r"(?<![.\w$])(" + _NAME_PATTERN + r")" + _GAP + r"[+\-*/]?" + _GAP + r"$"
+)
+# The operand chain after the assignment: ` a + b + "tail";`
+_CONCAT_TAIL_RE = re.compile(
+    _GAP + _CONCAT_OPERAND + r"(?:" + _GAP + r"\+" + _GAP + _CONCAT_OPERAND + r"){1,7}"
+    + _GAP + r"[,;)\n]"
+)
+
+
+def _fold_string_literals(segment):
+    """Concatenate every string literal in ``segment`` ('a', "b", 'c' -> abc)."""
+    parts = re.findall(r"'([^'\n]*)'|\"([^\"\n]*)\"", segment)
+    return "".join(a or b for a, b in parts)
+
+
+def _folded_concat_candidates(content, limit=200):
+    """Re-synthesize candidates from split-up string material.
+
+    Covers three shapes, all folded into the same ``(candidate, line)``
+    stream in content order and pushed through the identical
+    dedup/credibility pipeline as literally-present values:
+
+    1. a chain of literals in one expression (``"AKIA" + "IOSF..."``);
+    2. Node-style buffer assembly (``Buffer.concat([Buffer.from("a"), "b"])``);
+    3. cross-statement assembly: single-assignment literal variables joined
+       later (``const a = "AKIA"; const b = "IOSF..."; const key = a + b``).
+
+    The candidate text is ``value`` or ``name = "value"`` when the fold sits
+    on the right-hand side of an assignment, so name-based credibility
+    applies. ``line`` is where the material starts -- the folded value never
+    appears contiguously in the file, so the position must be carried
+    explicitly.
+    """
+    content = content or ""
+    out = []
+    seen = set()
+    line_at = _line_counter(content)
+
+    def add(candidate, line):
+        if len(out) >= limit or candidate in seen:
+            return
+        seen.add(candidate)
+        out.append((candidate, line))
+
+    for m in _CONCAT_CHAIN_RE.finditer(content):
+        chain = m.group("chain")
+        folded = _fold_string_literals(chain)
+        if len(folded) < 8:
+            continue
+        line = line_at(m.start())
+        # If the chain is the right-hand side of an assignment, say which
+        # name it was assigned to so name-based credibility applies too.
+        prefix = content[max(0, m.start() - 120):m.start()]
+        assign = _ASSIGN_BEFORE_RE.search(prefix)
+        if assign:
+            add(f'{assign.group(1).strip()} = "{folded}"', line)
+        else:
+            add(f'"{folded}"', line)
+
+    # Buffer.concat([Buffer.from("a"), "b", Buffer.from("c")]) -- fold the
+    # literal elements, but only when every array element is a literal
+    # (optionally Buffer.from-wrapped); anything else (a variable, a
+    # .repeat() call) makes the assembled value unknowable.
+    for m in _BUFFER_CONCAT_RE.finditer(content):
+        elements = [e.strip() for e in m.group(1).split(",") if e.strip()]
+        if not elements:
+            continue
+        ok = True
+        for element in elements:
+            stripped = re.sub(r"^Buffer\s*\.\s*from\s*\(|\)$", "", element).strip()
+            if not re.fullmatch(r"'[^'\n]*'|\"[^\"\n]*\"", stripped):
+                ok = False
+                break
+        if not ok:
+            continue
+        folded = _fold_string_literals(m.group(1))
+        if len(folded) < 8:
+            continue
+        prefix = content[max(0, m.start() - 120):m.start()]
+        assign = _ASSIGN_BEFORE_RE.search(prefix)
+        line = line_at(m.start())
+        if assign:
+            add(f'{assign.group(1).strip()} = "{folded}"', line)
+        else:
+            add(f'"{folded}"', line)
+
+    # Cross-statement assembly: variables that are assigned exactly one
+    # pure string literal each, then concatenated somewhere later. A name
+    # assigned more than once (or assigned a non-literal) is dropped -- only
+    # deterministic values are ever folded.
+    literal_vars = {}
+    for m in _PURE_LITERAL_ASSIGN_RE.finditer(content):
+        name = m.group(1)
+        value = (m.group(2) or "")[1:-1]
+        # entry: [value, definition_line, assignment_sites] -- sites are
+        # counted by the generic pass below, which also sees this declaration.
+        literal_vars.setdefault(name, [value, line_at(m.start()), 0])
+    # The assignment-site and concat passes only matter when at least one
+    # foldable variable exists; gating them also keeps pathological content
+    # (a multi-MB embedded string with no declarations) out of two full
+    # regex sweeps for free.
+    if literal_vars:
+        # A name is only foldable when its literal declaration is its ONE
+        # assignment site: any later write (`a = dynamic()`, `a += x`, a
+        # second `let a = ...` in another scope) makes the value at concat
+        # time unknowable, so the name is dropped. Object properties
+        # (`obj.a = x`) are excluded by the lookbehind -- they never touch
+        # the variable. Both checks run off the same rare-character anchors
+        # (`=` / `:`) with bounded windows, never a full-content pattern
+        # attempt per position.
+        var_concats = []  # (target, tail_text, anchor_offset)
+        for anchor in _ASSIGN_ANCHOR_RE.finditer(content):
+            pos = anchor.start()
+            is_eq = content[pos] == "="
+            # `==`, `===`, `=>` are comparisons/arrows, never assignments.
+            if is_eq and content[pos + 1:pos + 2] in ("=", ">"):
+                continue
+            head = content[max(0, pos - 82):pos]
+            name_m = _NAME_BEFORE_ASSIGN_RE.search(head)
+            if not name_m:
+                continue
+            target = name_m.group(1)
+            if is_eq and target in literal_vars:
+                # Count the assignment site (the declaration itself is one).
+                literal_vars[target][2] += 1
+                continue
+            # Concat fold candidate: `target = <operand> + <operand>...`.
+            tail_m = _CONCAT_TAIL_RE.match(content, pos + 1, pos + 402)
+            if tail_m:
+                var_concats.append((target, tail_m.group(0), pos))
+        for name in [n for n, e in literal_vars.items() if e[2] != 1]:
+            literal_vars.pop(name, None)
+
+        for target, tail, pos in var_concats:
+            operands = [op.strip() for op in re.findall(_CONCAT_OPERAND, tail)]
+            pieces = []
+            for operand in operands:
+                if operand.startswith(("'", '"')):
+                    pieces.append(operand[1:-1])
+                else:
+                    entry = literal_vars.get(operand)
+                    if entry is None:
+                        pieces = None
+                        break
+                    pieces.append(entry[0])  # entry: [value, definition_line, sites]
+            if not pieces:
+                continue
+            folded = "".join(pieces)
+            if len(folded) < 8:
+                continue
+            # Position: the fold is only as good as the variable definitions,
+            # so point at the first literal definition when one exists.
+            line = min((literal_vars[op][1] for op in operands if op in literal_vars),
+                       default=line_at(pos))
+            add(f'{target} = "{folded}"', line)
+
+    return out
+def _line_of(content, needle):
+    """1-based line of ``needle`` in ``content`` (0 when not found)."""
+    if not needle:
+        return 0
+    idx = (content or "").find(str(needle))
+    if idx < 0:
+        # Fall back to the extracted value (candidates are often normalized).
+        for value in re.findall(r"""['"]([^'"]{4,})['"]""", str(needle)):
+            idx = (content or "").find(value)
+            if idx >= 0:
+                break
+        else:
+            return 0
+    return (content or "").count("\n", 0, idx) + 1
+
+
 def _credible_secret(candidate):
     """Filter obvious fixtures/labels before raising a secret risk signal."""
     text = str(candidate or "")
     lower = text.lower()
+    # Fixture markers apply to the secret VALUE, not the whole candidate line.
+    # The old whole-text check let a real credential on a line that merely
+    # mentioned "example.com", a "sample_rate" field or a "your_..." label
+    # silently vanish -- a false negative with no diagnostic.
+    match = re.search(r"[\"']([^\"']+)[\"']", text)
+    value = match.group(1) if match else text
+    value_lower = value.lower()
 
     # Public-by-design client identifiers are inventory, not credentials.
+    # This check intentionally runs BEFORE the canonical-format bypass below:
+    # GOCSPX-… is a documented Google OAuth client secret shape, but it is
+    # public-by-design in a browser bundle, so it stays inventory.
     if PUBLIC_CLIENT_KEY_RE.search(_secret_value(text)):
         return False
-    if any(marker in lower for marker in (
+    # A value that matches a canonical provider format (AWS/GitHub/Slack/
+    # Stripe/SendGrid/Twilio/npm shape, or a JWT/PEM that actually decodes)
+    # is stronger evidence than any heuristic below, and it overrides the
+    # fixture-marker filter: a real 20-char AWS key can legitimately contain
+    # "xxx" or "todo" as a substring, and the canonical docs example key
+    # (AKIA…EXAMPLE) is shape-identical to a live key -- statically they are
+    # indistinguishable, so both must be reported.
+    if _validate_secret_value(value):
+        return True
+    if any(marker in value_lower for marker in (
         "example", "sample", "placeholder", "changeme", "dummy", "test123",
         "your_", "_here", "xxx", "todo", "fixme", "redact", "lorem",
         "api_token", "token_here", "<your", "replace_", "00000000",
     )):
         return False
     # Template placeholders like ${TOKEN}, <token>, [key] are not secrets.
-    if re.search(r"[\$%]?\{[^}]*\}|<[^>]+>|\[\w+\]", text):
+    if re.search(r"[\$%]?\{[^}]*\}|<[^>]+>|\[\w+\]", value):
         return False
-    if "-----begin " in lower or re.search(r"eyj[\w-]+\.[\w-]+\.[\w-]+", text, re.I):
+    if "-----begin " in lower or re.search(r"eyj[\w-]+\.[\w-]+\.[\w-]+", value, re.I):
         return True
-    match = re.search(r"[\"']([^\"']+)[\"']", text)
-    value = match.group(1) if match else text
-    if len(value) < 10 or value.lower() in {"password", "secret", "token", "abc123", "abc"}:
+    if len(value) < 10 or value_lower in {"password", "secret", "token", "abc123", "abc"}:
         return False
     # Real credentials generally have mixed character classes or high entropy;
     # natural-language strings should not become high-severity findings.  The
@@ -267,7 +518,10 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
         r'(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}',
         r'\bgh[pousr]_[A-Za-z0-9]{20,}',
         r'\bxox[baprs]-[A-Za-z0-9-]{10,}',
-        r'\bAKIA[0-9A-Z]{16}\b',
+        r'\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b',
+        r'\bSG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}\b',
+        r'\bSK[0-9a-fA-F]{32}\b',
+        r'\bnpm_[A-Za-z0-9]{36}\b',
         r'https://hooks\.slack\.com/services/[A-Za-z0-9/_]+',
         r'https://discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_\-]+',
     ]
@@ -280,6 +534,16 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
         # single huge file, not only the gaps between files.
         _raise_if_cancelled(cancel_check)
         raw_secrets.extend(re.findall(pattern, content, re.I))
+    # Credentials split across a string concatenation ("AKIA" + "…") are
+    # invisible to every pattern above; fold the literals and run the folded
+    # values through the same dedup/credibility pipeline. Keep each chain's
+    # line so findings can still point at real source positions.
+    folded_secret_lines = {}
+    for folded_candidate, folded_line in _folded_concat_candidates(content):
+        raw_secrets.append(folded_candidate)
+        folded_secret_lines.setdefault(
+            re.sub(r"\s+", "", _secret_value(folded_candidate).lower()), folded_line
+        )
 
     # Deduplicate on the *assigned value* rather than the matched text: three
     # overlapping patterns can match different slices of one assignment
@@ -662,7 +926,7 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
     # as observations so the dashboard can present "interesting behavior"
     # separately from "actionable findings".
     risk_signals = []
-    def _signal(sig_id, severity, title, evidence, confidence="medium", observation=None):
+    def _signal(sig_id, severity, title, evidence, confidence="medium", observation=None, line=0):
         sev = str(severity).upper()
         if observation is None:
             observation = sev not in ("CRITICAL", "HIGH")
@@ -674,6 +938,7 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
             "confidence": confidence,
             "evidence_type": "static_pattern",
             "observation": bool(observation),
+            "line": line,
         })
 
     # Known-vulnerability matching for identified libraries: annotate the
@@ -687,16 +952,31 @@ def scan_file(file_path, content=None, cancel_check=None, progress_heartbeat=Non
         # Slack/GitHub/AWS/... shape) is stronger evidence than entropy alone
         # can provide -- say so instead of capping every static guess at
         # medium.
-        from core.secret_validation import validate as _validate_secret
         verdicts = [
             verdict for verdict in
-            (_validate_secret(candidate) for candidate in results["credible_secrets"])
+            (_validate_secret_value(candidate) for candidate in results["credible_secrets"])
             if verdict
         ]
+        # Point the analyst at the first credible secret in the file; every
+        # export (CSV/SARIF/dashboard) used to show line 0. Folded (concat)
+        # values never appear contiguously, so their line comes from the
+        # chain map built during collection.
+        def _secret_line(candidate):
+            line = _line_of(content, candidate)
+            if not line:
+                line = folded_secret_lines.get(
+                    re.sub(r"\s+", "", _secret_value(candidate).lower()), 0)
+            return line
+
+        secret_line = min(
+            (ln for ln in map(_secret_line, results["credible_secrets"]) if ln),
+            default=0,
+        )
         _signal(
             "hardcoded_secret", "HIGH", "Hardcoded secret candidate",
             results["credible_secrets"][:3],
             confidence="high" if verdicts else "medium", observation=False,
+            line=secret_line,
         )
         if verdicts:
             risk_signals[-1]["validated"] = verdicts[:3]

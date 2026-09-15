@@ -1,0 +1,35 @@
+# Dogfood: scan this repository's own JavaScript with ScriptSentry on every
+# push to main. fail-on is `none` so the workflow never blocks a merge -- the
+# point is to surface findings into code scanning and prove the GitHub Action
+# works on a real repository.
+name: Self-scan (dogfood)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan the repository's JavaScript
+        uses: ./.github/actions/scan
+        with:
+          targets: .
+          fail-on: none
+          format: sarif txt
+          output: scriptsentry-report
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: scriptsentry-report/report.sarif
+          category: scriptsentry-self-scan
