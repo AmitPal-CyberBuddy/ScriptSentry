@@ -85,7 +85,7 @@
       </nav>
 
       <div class="header-actions">
-        <a class="btn btn-sm go-to-tool" href="../tool/"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'</svg> Go to tool</a>
+        <a class="btn btn-sm go-to-tool" href="../tool/"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Go to tool</a>
       </div>
       <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false"
               aria-controls="site-nav" aria-label="Open Navigation Menu">
@@ -108,6 +108,17 @@
       <section class="release" id="unreleased-2-2-0-dev">
         <h2>[Unreleased] — 2.2.0-dev</h2>
         <p>The 2.2.0 accuracy &amp; triage work below is in development and not a published release yet.</p>
+        <h3 id="ui-ux-review-pass-contrast-focus-touch-targets-and-gates-that-keep-them">UI/UX review pass: contrast, focus, touch targets -- and gates that keep them</h3>
+        <p>A checklist-driven pass over every shipped page (console, landing, rule reference, changelog), with each check turned into a regression test so the qualities cannot quietly drift:</p>
+        <ul>
+          <li><strong>WCAG AA contrast, verified.</strong> The faint meta color sat at 3.7:1 on panels (small text needs 4.5:1); recalibrated to 4.7-5.3:1 on every surface. A test now computes the real ratios for all text tokens against every surface, so a future palette tweak that breaks AA fails the suite.</li>
+          <li><strong>One visible focus ring everywhere.</strong> Keyboard focus now gets a consistent on-brand ring on any control (inputs already had focus styles; buttons, links and chips relied on browser defaults).</li>
+          <li><strong>Touch targets.</strong> The analysis view tabs and all primary buttons now meet the 44px minimum; dense filter chips get 36px. Pressed states give feedback without shifting layout.</li>
+          <li><strong>Markup hygiene.</strong> The emoji-to-SVG migration had left invisible stray quote characters inside every inline icon (107 of them across the four pages) -- harmless on screen, malformed underneath. Cleaned, and a test now rejects that entire class of markup bug.</li>
+          <li><strong>Dark-native controls.</strong> The UI declares color-scheme: dark, so scrollbars, form widgets and autofill styles stop rendering light blue on a dark page.</li>
+          <li><strong>Screen-reader details.</strong> Dynamic status text is a live region, the risk gauge and score bars are marked decorative (their values are adjacent text), icon-only controls must carry accessible names (a gate that already caught one), and click-to-triage chips now show the pointer cursor.</li>
+          <li><strong>One monospace stack.</strong> JetBrains Mono when installed (local fonts only -- nothing is fetched), consistently, instead of three different hardcoded stacks.</li>
+        </ul>
         <h3 id="a-vs-code-extension-findings-where-you-write-the-code">A VS Code extension: findings where you write the code</h3>
         <ul>
           <li><strong>ScriptSentry in the Problems panel.</strong> A zero-dependency extension (<code>vscode-extension/</code>) runs the engine locally and maps its SARIF to diagnostics: severity, rule id, evidence, the CWE, and a "Learn more" link into the hosted rule reference. Commands for scanning the workspace or the current file, optional scan-on-save, and a status-bar item with live counts.</li>
@@ -538,20 +549,20 @@
 
       <nav class="footer-col" aria-label="Product">
         <h3>Product</h3>
-        <a href="../tool/"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'</svg> Open the Analyzer</a>
-        <a href="../changelog/" aria-current="page"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>'</svg> What's New</a>
+        <a href="../tool/"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Open the Analyzer</a>
+        <a href="../changelog/" aria-current="page"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg> What's New</a>
       </nav>
 
       <nav class="footer-col" aria-label="Connect">
         <h3>Connect</h3>
-        <a href="https://github.com/AmitPal-CyberBuddy/ScriptSentry/issues/new/choose" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'<path d="M8 6l-1-2M16 6l1-2"/><rect x="8" y="6" width="8" height="12" rx="4"/><path d="M8 12H3M21 12h-5M8 8L5 6M16 8l3-2M8 16l-3 2M16 16l3 2"/>'</svg> Report a bug or a wrong finding</a>
-        <a href="https://www.linkedin.com/in/amitpal-wb/" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 13h18"/>'</svg> LinkedIn</a>
+        <a href="https://github.com/AmitPal-CyberBuddy/ScriptSentry/issues/new/choose" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6l-1-2M16 6l1-2"/><rect x="8" y="6" width="8" height="12" rx="4"/><path d="M8 12H3M21 12h-5M8 8L5 6M16 8l3-2M8 16l-3 2M16 16l3 2"/></svg> Report a bug or a wrong finding</a>
+        <a href="https://www.linkedin.com/in/amitpal-wb/" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 13h18"/></svg> LinkedIn</a>
       </nav>
     </div>
 
     <div class="footer-legal">
       <p>
-        <svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'<path d="M12 3v18M5 21h14M6 3h12"/><path d="M6 3L3 10a3.2 3.2 0 0 0 6 0z"/><path d="M18 3l-3 7a3.2 3.2 0 0 0 6 0z"/>'</svg> <b>Authorized testing only.</b> Scan only what you own or have written permission
+        <svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M5 21h14M6 3h12"/><path d="M6 3L3 10a3.2 3.2 0 0 0 6 0z"/><path d="M18 3l-3 7a3.2 3.2 0 0 0 6 0z"/></svg> <b>Authorized testing only.</b> Scan only what you own or have written permission
         to test. ScriptSentry gives you triage signals, not proof — verify every finding before
         you act on it. You are responsible for complying with all applicable laws and the
         target's terms of service.

@@ -14,6 +14,39 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### UI/UX review pass: contrast, focus, touch targets -- and gates that keep them
+
+A checklist-driven pass over every shipped page (console, landing, rule
+reference, changelog), with each check turned into a regression test so
+the qualities cannot quietly drift:
+
+- **WCAG AA contrast, verified.** The faint meta color sat at 3.7:1 on
+  panels (small text needs 4.5:1); recalibrated to 4.7-5.3:1 on every
+  surface. A test now computes the real ratios for all text tokens
+  against every surface, so a future palette tweak that breaks AA fails
+  the suite.
+- **One visible focus ring everywhere.** Keyboard focus now gets a
+  consistent on-brand ring on any control (inputs already had focus
+  styles; buttons, links and chips relied on browser defaults).
+- **Touch targets.** The analysis view tabs and all primary buttons now
+  meet the 44px minimum; dense filter chips get 36px. Pressed states
+  give feedback without shifting layout.
+- **Markup hygiene.** The emoji-to-SVG migration had left invisible
+  stray quote characters inside every inline icon (107 of them across
+  the four pages) -- harmless on screen, malformed underneath. Cleaned,
+  and a test now rejects that entire class of markup bug.
+- **Dark-native controls.** The UI declares color-scheme: dark, so
+  scrollbars, form widgets and autofill styles stop rendering light
+  blue on a dark page.
+- **Screen-reader details.** Dynamic status text is a live region, the
+  risk gauge and score bars are marked decorative (their values are
+  adjacent text), icon-only controls must carry accessible names (a
+  gate that already caught one), and click-to-triage chips now show the
+  pointer cursor.
+- **One monospace stack.** JetBrains Mono when installed (local fonts
+  only -- nothing is fetched), consistently, instead of three different
+  hardcoded stacks.
+
 ### A VS Code extension: findings where you write the code
 
 - **ScriptSentry in the Problems panel.** A zero-dependency extension

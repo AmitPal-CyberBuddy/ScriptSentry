@@ -130,7 +130,7 @@
       const color = c.tier >= 3 ? "#ff4d6d" : c.tier === 2 ? "#ff9f43" : c.tier === 1 ? "#ffd166" : "#22d3ee";
       return `<div class="category">
         <div class="name"><span>+${c.points} · ${escapeHtml(c.label)}</span><b style="color:${color}">${c.points}</b></div>
-        <div class="cat-bar"><i style="--cat:${color};width:${width}%"></i></div>
+        <div class="cat-bar" aria-hidden="true"><i style="--cat:${color};width:${width}%"></i></div>
       </div>`;
     }).join("");
   }
