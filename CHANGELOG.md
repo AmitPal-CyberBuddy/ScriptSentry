@@ -14,6 +14,32 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### A VS Code extension: findings where you write the code
+
+- **ScriptSentry in the Problems panel.** A zero-dependency extension
+  (`vscode-extension/`) runs the engine locally and maps its SARIF to
+  diagnostics: severity, rule id, evidence, the CWE, and a "Learn more"
+  link into the hosted rule reference. Commands for scanning the
+  workspace or the current file, optional scan-on-save, and a status-bar
+  item with live counts.
+- **Triage carries over.** Findings marked as false positives in the
+  dashboard arrive as SARIF suppressions and stay hidden in the editor
+  (opt back in with `scriptsentry.showSuppressed`).
+- **Finds the engine the way you run it.** Explicit
+  `scriptsentry.engineCommand` setting, the one-file launcher's
+  `~/.scriptsentry/bootstrap/` cache, or a ScriptSentry checkout open in
+  the workspace (the self-scan setup).
+- **Honest file placement.** The engine reports file names, the extension
+  resolves them (exact path, unique basename, suffix match) and refuses
+  to guess when two files are equally plausible — a security finding on
+  the wrong file is worse than one left unplaced.
+- **SARIF line numbers fixed to spec.** `startLine` is now 1-based per
+  SARIF 2.1.3 §3.30.13 (it was emitted 0-based, so GitHub code scanning
+  annotations landed one line early), and findings with an unknown line
+  omit the region instead of claiming line 0.
+- 20 extension unit tests (`node --test`, no npm dependencies) plus a new
+  CI job; the extension code itself scans clean under the engine.
+
 ### Presentation pass: SVG icons, a print theme, CWE in SARIF and the rule reference
 
 - **Icons that render everywhere.** The dashboard's emoji chrome (nav,

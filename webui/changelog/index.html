@@ -108,6 +108,15 @@
       <section class="release" id="unreleased-2-2-0-dev">
         <h2>[Unreleased] — 2.2.0-dev</h2>
         <p>The 2.2.0 accuracy &amp; triage work below is in development and not a published release yet.</p>
+        <h3 id="a-vs-code-extension-findings-where-you-write-the-code">A VS Code extension: findings where you write the code</h3>
+        <ul>
+          <li><strong>ScriptSentry in the Problems panel.</strong> A zero-dependency extension (<code>vscode-extension/</code>) runs the engine locally and maps its SARIF to diagnostics: severity, rule id, evidence, the CWE, and a "Learn more" link into the hosted rule reference. Commands for scanning the workspace or the current file, optional scan-on-save, and a status-bar item with live counts.</li>
+          <li><strong>Triage carries over.</strong> Findings marked as false positives in the dashboard arrive as SARIF suppressions and stay hidden in the editor (opt back in with <code>scriptsentry.showSuppressed</code>).</li>
+          <li><strong>Finds the engine the way you run it.</strong> Explicit <code>scriptsentry.engineCommand</code> setting, the one-file launcher's <code>~/.scriptsentry/bootstrap/</code> cache, or a ScriptSentry checkout open in the workspace (the self-scan setup).</li>
+          <li><strong>Honest file placement.</strong> The engine reports file names, the extension resolves them (exact path, unique basename, suffix match) and refuses to guess when two files are equally plausible — a security finding on the wrong file is worse than one left unplaced.</li>
+          <li><strong>SARIF line numbers fixed to spec.</strong> <code>startLine</code> is now 1-based per SARIF 2.1.3 §3.30.13 (it was emitted 0-based, so GitHub code scanning annotations landed one line early), and findings with an unknown line omit the region instead of claiming line 0.</li>
+          <li>20 extension unit tests (<code>node --test</code>, no npm dependencies) plus a new CI job; the extension code itself scans clean under the engine.</li>
+        </ul>
         <h3 id="presentation-pass-svg-icons-a-print-theme-cwe-in-sarif-and-the-rule-reference">Presentation pass: SVG icons, a print theme, CWE in SARIF and the rule reference</h3>
         <ul>
           <li><strong>Icons that render everywhere.</strong> The dashboard's emoji chrome (nav, buttons, card headings, tab labels -- 95 spots across the console and landing pages) is now a small set of stroke SVGs that inherit the text color and stay crisp at any size, on every platform. Emoji render differently per OS and read as decoration; the same is true for the exported HTML report's headings. Text symbols that carry meaning (checkmarks in capability lists, the status-message prefixes) are deliberately untouched.</li>

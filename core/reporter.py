@@ -1523,8 +1523,10 @@ def generate_sarif_report(results, ai_summary=None, metadata=None, triage=None):
             }
             if cwe:
                 rules_map[rule_id]["properties"]["cwe"] = f"CWE-{cwe}"
-        # line numbers are typically 1-indexed in ESTree; SARIF expects 0-indexed.
-        start_line = max(0, coerce_line(f.get("line", 1)) - 1)
+        # SARIF 2.1.3 §3.30.13: startLine is 1-based (line 1 is the first
+        # line). Unknown lines omit the region entirely -- a file-level
+        # finding -- rather than claiming a line the engine does not know.
+        start_line = coerce_line(f.get("line", 1))
         message = f.get("sink") or f.get("evidence") or f.get("type", rule_id)
         if f.get("source"):
             message = f"{f.get('source')} -> {message}"
@@ -1548,7 +1550,8 @@ def generate_sarif_report(results, ai_summary=None, metadata=None, triage=None):
             "locations": [{
                 "physicalLocation": {
                     "artifactLocation": {"uri": str(f.get("origin") or f.get("file", ""))},
-                    "region": {"startLine": start_line},
+                    # Only claim a line when the engine actually knows it.
+                    **({"region": {"startLine": start_line}} if start_line >= 1 else {}),
                 }
             }],
             "properties": {

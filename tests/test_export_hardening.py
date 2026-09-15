@@ -99,11 +99,15 @@ class MalformedLineExportTest(unittest.TestCase):
         import json
 
         sarif = json.loads(generate_sarif_report(self.RESULTS))
-        lines = [
-            r["locations"][0]["physicalLocation"]["region"]["startLine"]
+        regions = [
+            r["locations"][0]["physicalLocation"].get("region")
             for r in sarif["runs"][0]["results"]
         ]
-        self.assertEqual(sorted(lines), [0, 2, 11])  # 3->2, junk->0, "12"->11
+        # SARIF 2.1.3 startLine is 1-based: 3->3, "12"->12, and a junk line
+        # omits the region entirely (a file-level finding claims no line).
+        with_region = sorted(x["startLine"] for x in regions if x)
+        self.assertEqual(with_region, [3, 12])
+        self.assertIn(None, regions)
 
     def test_csv_keeps_all_rows(self):
         rows = _csv_rows(generate_csv_report(self.RESULTS))

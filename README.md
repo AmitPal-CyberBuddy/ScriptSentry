@@ -379,6 +379,20 @@ map straight onto your files in the code scanning UI. This repository runs
 the same action on itself (`.github/workflows/self-scan.yml`) as a live
 example.
 
+## In your editor (VS Code)
+
+The [`vscode-extension/`](vscode-extension/) directory packages the same
+engine findings into VS Code's Problems panel — commands
+(`ScriptSentry: Scan Workspace` / `Scan Current File`), optional scan-on-save,
+severity + CWE on every finding, a "Learn more" link into the hosted rule
+reference, and findings you triaged as false positives in the dashboard stay
+hidden. It's zero-dependency JavaScript; it finds the engine the same way you
+run it (an explicit `scriptsentry.engineCommand` setting, the launcher's
+`~/.scriptsentry/bootstrap/` cache, or a ScriptSentry checkout open in the
+workspace) and everything stays local. See
+[vscode-extension/README.md](vscode-extension/README.md) for setup and
+settings.
+
 ## Host the UI, keep the engine local
 
 You can host the dashboard front-end (for example on **GitHub Pages**) while the

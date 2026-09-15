@@ -134,8 +134,8 @@ class SecretLineNumbersTest(unittest.TestCase):
         self.assertEqual(row["line"], "2")
         sarif = json.loads(generate_sarif_report(results))
         result = sarif["runs"][0]["results"][0]
-        # SARIF lines are 0-indexed.
-        self.assertEqual(result["locations"][0]["physicalLocation"]["region"]["startLine"], 1)
+        # SARIF 2.1.3: startLine is 1-based.
+        self.assertEqual(result["locations"][0]["physicalLocation"]["region"]["startLine"], 2)
 
 
 if __name__ == "__main__":
