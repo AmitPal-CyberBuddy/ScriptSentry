@@ -58,12 +58,13 @@ def save_openapi(results, metadata=None, output_dir=None):
     print(f"  OpenAPI surface: {path}")
 
 
-def save_json(results, ai_summary=None, metadata=None, output_dir=None):
+def save_json(results, ai_summary=None, metadata=None, output_dir=None, triage=None):
     # generate_json_report returns the serialized JSON document itself.
     # json.dumps()-ing it again would double-encode the report on disk
     # (a JSON string containing JSON) -- the report file must be the
     # document, directly loadable.
-    content = generate_json_report(results, ai_summary=ai_summary, metadata=metadata)
+    content = generate_json_report(results, ai_summary=ai_summary, metadata=metadata,
+                                   triage=triage)
     path = os.path.join(output_dir or OUTPUT_DIR, "report.json")
     _save(path, content)
     print(f"[+] JSON report saved: {path}")
@@ -283,7 +284,7 @@ def _warn_fallback_mode():
 def run(targets, max_depth=5, timeout=15, profile=DEFAULT_PROFILE, output_formats=None,
         ai_provider="disabled", model=None, ollama_url=None, openai_base_url=None,
         api_key=None, max_workers=SCAN_MAX_WORKERS, output_dir=None, progress=lambda **e: None,
-        quiet=False):
+        quiet=False, apply_triage=False):
     """Analyze URLs and/or local paths; write reports; return the results.
 
     ``output_dir`` defaults to ``output``. Returns the merged results dict
@@ -362,18 +363,29 @@ def run(targets, max_depth=5, timeout=15, profile=DEFAULT_PROFILE, output_format
         )
 
     formats = output_formats or ["all"]
+    # --triage: the machine's server-side triage decisions annotate the
+    # written reports (CSV column, SARIF suppressions, plain-language
+    # markers). Opt-in: a report is hermetic by default.
+    triage = None
+    if apply_triage:
+        from core.triage import triage_map
+        triage = triage_map() or None
     if "all" in formats or "txt" in formats:
-        _save(os.path.join(out, "report.txt"), generate_report(results, ai_summary=ai_summary, metadata=metadata))
+        _save(os.path.join(out, "report.txt"),
+              generate_report(results, ai_summary=ai_summary, metadata=metadata, triage=triage))
     if "all" in formats or "json" in formats:
-        save_json(results, ai_summary=ai_summary, metadata=metadata, output_dir=out)
+        save_json(results, ai_summary=ai_summary, metadata=metadata, output_dir=out, triage=triage)
     if "all" in formats or "openapi" in formats:
         save_openapi(results, metadata=metadata, output_dir=out)
     if "all" in formats or "html" in formats:
-        _save(os.path.join(out, "report.html"), generate_html_report(results, ai_summary=ai_summary, metadata=metadata))
+        _save(os.path.join(out, "report.html"),
+              generate_html_report(results, ai_summary=ai_summary, metadata=metadata, triage=triage))
     if "all" in formats or "csv" in formats:
-        _save(os.path.join(out, "report.csv"), generate_csv_report(results, ai_summary=ai_summary, metadata=metadata))
+        _save(os.path.join(out, "report.csv"),
+              generate_csv_report(results, ai_summary=ai_summary, metadata=metadata, triage=triage))
     if "all" in formats or "sarif" in formats:
-        _save(os.path.join(out, "report.sarif"), generate_sarif_report(results, ai_summary=ai_summary, metadata=metadata))
+        _save(os.path.join(out, "report.sarif"),
+              generate_sarif_report(results, ai_summary=ai_summary, metadata=metadata, triage=triage))
     if not quiet:
         print(generate_report(results, ai_summary=ai_summary, metadata=metadata))
     return results
@@ -412,6 +424,10 @@ def build_parser():
                         help="Write this scan's finding fingerprints to FILE as a baseline for "
                         "later --baseline runs (typically committed to the repo; updating it is "
                         "a visible, reviewable act)")
+    parser.add_argument("--triage", action="store_true",
+                        help="Annotate the written reports with this machine's saved triage "
+                        "decisions (CSV triage columns, SARIF suppressions for false positives, "
+                        "report markers). Off by default: a report is hermetic unless you ask.")
     parser.add_argument("--watch", type=float, default=None, metavar="SECONDS",
                         help="Watch mode: re-scan the target(s) every SECONDS seconds (minimum "
                         "10) and print what changed between cycles -- new, worse, improved and "
@@ -473,6 +489,7 @@ def main(argv=None):
         progress=lambda **event: print(
             f"    [{event.get('phase', 'scan')}] {event.get('message', '')}", flush=True
         ),
+        apply_triage=args.triage,
     )
 
     if args.watch:

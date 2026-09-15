@@ -14,6 +14,37 @@ All notable changes to ScriptSentry are listed here, newest first.
 The 2.2.0 accuracy & triage work below is in development and not a published
 release yet.
 
+### Triage that follows a finding: server-side decisions in history and exports
+
+The dashboard's status chips (open / needs review / confirmed / false
+positive / informational) used to live in the *browser's* localStorage under
+a line-dependent key: move a finding one line and the decision was gone,
+exports never saw it, and the storage panel could not inspect or delete it.
+
+- Decisions now live in the engine's history database (core/triage.py),
+  keyed by the same line-independent finding fingerprint the diff and
+  baselines use -- a decision follows a finding across scans and line
+  edits. Existing localStorage decisions migrate to the engine on sight.
+- Exports carry them: CSV gains triage_status/triage_note columns; a
+  false positive becomes a SARIF suppression (kind external, status
+  rejected), which GitHub code scanning shows as a dismissed alert; text
+  and HTML reports mark triaged findings in the plain-language layer; the
+  JSON export's report model includes the state.
+- New API: GET/POST /api/triage and DELETE /api/triage/<fingerprint>
+  (token- and origin-gated like every other route).
+- The CLI can annotate written reports with the machine's decisions via
+  --triage (off by default: a report is hermetic unless asked). Triage
+  deliberately does NOT change --fail-on exit codes -- gating is the
+  baseline's job, and a local database silently changing CI results
+  would be a nasty surprise.
+- Honest-data contract: triage rows show in the storage panel's inventory
+  ("Triage decisions"), ride along in the history export, and are wiped
+  by delete-all.
+
+33 new tests (storage layer, vocabulary enforcement, fingerprint join,
+exports incl. an end-to-end API scan -> triage -> re-scan -> SARIF
+suppression flow).
+
 ### Workflows: baselines, watch mode, scan-again-and-compare, honest fallback notice
 
 - **Baselines: fail only on what is new.** `--fail-on` alone answers "are

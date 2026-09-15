@@ -226,7 +226,7 @@ def _dedupe_signals(signals):
     return out
 
 
-def build_report_model(results, ai_summary=None, metadata=None):
+def build_report_model(results, ai_summary=None, metadata=None, triage=None):
     """Build a normalized, structured report model used by TXT, HTML and GUI."""
     files = []
     all_signals = []
@@ -421,7 +421,7 @@ def build_report_model(results, ai_summary=None, metadata=None):
             uniq.append(item)
         dedup_attack[key] = uniq[:80]
 
-    return {
+    model = {
         "meta": {
             "generated_at": (metadata or {}).get("generated_at", ""),
             "engine": ENGINE_NAME,
@@ -467,7 +467,16 @@ def build_report_model(results, ai_summary=None, metadata=None):
         "scan_summary": scan_summary,
         "ai_summary": ai_summary or {},
     }
-
+    # Server-side triage decisions (core.triage), joined by the engine's
+    # line-independent finding fingerprint: a decision follows a finding
+    # across scans and line edits, into every export built from this model.
+    if triage:
+        from core.triage import annotate_findings
+        for key in ("findings", "dataflows", "actionable_findings", "observations"):
+            # split_findings/deduplicate build copies, so every findings-ish
+            # list in the summary needs the stamp, not just "findings".
+            annotate_findings(model["summary"].get(key) or [], triage)
+    return model
 
 
 # ============================================================
@@ -629,6 +638,11 @@ def executive_summary(model, results=None):
             location = str(finding.get("file"))
             if finding.get("line"):
                 location += f" (line {finding.get('line')})"
+        triage_note = ""
+        triage_label = ""
+        if finding.get("triage_status"):
+            triage_label = str(finding["triage_status"]).replace("_", " ")
+            triage_note = str(finding.get("triage_note") or "")
         plain_findings.append({
             "finding_id": fid,
             "title": entry["plain"],
@@ -636,6 +650,8 @@ def executive_summary(model, results=None):
             "meaning": entry["meaning"],
             "action": entry["action"],
             "where": location,
+            "triage": triage_label,
+            "triage_note": triage_note,
             # The technical anchor for the security team.
             "for_security_team": {
                 "id": fid,
@@ -816,9 +832,10 @@ def _remediation(model):
     return steps
 
 
-def generate_report(results, ai_summary=None, metadata=None):
+def generate_report(results, ai_summary=None, metadata=None, triage=None):
     """Generate a polished, structured text report."""
-    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
+    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata,
+                               triage=triage)
     summary = model["summary"]
     report = []
 
@@ -842,9 +859,12 @@ def generate_report(results, ai_summary=None, metadata=None):
     report.append(f"  {exec_summary['counts_in_words']}")
     for item in exec_summary["findings_in_plain_terms"]:
         where = f" [{item['where']}]" if item["where"] else ""
-        report.append(f"  - {item['title']} ({item['severity'].lower()}){where}")
+        triage = f" [triaged: {item['triage']}]" if item.get("triage") else ""
+        report.append(f"  - {item['title']} ({item['severity'].lower()}){where}{triage}")
         report.append(f"    What it means: {item['meaning']}")
         report.append(f"    What to do:    {item['action']}")
+        if item.get("triage_note"):
+            report.append(f"    Triage note:  {item['triage_note']}")
     if exec_summary["what_to_do_first"]:
         report.append("  Do these first: " + "; ".join(exec_summary["what_to_do_first"]) + ".")
     report.append("")
@@ -1073,9 +1093,10 @@ def generate_report(results, ai_summary=None, metadata=None):
     return "\n".join(report)
 
 
-def generate_html_report(results, ai_summary=None, metadata=None):
+def generate_html_report(results, ai_summary=None, metadata=None, triage=None):
     """Generate a self-contained, modern HTML report (exportable/shareable)."""
-    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
+    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata,
+                               triage=triage)
     summary = model["summary"]
     exec_summary = executive_summary(model, results)
     risk_color = summary["risk_color"]
@@ -1172,7 +1193,9 @@ def generate_html_report(results, ai_summary=None, metadata=None):
         + "".join(
             "<div class=\"sig\"><span class=\"sev sev-" + esc(item["severity"]) + "\">" + esc(item["severity"]) + "</span>"
             + "<div><b>" + esc(item["title"]) + ("</b> — <i>" + esc(item["where"]) + "</i>" if item["where"] else "</b>")
+            + (" <span class=\"muted\">[triaged: " + esc(item["triage"]) + "]</span>" if item.get("triage") else "")
             + "<br><span>" + esc(item["meaning"]) + "</span>"
+            + ("<br><span class=\"muted\"><b>Triage note:</b> " + esc(item["triage_note"]) + "</span>" if item.get("triage_note") else "")
             + "<br><span><b>What to do:</b> " + esc(item["action"]) + "</span></div></div>"
             for item in exec_summary["findings_in_plain_terms"]
         )
@@ -1339,17 +1362,19 @@ def _csv_safe(value):
     return text
 
 
-def generate_csv_report(results, ai_summary=None, metadata=None):
+def generate_csv_report(results, ai_summary=None, metadata=None, triage=None):
     """Generate a CSV export of unified findings."""
     import csv
     import io
 
-    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
+    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata,
+                               triage=triage)
     findings = _all_unified_findings(model)
     fields = [
         "id", "type", "severity", "confidence", "status", "origin", "file", "line",
         "source", "sink", "flow", "evidence", "sanitization_detected", "framework",
         "evidence_type", "analysis_quality", "limitations", "observation",
+        "triage_status", "triage_note",
     ]
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
@@ -1381,15 +1406,18 @@ def generate_csv_report(results, ai_summary=None, metadata=None):
             "analysis_quality": _csv_safe(f.get("analysis_quality", "")),
             "limitations": _csv_safe(limitations),
             "observation": f.get("observation", False),
+            "triage_status": _csv_safe(f.get("triage_status", "")),
+            "triage_note": _csv_safe(f.get("triage_note", "")),
         })
     return buf.getvalue()
 
 
-def generate_sarif_report(results, ai_summary=None, metadata=None):
+def generate_sarif_report(results, ai_summary=None, metadata=None, triage=None):
     """Generate a SARIF 2.1.0 export of unified findings."""
     import json
 
-    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata)
+    model = build_report_model(results, ai_summary=ai_summary, metadata=metadata,
+                               triage=triage)
     findings = _all_unified_findings(model)
     rules_map = {}
     results_out = []
@@ -1455,6 +1483,22 @@ def generate_sarif_report(results, ai_summary=None, metadata=None):
         # apart from findings that were found in the shipped bundle itself.
         if f.get("via"):
             result["properties"]["via"] = str(f["via"])
+        # Server-side triage (core.triage): the workflow state ships as a
+        # property, and a false-positive decision additionally becomes a
+        # SARIF suppression -- the standard way consumers (e.g. GitHub code
+        # scanning) show a dismissed alert.
+        triage_status = str(f.get("triage_status") or "")
+        if triage_status:
+            result["properties"]["triage"] = triage_status
+            if f.get("triage_note"):
+                result["properties"]["triageNote"] = str(f["triage_note"])[:300]
+            if triage_status == "false_positive":
+                result["suppressions"] = [{
+                    "kind": "external",
+                    "status": "rejected",
+                    "justification": str(f.get("triage_note")
+                                         or "Marked false positive in ScriptSentry triage")[:300],
+                }]
         results_out.append(result)
     return json.dumps({
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
@@ -1618,7 +1662,7 @@ def _file_diagnostic(file_name, data):
     }
 
 
-def build_dashboard_payload(results, ai_summary=None, metadata=None):
+def build_dashboard_payload(results, ai_summary=None, metadata=None, triage=None):
     files = []
     totals = {}
     findings = []
@@ -1836,6 +1880,13 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
         # disabled or the scan was not recorded.
         "history": history_info,
     }
+    # Stamp every finding (and flow) with its server-side triage state and
+    # the engine fingerprint, so the UI can render and *address* decisions.
+    # Always runs: with no decisions yet, findings still get triage_fp.
+    from core.triage import annotate_findings
+    annotate_findings(payload["summary"].get("findings") or [], triage or {})
+    annotate_findings(payload["summary"].get("dataflows") or [], triage or {})
+
     # Plain-language layer for the Overview card (managers/stakeholders).
     # Built from the same evidence the payload already carries, via the same
     # model contract the text/HTML exports use.
@@ -1854,7 +1905,7 @@ def build_dashboard_payload(results, ai_summary=None, metadata=None):
 
 
 
-def generate_json_report(results, ai_summary=None, metadata=None):
+def generate_json_report(results, ai_summary=None, metadata=None, triage=None):
     """Complete machine-readable export: raw results + both report models."""
     payload = {
         "metadata": metadata or {},
@@ -1862,8 +1913,10 @@ def generate_json_report(results, ai_summary=None, metadata=None):
                     if not str(key).startswith("__")},
         "runtime_evidence": (results or {}).get("__runtime_evidence__"),
         "runtime_findings": (results or {}).get("__runtime_findings__", []),
-        "report_model": build_report_model(results, ai_summary=ai_summary, metadata=metadata),
-        "dashboard": build_dashboard_payload(results, ai_summary=ai_summary, metadata=metadata),
+        "report_model": build_report_model(results, ai_summary=ai_summary,
+                                           metadata=metadata, triage=triage),
+        "dashboard": build_dashboard_payload(results, ai_summary=ai_summary,
+                                             metadata=metadata, triage=triage),
         "ai_summary": ai_summary or {},
     }
     # The plain-language layer, from the already-built report model.

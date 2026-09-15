@@ -30,32 +30,86 @@
     return `${f.id || f.type || "finding"}|${f.file || ""}|${f.line || 0}|${String(f.sink || "").slice(0, 80)}`;
   }
 
+  /* Triage decisions live SERVER-SIDE (core.triage), keyed by the engine's
+     line-independent fingerprint: a decision follows a finding across scans
+     and line edits, into exports, and off this browser. The old
+     localStorage map (line-dependent keys, browser-only) is read only as a
+     fallback and migrated to the server on sight. */
+  function readLegacyTriage() {
+    try { return JSON.parse(localStorage.getItem("scriptsentry-triage") || "{}"); }
+    catch { return {}; }
+  }
+
   function getStatus(f) {
-    const key = findingKey(f);
-    const stored = (localStorage.getItem("scriptsentry-triage") || "{}");
-    try {
-      const map = JSON.parse(stored);
-      return map[key] || f.status || "needs_review";
-    } catch {
-      return f.status || "needs_review";
-    }
+    if (f.triage_status) return f.triage_status;
+    const legacy = readLegacyTriage()[findingKey(f)];
+    if (legacy) return legacy;
+    return f.status || "needs_review";
   }
 
   function setStatus(f) {
-    const key = findingKey(f);
     const cur = STATUS_CYCLE.indexOf(getStatus(f));
     const next = STATUS_CYCLE[(cur + 1) % STATUS_CYCLE.length];
-    let map;
-    try { map = JSON.parse(localStorage.getItem("scriptsentry-triage") || "{}"); } catch { map = {}; }
-    map[key] = next;
-    localStorage.setItem("scriptsentry-triage", JSON.stringify(map));
+    const previous = f.triage_status || null;
+    const isDemo = !!(payload && payload.meta && payload.meta.demo);
+
+    if (!f.triage_fp || isDemo) {
+      // No engine fingerprint to address (demo report / offline hosted page):
+      // keep the old local-only behaviour so the button still works.
+      const map = readLegacyTriage();
+      map[findingKey(f)] = next;
+      localStorage.setItem("scriptsentry-triage", JSON.stringify(map));
+      renderUnifiedFindings();
+      return;
+    }
+
+    // Optimistic update, then persist server-side; revert with a note if the
+    // engine refuses (offline, disabled history, invalid status).
+    f.triage_status = next;
     renderUnifiedFindings();
+    postJSON("/api/triage", { fingerprint: f.triage_fp, status: next })
+      .then(() => {})
+      .catch(() => {
+        if (previous === null) delete f.triage_status; else f.triage_status = previous;
+        renderUnifiedFindings();
+        showTransferNote("The triage decision could not be saved to the engine.", true);
+      });
+  }
+
+  /* One-time migration: findings that have a legacy localStorage decision but
+     no server decision get pushed to the engine, then the legacy entry is
+     dropped. Runs on every render, but only acts on unmigrated leftovers. */
+  function migrateLegacyTriage(findings) {
+    const legacy = readLegacyTriage();
+    const keys = Object.keys(legacy);
+    if (!keys.length || !findings.length) return;
+    const isDemo = !!(payload && payload.meta && payload.meta.demo);
+    if (isDemo) return;
+    let migrated = false;
+    for (const f of findings) {
+      if (!f.triage_fp || f.triage_status) continue;
+      const hit = legacy[findingKey(f)];
+      if (!hit) continue;
+      postJSON("/api/triage", { fingerprint: f.triage_fp, status: hit })
+        .then(() => {
+          delete legacy[findingKey(f)];
+          localStorage.setItem("scriptsentry-triage", JSON.stringify(legacy));
+          f.triage_status = hit;
+          renderUnifiedFindings();
+        })
+        .catch(() => {});
+      migrated = true;
+    }
+    if (migrated) renderUnifiedFindings();
   }
 
   function renderUnifiedFindings() {
     const all = (payload.summary.findings || []).concat(payload.summary.dataflows || []).map((f) => ({ ...f, file: f.file || payload.meta.source }));
     const unique = new Map();
     all.forEach((f) => unique.set(findingKey(f), f));
+    // Migrate any legacy browser-only triage decisions to the engine before
+    // rendering, so this render already shows the persisted state.
+    migrateLegacyTriage(Array.from(unique.values()));
     // Actionable findings only; pure observations are shown separately under
     // "Security Observations".
     const findings = Array.from(unique.values()).filter((f) => {

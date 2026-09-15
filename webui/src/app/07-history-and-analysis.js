@@ -303,6 +303,7 @@
       row("WAL size", formatBytes(storage.wal_size_bytes)),
       row("Scans", String(storage.scan_count || 0)),
       row("Findings", String(storage.finding_count || 0)),
+      row("Triage decisions", String(storage.triage_count || 0)),
       row("Oldest", when(storage.oldest_scan_at)),
       row("Newest", when(storage.newest_scan_at)),
       row("Retention", `newest ${storage.retention_limit || 200} scans`),

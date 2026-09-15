@@ -66,30 +66,39 @@ class ReportRoutesMixin:
             source = f"{len(body['files'])} uploaded file(s)"
         metadata = {"mode": str(body.get("mode", "code")), "source": source}
 
+        # Exports carry the machine's triage decisions (server-side, keyed by
+        # the engine fingerprint): a false positive marked in the dashboard
+        # shows up as a SARIF suppression / CSV column / report marker here.
+        from core import triage as triage_store
+        try:
+            triage = triage_store.triage_map()
+        except Exception:
+            triage = {}
+
         if report_format == "txt":
             self._send_download(
-                generate_report(results, metadata=metadata).encode("utf-8"),
+                generate_report(results, metadata=metadata, triage=triage).encode("utf-8"),
                 "text/plain; charset=utf-8",
                 "scriptsentry-report.txt",
             )
             return
         if report_format == "csv":
             self._send_download(
-                generate_csv_report(results, metadata=metadata).encode("utf-8"),
+                generate_csv_report(results, metadata=metadata, triage=triage).encode("utf-8"),
                 "text/csv; charset=utf-8",
                 "scriptsentry-report.csv",
             )
             return
         if report_format == "sarif":
             self._send_download(
-                generate_sarif_report(results, metadata=metadata).encode("utf-8"),
+                generate_sarif_report(results, metadata=metadata, triage=triage).encode("utf-8"),
                 "application/sarif+json; charset=utf-8",
                 "scriptsentry-report.sarif",
             )
             return
         if report_format == "json":
             self._send_download(
-                generate_json_report(results, metadata=metadata).encode("utf-8"),
+                generate_json_report(results, metadata=metadata, triage=triage).encode("utf-8"),
                 "application/json; charset=utf-8",
                 "scriptsentry-report.json",
             )
@@ -103,7 +112,7 @@ class ReportRoutesMixin:
             return
 
         self._send_download(
-            generate_html_report(results, metadata=metadata).encode("utf-8"),
+            generate_html_report(results, metadata=metadata, triage=triage).encode("utf-8"),
             "text/html; charset=utf-8",
             "scriptsentry-report.html",
         )

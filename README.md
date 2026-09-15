@@ -254,6 +254,21 @@ Ctrl+C stops the watch (exit 0). With `--fail-on`, the first failing cycle
 exits 1 — watch mode is monitoring, and a gate that keeps running after
 turning red is a gate nobody watches.
 
+**Triage that follows a finding.** On the dashboard's Findings tab, the status
+chip cycles a finding through *open → needs review → confirmed → false
+positive → informational*. Decisions are stored by the engine (not the
+browser), keyed by the same line-independent fingerprint the diff and
+baselines use — so a decision follows a finding across scans and line edits,
+and it ships in exports: CSV gains `triage_status`/`triage_note` columns, a
+false positive becomes a SARIF suppression (GitHub code scanning shows it as
+dismissed), and reports mark triaged findings in plain language. The CLI can
+annotate its written reports the same way with `--triage` (off by default — a
+report is hermetic unless you ask). Triage does **not** change `--fail-on`
+exit codes: gating is the baseline file's job, and a local database silently
+changing CI results would be a nasty surprise. Your decisions are your data:
+they appear in the storage panel's inventory, ride along in the history
+export, and are deleted by "delete all data".
+
 Launch the dashboard directly from the CLI:
 
 ```bash

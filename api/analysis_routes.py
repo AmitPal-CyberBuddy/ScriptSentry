@@ -55,8 +55,16 @@ class AnalysisRoutesMixin:
         if metadata:
             meta.update(metadata)
         from core.reporter import build_dashboard_payload
+        from core import triage as triage_store
 
-        return build_dashboard_payload(results, metadata=meta)
+        # Server-side triage decisions travel with every payload: findings
+        # are stamped with their state (and fingerprint) so the UI renders
+        # and addresses decisions without a second round-trip.
+        try:
+            decisions = triage_store.triage_map()
+        except Exception:
+            decisions = {}
+        return build_dashboard_payload(results, metadata=meta, triage=decisions)
 
     def _handle_health(self):
         self._send_json({
@@ -109,6 +117,10 @@ class AnalysisRoutesMixin:
                 "token": "sessionStorage",
             }
             self._send_json({"ok": True, "storage": info})
+            return True
+        if parsed.path == "/api/triage":
+            from core import triage as triage_store
+            self._send_json({"ok": True, "triage": triage_store.triage_map()})
             return True
         if parsed.path == "/api/history":
             limit = self._query_param(parsed, "limit", "50")
@@ -176,6 +188,21 @@ class AnalysisRoutesMixin:
             jobs.cancel(job_id)
             self._send_json({"ok": True, "job": job.snapshot()})
             return True
+        if parsed.path == "/api/triage":
+            from core import triage as triage_store
+            fingerprint_value = str(body.get("fingerprint", "")).strip()
+            status = body.get("status")
+            note = body.get("note")
+            if not fingerprint_value:
+                self._send_error_json("A finding fingerprint is required", 400)
+                return True
+            try:
+                entry = triage_store.set_triage(fingerprint_value, status, note)
+            except ValueError as exc:
+                self._send_error_json(str(exc), 400)
+                return True
+            self._send_json({"ok": True, "triage": entry})
+            return True
         if parsed.path != "/api/analyze":
             return False
 
@@ -199,6 +226,19 @@ class AnalysisRoutesMixin:
             )
             wiped = history_wipe(include_calibration=include_calibration)
             self._send_json({"ok": True, **wiped})
+            return True
+        if parsed.path.startswith("/api/triage/"):
+            from core import triage as triage_store
+            fingerprint_value = parsed.path[len("/api/triage/"):]
+            if not fingerprint_value:
+                self._send_error_json("A finding fingerprint is required", 400)
+                return True
+            try:
+                deleted = triage_store.clear_triage(fingerprint_value)
+            except ValueError as exc:
+                self._send_error_json(str(exc), 400)
+                return True
+            self._send_json({"ok": True, "deleted": deleted})
             return True
         if parsed.path.startswith("/api/history/"):
             scan_id = parsed.path.rsplit("/", 1)[-1]
